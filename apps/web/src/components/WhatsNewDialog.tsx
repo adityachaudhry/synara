@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 
 import { ArrowLeftIcon, ArrowRightIcon } from "~/lib/icons";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { GlasswingBrand } from "~/components/GlasswingBrand";
 
 import { ChangelogAccordion } from "../whatsNew/ChangelogAccordion";
 import { FeatureSection } from "../whatsNew/FeatureSection";
@@ -127,7 +127,7 @@ function CurrentHeader({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <SynaraLogo aria-hidden className="size-8 shrink-0 text-foreground" />
+      <GlasswingBrand aria-hidden className="h-8 w-auto shrink-0" />
       <div className="flex min-w-0 flex-col">
         <DialogTitle className="text-base">What&rsquo;s new?</DialogTitle>
         <DialogDescription className="text-xs">

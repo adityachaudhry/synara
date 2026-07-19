@@ -210,7 +210,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
   { id: "ayu", label: "Ayu", variants: ["dark"] },
   { id: "catppuccin", label: "Catppuccin", variants: ["light", "dark"] },
   { id: "codex", label: "Codex", variants: ["light", "dark"] },
-  { id: "synara", label: "Synara", variants: ["light", "dark"] },
+  { id: "synara", label: "Glasswing", variants: ["light", "dark"] },
   { id: "dracula", label: "Dracula", variants: ["dark"] },
   { id: "everforest", label: "Everforest", variants: ["light", "dark"] },
   { id: "github", label: "GitHub", variants: ["light", "dark"] },
@@ -238,7 +238,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
 
 export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> = {
   dark: {
-    accent: "#339cff",
+    accent: "#e52d4f",
     contrast: 0,
     fonts: { code: null, ui: null },
     ink: "#ffffff",
@@ -251,7 +251,7 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
     surface: "#181818",
   },
   light: {
-    accent: "#339cff",
+    accent: "#d90a2e",
     contrast: 0,
     fonts: { code: null, ui: null },
     ink: "#1a1c1f",
@@ -267,12 +267,12 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
 
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
-    dark: getCodeThemeSeed("codex", "dark"),
-    light: getCodeThemeSeed("codex", "light"),
+    dark: getCodeThemeSeed("synara", "dark"),
+    light: getCodeThemeSeed("synara", "light"),
   },
   codeThemeIds: {
-    dark: "codex",
-    light: "codex",
+    dark: "synara",
+    light: "synara",
   },
   systemUiFont: true,
   mode: "system",

@@ -6,6 +6,10 @@
   --animate-skeleton: skeleton 2s -1s infinite linear;
   --font-sans: var(--font-ui-family);
   --font-mono: var(--font-mono-family);
+  --font-serif: var(--font-brand-serif-family);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-tint: var(--brand-tint);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
@@ -508,6 +512,10 @@
     monospace
   );
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
+  --font-brand-serif-family: "Source Serif 4", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --brand: #d90a2e;
+  --brand-strong: #b00824;
+  --brand-tint: #fceaed;
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
@@ -536,7 +544,7 @@
   --destructive: var(--color-red-500);
   --border: --alpha(var(--color-black) / 5%);
   --input: --alpha(var(--color-black) / 6%);
-  --ring: var(--color-neutral-400);
+  --ring: var(--brand);
   --destructive-foreground: var(--color-red-700);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -592,7 +600,7 @@
     --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --border: --alpha(var(--color-white) / 4%);
     --input: --alpha(var(--color-white) / 5%);
-    --ring: var(--color-neutral-500);
+    --ring: #e52d4f;
     --destructive-foreground: var(--color-red-400);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);

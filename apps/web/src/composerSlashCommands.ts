@@ -208,7 +208,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   feedback: {
     command: "feedback",
     label: "/feedback",
-    description: "Send feedback to the Synara team",
+    description: "Send feedback to the Glasswing AI team",
     source: "app",
   },
   automation: {

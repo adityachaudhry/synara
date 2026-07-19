@@ -120,7 +120,7 @@ describe("theme share strings", () => {
     );
 
     expect(parseThemeShareString(shareString)).toEqual({
-      codeThemeId: "codex",
+      codeThemeId: "synara",
       theme: resolveThemePack(DEFAULT_THEME_STATE, "dark").theme,
       variant: "dark",
     });

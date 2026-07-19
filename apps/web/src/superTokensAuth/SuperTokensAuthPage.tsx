@@ -65,7 +65,7 @@ export function SuperTokensAuthPage() {
       });
       if (!response.ok) {
         if (input.silentUnauthorized && response.status === 401) return;
-        throw new Error("Synara session exchange failed.");
+        throw new Error("Glasswing AI session exchange failed.");
       }
       exchangePendingRef.current = false;
       setExchangePending(false);

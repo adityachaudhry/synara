@@ -128,7 +128,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   },
   synara: {
     dark: {
-      accent: "#6073cc",
+      accent: "#e52d4f",
       contrast: 0,
       fonts: {
         code: null,
@@ -144,7 +144,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
       surface: "#0e0e0e",
     },
     light: {
-      accent: "#526fff",
+      accent: "#d90a2e",
       contrast: 0,
       fonts: {
         code: null,

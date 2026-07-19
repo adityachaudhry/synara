@@ -180,7 +180,7 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
-import { SynaraLogo } from "./SynaraLogo";
+import { GlasswingBrand } from "./GlasswingBrand";
 import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
@@ -6512,8 +6512,8 @@ export default function Sidebar() {
       },
       {
         id: "feedback",
-        label: "Feedback Synara",
-        description: "Send feedback or report an issue to the Synara team.",
+        label: "Feedback Glasswing AI",
+        description: "Send feedback or report an issue to the Glasswing AI team.",
         keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
       },
       {
@@ -6555,7 +6555,7 @@ export default function Sidebar() {
             toastManager.add({
               type: "info",
               title: "Preparing update",
-              description: `Synara is preparing version ${nextState.availableVersion ?? "available"} in the background.`,
+              description: `Glasswing AI is preparing version ${nextState.availableVersion ?? "available"} in the background.`,
             });
             return;
           }
@@ -6564,7 +6564,7 @@ export default function Sidebar() {
             toastManager.add({
               type: "info",
               title: "Preparing update",
-              description: "Synara is downloading the update in the background.",
+              description: "Glasswing AI is downloading the update in the background.",
             });
             return;
           }
@@ -6582,7 +6582,7 @@ export default function Sidebar() {
             toastManager.add({
               type: "info",
               title: "You're up to date",
-              description: `Synara ${nextState.currentVersion} is already the newest version.`,
+              description: `Glasswing AI ${nextState.currentVersion} is already the newest version.`,
             });
             return;
           }
@@ -6747,6 +6747,7 @@ export default function Sidebar() {
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
       <SidebarTrigger className="shrink-0 text-muted-foreground/75 hover:text-foreground md:hidden" />
+      <GlasswingBrand variant="wordmark" className="h-5 w-auto max-w-[150px]" />
       {headerControls}
     </div>
   );
@@ -6798,9 +6799,9 @@ export default function Sidebar() {
             )}
           >
             {titlebarControls}
-            <SynaraLogo
-              aria-label="Synara"
-              className="pointer-events-none ml-auto size-3.5 text-[var(--color-text-foreground-secondary)] opacity-80"
+            <GlasswingBrand
+              aria-label="Glasswing AI"
+              className="pointer-events-none ml-auto h-4 w-auto opacity-80"
             />
           </SidebarHeader>
         </>

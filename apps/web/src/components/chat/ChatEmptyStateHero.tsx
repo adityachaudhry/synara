@@ -4,7 +4,7 @@
 // Depends on: the caller-supplied project display name.
 
 import { memo } from "react";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { GlasswingBrand } from "~/components/GlasswingBrand";
 
 export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
   projectName,
@@ -13,10 +13,12 @@ export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
 }) {
   return (
     <div className="flex flex-col items-center gap-5 select-none">
-      <SynaraLogo aria-label="Synara logo" className="size-10" />
+      <GlasswingBrand aria-label="Glasswing AI" className="h-10 w-auto" />
 
       <div className="flex flex-col items-center gap-0.5">
-        <h1 className="text-2xl font-semibold text-foreground/90">Let's build</h1>
+        <h1 className="font-serif text-2xl font-medium tracking-[-0.015em] text-foreground/90">
+          Let's build
+        </h1>
         {projectName && <span className="text-lg text-muted-foreground/40">{projectName}</span>}
       </div>
     </div>
