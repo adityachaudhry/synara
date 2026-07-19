@@ -36,6 +36,12 @@ export type SuperTokensRuntimeConfig =
       readonly websiteDomain: string;
     };
 
+export function describeSuperTokensRuntimeConfig(config: SuperTokensRuntimeConfig) {
+  if (!config.enabled) return config;
+  const { apiKey: _apiKey, ...safeConfig } = config;
+  return safeConfig;
+}
+
 export function resolveSuperTokensRuntimeConfig(input: {
   readonly coreUrl?: URL;
   readonly apiKey?: string;

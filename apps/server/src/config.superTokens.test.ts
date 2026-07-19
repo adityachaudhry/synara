@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveSuperTokensRuntimeConfig } from "./config";
+import {
+  describeSuperTokensRuntimeConfig,
+  resolveSuperTokensRuntimeConfig,
+} from "./config";
 
 describe("resolveSuperTokensRuntimeConfig", () => {
   it("keeps SuperTokens disabled when every setting is absent", () => {
@@ -28,5 +31,16 @@ describe("resolveSuperTokensRuntimeConfig", () => {
       apiDomain: "https://synara.example.test",
       websiteDomain: "https://synara.example.test",
     });
+  });
+
+  it("omits the API key from startup log metadata", () => {
+    const config = resolveSuperTokensRuntimeConfig({
+      coreUrl: new URL("http://supertokens:3567"),
+      apiKey: "must-not-be-logged",
+      apiDomain: new URL("https://synara.example.test"),
+      websiteDomain: new URL("https://synara.example.test"),
+    });
+
+    expect(describeSuperTokensRuntimeConfig(config)).not.toHaveProperty("apiKey");
   });
 });

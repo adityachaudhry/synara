@@ -18,6 +18,7 @@ import {
 } from "@synara/shared/cli";
 import {
   DEFAULT_PORT,
+  describeSuperTokensRuntimeConfig,
   deriveServerPaths,
   normalizeHttpsPublicOrigin,
   preparePrivateServerPaths,
@@ -402,9 +403,10 @@ const makeServerProgram = (input: CliInput) =>
       }),
     );
 
-    const { authToken, devUrl, ...safeConfig } = config;
+    const { authToken, devUrl, superTokens, ...safeConfig } = config;
     yield* Effect.logInfo("Synara running", {
       ...safeConfig,
+      superTokens: describeSuperTokensRuntimeConfig(superTokens),
       devUrl: devUrl?.toString(),
       authEnabled: Boolean(authToken),
     });
