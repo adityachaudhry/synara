@@ -14,6 +14,7 @@ import Session from "supertokens-node/recipe/session";
 import type { HTTPMethod } from "supertokens-node/types";
 
 import { ServerConfig, type SuperTokensRuntimeConfig } from "../../config";
+import { isAllowedGlasswingEmail } from "../glasswingIdentity";
 import {
   SuperTokensAuth,
   SuperTokensAuthError,
@@ -22,15 +23,8 @@ import {
 } from "../Services/SuperTokensAuth";
 
 const AUTH_BODY_MAX_BYTES = 16 * 1024;
-export const ALLOWED_EMAIL_DOMAIN = "glasswing.vc";
 
 let initialized = false;
-
-export function isAllowedGlasswingEmail(email: string): boolean {
-  const normalized = email.trim().toLowerCase();
-  const at = normalized.lastIndexOf("@");
-  return at > 0 && normalized.slice(at + 1) === ALLOWED_EMAIL_DOMAIN;
-}
 
 export function toEffectCookieTuples(
   cookies: ReadonlyArray<CollectingResponse["cookies"][number]>,

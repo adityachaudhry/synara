@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { ServerAuthDescriptor } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +13,8 @@ import { ServerSecretStoreLive } from "./ServerSecretStore";
 import { SessionCredentialServiceLive } from "./SessionCredentialService";
 import { BootstrapCredentialError } from "../Services/BootstrapCredentialService";
 import { AuthError, ServerAuth, type AuthRequest } from "../Services/ServerAuth";
+import { ServerAuthPolicy } from "../Services/ServerAuthPolicy";
+import { SessionCredentialService } from "../Services/SessionCredentialService";
 import { authenticateRpcWebSocketUpgrade } from "../../wsRpc";
 
 const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
@@ -31,6 +34,39 @@ const testLayer = ServerAuthLive.pipe(
   Layer.provide(
     ServerConfig.layerTest(process.cwd(), {
       prefix: "synara-auth-server-test-",
+    }),
+  ),
+  Layer.provide(NodeServices.layer),
+);
+
+const superTokensDescriptor = {
+  policy: "loopback-browser",
+  bootstrapMethods: ["one-time-token"],
+  sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+  sessionCookieName: "synara_session",
+  externalProvider: "supertokens",
+} satisfies ServerAuthDescriptor;
+
+const superTokensPolicyLayer = Layer.succeed(ServerAuthPolicy, {
+  getDescriptor: () => Effect.succeed(superTokensDescriptor),
+});
+
+const superTokensServerAuthLayer = ServerAuthLive.pipe(
+  Layer.provide(superTokensPolicyLayer),
+  Layer.provide(BootstrapCredentialServiceLive),
+  Layer.provide(sessionCredentialLayer),
+  Layer.provide(authControlPlaneLayer),
+);
+
+const superTokensTestLayer = Layer.merge(
+  superTokensServerAuthLayer,
+  sessionCredentialLayer,
+).pipe(
+  Layer.provide(SqlitePersistenceMemory),
+  Layer.provide(ServerSecretStoreLive),
+  Layer.provide(
+    ServerConfig.layerTest(process.cwd(), {
+      prefix: "synara-supertokens-server-auth-test-",
     }),
   ),
   Layer.provide(NodeServices.layer),
@@ -79,6 +115,44 @@ describe("ServerAuthLive", () => {
 
     expect(error.status).toBe(500);
     expect(error.message).toBe("Failed to validate bootstrap credential.");
+  });
+
+  it("rejects legacy owner sessions when SuperTokens is the external provider", async () => {
+    await Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+      const sessions = yield* SessionCredentialService;
+      const legacySession = yield* sessions.issue({
+        method: "browser-session-cookie",
+        subject: "owner-bootstrap",
+        role: "owner",
+      });
+
+      const state = yield* serverAuth.getSessionState(makeCookieRequest(legacySession.token));
+      const error = yield* Effect.flip(
+        serverAuth.authenticateHttpRequest(makeCookieRequest(legacySession.token)),
+      ).pipe(Effect.orDie);
+
+      expect(state.authenticated).toBe(false);
+      expect(error.status).toBe(401);
+    }).pipe(Effect.provide(superTokensTestLayer), Effect.scoped, Effect.runPromise);
+  });
+
+  it("accepts Glasswing email sessions when SuperTokens is the external provider", async () => {
+    await Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+      const sessions = yield* SessionCredentialService;
+      const superTokensSession = yield* sessions.issue({
+        method: "browser-session-cookie",
+        subject: "Person@Glasswing.VC",
+        role: "owner",
+      });
+
+      const authenticated = yield* serverAuth.authenticateHttpRequest(
+        makeCookieRequest(superTokensSession.token),
+      );
+
+      expect(authenticated.subject).toBe("Person@Glasswing.VC");
+    }).pipe(Effect.provide(superTokensTestLayer), Effect.scoped, Effect.runPromise);
   });
 
   it("issues client pairing credentials by default", async () => {

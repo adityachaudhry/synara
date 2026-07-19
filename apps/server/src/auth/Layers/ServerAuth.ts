@@ -8,6 +8,7 @@ import type {
 } from "@synara/contracts";
 import { DateTime, Effect, Layer } from "effect";
 
+import { isAllowedGlasswingEmail } from "../glasswingIdentity";
 import { AuthControlPlane } from "../Services/AuthControlPlane";
 import {
   BootstrapCredentialError,
@@ -82,6 +83,7 @@ export const makeServerAuth = Effect.gen(function* () {
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
   const descriptor = yield* policy.getDescriptor();
+  const requiresSuperTokensIdentity = descriptor.externalProvider === "supertokens";
 
   const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
     sessions.verify(token).pipe(
@@ -90,7 +92,6 @@ export const makeServerAuth = Effect.gen(function* () {
           Effect.annotateLogs({ reason: cause.message }),
         ),
       ),
-      Effect.map(toAuthenticatedSession),
       Effect.mapError(
         (cause) =>
           new AuthError({
@@ -98,6 +99,16 @@ export const makeServerAuth = Effect.gen(function* () {
             status: 401,
             cause,
           }),
+      ),
+      Effect.flatMap((session) =>
+        requiresSuperTokensIdentity && !isAllowedGlasswingEmail(session.subject)
+          ? Effect.fail(
+              new AuthError({
+                message: "Unauthorized request.",
+                status: 401,
+              }),
+            )
+          : Effect.succeed(toAuthenticatedSession(session)),
       ),
     );
 

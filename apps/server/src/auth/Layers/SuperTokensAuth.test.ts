@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { isAllowedGlasswingEmail, toEffectCookieTuples } from "./SuperTokensAuth";
+import { isAllowedGlasswingEmail } from "../glasswingIdentity";
+import { toEffectCookieTuples } from "./SuperTokensAuth";
 
 describe("SuperTokensAuth", () => {
   it("accepts Glasswing addresses case-insensitively and rejects suffix tricks", () => {
