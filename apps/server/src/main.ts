@@ -23,6 +23,7 @@ import {
   preparePrivateServerPaths,
   remoteAccessPolicyError,
   resolveCanonicalWorkspaceRoots,
+  resolveSuperTokensRuntimeConfig,
   resolveStaticDir,
   ServerConfig,
   type RuntimeMode,
@@ -136,6 +137,22 @@ const CliEnvConfig = Config.all({
   ),
   logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
   logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
+  superTokensCoreUrl: Config.url("SUPERTOKENS_CORE_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  superTokensApiKey: Config.string("SUPERTOKENS_API_KEY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  superTokensApiDomain: Config.url("SUPERTOKENS_API_DOMAIN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  superTokensWebsiteDomain: Config.url("SUPERTOKENS_WEBSITE_DOMAIN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 const ServerConfigLive = (input: CliInput) =>
@@ -212,6 +229,17 @@ const ServerConfigLive = (input: CliInput) =>
         env.logWebSocketEvents,
         false,
       );
+      const superTokens = yield* Effect.try({
+        try: () =>
+          resolveSuperTokensRuntimeConfig({
+            coreUrl: env.superTokensCoreUrl,
+            apiKey: env.superTokensApiKey,
+            apiDomain: env.superTokensApiDomain,
+            websiteDomain: env.superTokensWebsiteDomain,
+          }),
+        catch: (cause) =>
+          new StartupError({ message: "Failed to configure SuperTokens authentication", cause }),
+      });
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
       // Omitting Node's host listens on an unspecified address, which exposes
       // the server beyond the local machine on common platforms. Keep every
@@ -252,6 +280,7 @@ const ServerConfigLive = (input: CliInput) =>
         autoBootstrapProjectFromCwd,
         logProviderEvents,
         logWebSocketEvents,
+        superTokens,
       } satisfies ServerConfigShape;
 
       return config;

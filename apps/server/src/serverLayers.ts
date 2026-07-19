@@ -26,6 +26,7 @@ import { ServerAuthLive } from "./auth/Layers/ServerAuth";
 import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
+import { SuperTokensAuthLive } from "./auth/Layers/SuperTokensAuth";
 import { ProfileStatsQueryLive } from "./profileStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
@@ -113,6 +114,7 @@ export function makeServerRuntimeServicesLayer() {
     sessionCredentialLayer,
     authControlPlaneLayer,
     serverAuthLayer,
+    SuperTokensAuthLive,
   );
   const automationServiceLayer = AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),

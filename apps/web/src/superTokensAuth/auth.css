@@ -1,0 +1,236 @@
+:root.gw-auth-document {
+  background: #f4f2f0;
+  color-scheme: light;
+  font-family: InterVariable, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overscroll-behavior: none;
+}
+
+.gw-auth-document body {
+  margin: 0;
+  overscroll-behavior: none;
+}
+
+.gw-auth,
+.gw-auth * {
+  box-sizing: border-box;
+}
+
+.gw-auth {
+  position: relative;
+  display: flex;
+  min-height: 100svh;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 4rem 1.5rem;
+  color: #0a0a0b;
+}
+
+.gw-auth__background {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  background-color: #f4f2f0;
+  background-image: url("/images/auth-bg.webp");
+  background-position: right bottom;
+  background-size: cover;
+}
+
+.gw-auth__card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 24rem);
+  overflow: hidden;
+  border: 1px solid rgb(10 10 11 / 10%);
+  border-radius: 0.9rem;
+  background: rgb(255 255 255 / 72%);
+  box-shadow: 0 24px 55px rgb(30 24 20 / 18%);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.gw-auth__header {
+  padding: 1.5rem 1.5rem 0.5rem;
+}
+
+.gw-auth__header h1 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.75rem;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.gw-auth__header p {
+  margin: 0.45rem 0 0;
+  color: #71717a;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.gw-auth__content {
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.gw-auth__form {
+  display: grid;
+  gap: 1rem;
+}
+
+.gw-auth__email {
+  width: 100%;
+  border: 1px solid #dedbd8;
+  border-radius: 0.55rem;
+  background: rgb(255 255 255 / 86%);
+  color: #0a0a0b;
+  font: inherit;
+  font-size: 0.9rem;
+  outline: none;
+  padding: 0.72rem 0.85rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.gw-auth__email::placeholder {
+  color: #a1a1aa;
+}
+
+.gw-auth__email:focus {
+  border-color: #d90a2e;
+  box-shadow: 0 0 0 3px rgb(217 10 46 / 15%);
+}
+
+.gw-auth__primary {
+  min-height: 2.6rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: #d90a2e;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  padding: 0.68rem 1rem;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.gw-auth__primary:hover:not(:disabled) {
+  background: #b00824;
+}
+
+.gw-auth button:focus-visible {
+  outline: 3px solid rgb(217 10 46 / 22%);
+  outline-offset: 2px;
+}
+
+.gw-auth button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.gw-auth__error {
+  margin: -0.2rem 0 0;
+  color: #d90a2e;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.gw-auth__error--center {
+  text-align: center;
+}
+
+.gw-auth__otp {
+  display: flex;
+  justify-content: center;
+}
+
+.gw-auth__otp-group {
+  display: flex;
+  gap: 0.48rem;
+}
+
+.gw-auth__otp-slot {
+  position: relative;
+  display: flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dedbd8;
+  border-radius: 0.55rem;
+  background: rgb(255 255 255 / 88%);
+  font-size: 1.05rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.gw-auth__otp-slot[data-active="true"] {
+  z-index: 1;
+  border-color: #d90a2e;
+  box-shadow: 0 0 0 3px rgb(217 10 46 / 15%);
+}
+
+.gw-auth__otp-caret {
+  width: 1px;
+  height: 1.25rem;
+  background: #d90a2e;
+  animation: gw-auth-caret 1s step-end infinite;
+}
+
+.gw-auth__secondary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #71717a;
+  font-size: 0.78rem;
+}
+
+.gw-auth__secondary-actions button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.gw-auth__secondary-actions button:hover:not(:disabled) {
+  color: #d90a2e;
+}
+
+@keyframes gw-auth-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 440px) {
+  .gw-auth {
+    padding: 2rem 1rem;
+  }
+
+  .gw-auth__header,
+  .gw-auth__content {
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+  }
+
+  .gw-auth__otp-group {
+    gap: 0.3rem;
+  }
+
+  .gw-auth__otp-slot {
+    width: 2.42rem;
+    height: 2.55rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gw-auth *,
+  .gw-auth *::before,
+  .gw-auth *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

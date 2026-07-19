@@ -10,8 +10,8 @@ export async function logoutCurrentBrowserSession(input: {
 }): Promise<AuthLogoutFlowResult> {
   if (!(await input.confirm())) return "cancelled";
   try {
-    await input.logout();
-    input.navigate(AUTH_SIGNED_OUT_PATH);
+    const result = (await input.logout()) as { readonly reauthPath?: string };
+    input.navigate(result.reauthPath ?? AUTH_SIGNED_OUT_PATH);
     return "redirecting";
   } catch (error) {
     input.onError(error);

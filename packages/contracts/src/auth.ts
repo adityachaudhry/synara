@@ -27,6 +27,7 @@ export const ServerAuthDescriptor = Schema.Struct({
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
+  externalProvider: Schema.optionalKey(Schema.Literal("supertokens")),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
 
@@ -60,6 +61,7 @@ export type AuthWebSocketTokenResult = typeof AuthWebSocketTokenResult.Type;
 
 export const AuthLogoutResult = Schema.Struct({
   revoked: Schema.Boolean,
+  reauthPath: Schema.optionalKey(Schema.Literal("/auth")),
 });
 export type AuthLogoutResult = typeof AuthLogoutResult.Type;
 

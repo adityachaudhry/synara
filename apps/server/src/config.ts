@@ -26,6 +26,46 @@ export const PRIVATE_STATE_REPAIR_MARKER = ".permissions-v1";
 
 export type RuntimeMode = "web" | "desktop";
 
+export type SuperTokensRuntimeConfig =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly coreUrl: string;
+      readonly apiKey: string;
+      readonly apiDomain: string;
+      readonly websiteDomain: string;
+    };
+
+export function resolveSuperTokensRuntimeConfig(input: {
+  readonly coreUrl?: URL;
+  readonly apiKey?: string;
+  readonly apiDomain?: URL;
+  readonly websiteDomain?: URL;
+}): SuperTokensRuntimeConfig {
+  const entries = [
+    ["SUPERTOKENS_CORE_URL", input.coreUrl],
+    ["SUPERTOKENS_API_KEY", input.apiKey?.trim()],
+    ["SUPERTOKENS_API_DOMAIN", input.apiDomain],
+    ["SUPERTOKENS_WEBSITE_DOMAIN", input.websiteDomain],
+  ] as const;
+  if (entries.every(([, value]) => value === undefined || value === "")) {
+    return { enabled: false };
+  }
+  const missing = entries
+    .filter(([, value]) => value === undefined || value === "")
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`Incomplete SuperTokens configuration; missing ${missing.join(", ")}.`);
+  }
+  return {
+    enabled: true,
+    coreUrl: input.coreUrl!.origin,
+    apiKey: input.apiKey!.trim(),
+    apiDomain: input.apiDomain!.origin,
+    websiteDomain: input.websiteDomain!.origin,
+  };
+}
+
 export function normalizeHttpsPublicOrigin(publicUrl: URL): URL | null {
   if (
     publicUrl.protocol !== "https:" ||
@@ -108,6 +148,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logProviderEvents: boolean;
   readonly logWebSocketEvents: boolean;
+  readonly superTokens: SuperTokensRuntimeConfig;
 }
 
 export function preparePrivateServerPaths(
@@ -266,6 +307,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           publicUrl: undefined,
           allowInsecureRemote: false,
           noBrowser: false,
+          superTokens: { enabled: false },
         } satisfies ServerConfigShape;
       }),
     );

@@ -34,6 +34,7 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
       mode: config.mode,
       port: config.port,
     }),
+    ...(config.superTokens?.enabled ? { externalProvider: "supertokens" as const } : {}),
   };
 
   return {

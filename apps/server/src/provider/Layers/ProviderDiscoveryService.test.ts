@@ -68,6 +68,7 @@ const makeConfigLayer = () =>
         allowInsecureRemote: false,
         noBrowser: true,
         authToken: undefined,
+        superTokens: { enabled: false },
         autoBootstrapProjectFromCwd: false,
         logProviderEvents: false,
         logWebSocketEvents: false,

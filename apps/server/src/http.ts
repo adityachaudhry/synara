@@ -30,6 +30,8 @@ import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
+import { SuperTokensAuth } from "./auth/Services/SuperTokensAuth";
+import { superTokensEffectRouteLayer } from "./auth/superTokensEffectRoute";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
@@ -174,6 +176,7 @@ function localPreviewCorsHeaders(input: {
 export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
   return Layer.mergeAll(
     makeHealthEffectRouteLayer(readiness),
+    superTokensEffectRouteLayer,
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
     threadExportEffectRouteLayer,
@@ -276,10 +279,6 @@ function encodeCookie(input: {
   return `${encodeURIComponent(input.name)}=${encodeURIComponent(input.value)}; Expires=${DateTime.toDate(input.expiresAt).toUTCString()}; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
 }
 
-function encodeExpiredCookie(input: { readonly name: string; readonly secure: boolean }) {
-  return `${encodeURIComponent(input.name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
-}
-
 function isBodyCapacityError(cause: unknown): boolean {
   if (Cause.isExceededCapacityError(cause)) return true;
   if (cause instanceof Error && cause.message === "maxBytes exceeded") return true;
@@ -361,6 +360,7 @@ export const authEffectRouteLayer = HttpRouter.add(
     const config = yield* ServerConfig;
     const serverAuth = yield* ServerAuth;
     const sessions = yield* SessionCredentialService;
+    const superTokens = yield* SuperTokensAuth;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
     const authRequest = makeEffectAuthRequest(request);
@@ -435,16 +435,30 @@ export const authEffectRouteLayer = HttpRouter.add(
 
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {
       const session = yield* authenticatedMutationSession;
-      return HttpServerResponse.jsonUnsafe(
-        { revoked: yield* serverAuth.logoutSession(session.sessionId) },
-        {
-          headers: {
-            "Set-Cookie": encodeExpiredCookie({
-              name: sessions.cookieName,
+      const superTokensCookies = superTokens.enabled
+        ? yield* superTokens.revokeRequestSession(request)
+        : [];
+      const revoked = yield* serverAuth.logoutSession(session.sessionId);
+      return HttpServerResponse.setCookiesUnsafe(
+        HttpServerResponse.jsonUnsafe({
+          revoked,
+          ...(superTokens.enabled ? { reauthPath: "/auth" as const } : {}),
+        }),
+        [
+          ...superTokensCookies,
+          [
+            sessions.cookieName,
+            "",
+            {
+              expires: new Date(0),
+              maxAge: 0,
+              httpOnly: true,
+              path: "/",
+              sameSite: "lax",
               secure: config.publicUrl !== undefined,
-            }),
-          },
-        },
+            },
+          ],
+        ],
       );
     }
 

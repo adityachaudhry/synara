@@ -49,4 +49,17 @@ describe("logoutCurrentBrowserSession", () => {
     expect(navigate).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(failure);
   });
+
+  it("returns to the external auth page when the server requests reauthentication", async () => {
+    const navigate = vi.fn();
+    await expect(
+      logoutCurrentBrowserSession({
+        confirm: async () => true,
+        logout: async () => ({ revoked: true, reauthPath: "/auth" }),
+        navigate,
+        onError: vi.fn(),
+      }),
+    ).resolves.toBe("redirecting");
+    expect(navigate).toHaveBeenCalledWith("/auth");
+  });
 });

@@ -5,11 +5,14 @@ import "./storageOriginMigration";
 
 import { bootstrapSignedOutScreen } from "./authSignedOut";
 import { bootstrapPairingSession } from "./pairingBootstrap";
+import { bootstrapSuperTokensAuth } from "./superTokensBootstrap";
 
 if (!bootstrapSignedOutScreen()) {
-  void bootstrapPairingSession().then((result) => {
-    if (result === "not-pairing") {
-      return import("./main");
+  void bootstrapPairingSession().then(async (result) => {
+    if (result !== "not-pairing") return;
+    const superTokensResult = await bootstrapSuperTokensAuth();
+    if (superTokensResult === "continue") {
+      await import("./main");
     }
   });
 }

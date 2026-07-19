@@ -19,6 +19,10 @@ import {
   SessionCredentialService,
   type SessionCredentialServiceShape,
 } from "./auth/Services/SessionCredentialService";
+import {
+  SuperTokensAuth,
+  type SuperTokensAuthShape,
+} from "./auth/Services/SuperTokensAuth";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
@@ -110,6 +114,12 @@ async function withAuthEffectServer(
   routeLayer:
     | typeof authEffectRouteLayer
     | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
+  superTokensAuth: SuperTokensAuthShape = {
+    enabled: false,
+    handleApiRequest: () => Effect.die("not used"),
+    verifyRequestSession: () => Effect.die("not used"),
+    revokeRequestSession: () => Effect.succeed([]),
+  },
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
@@ -120,6 +130,7 @@ async function withAuthEffectServer(
           Layer.succeed(ServerConfig, config),
           Layer.succeed(ServerAuth, serverAuth),
           Layer.succeed(SessionCredentialService, makeSessionCredentialService()),
+          Layer.succeed(SuperTokensAuth, superTokensAuth),
           Layer.succeed(ProviderAdapterRegistry, {
             getByProvider: () => Effect.die("voice adapter not used in this test"),
             listProviders: () => Effect.succeed([]),
@@ -338,6 +349,64 @@ describe("authEffectRouteLayer", () => {
       expect(cookie).toContain("Secure");
       expect(sideEffects.count).toBe(1);
     });
+  });
+
+  it("revokes SuperTokens and returns the auth re-entry path when external auth is enabled", async () => {
+    const sideEffects = { count: 0 };
+    const revocations = { count: 0 };
+    const config = {
+      host: "0.0.0.0",
+      publicUrl: new URL("https://synara.example.test/"),
+      superTokens: {
+        enabled: true,
+        coreUrl: "http://supertokens:3567",
+        apiKey: "secret",
+        apiDomain: "https://synara.example.test",
+        websiteDomain: "https://synara.example.test",
+      },
+    } as ServerConfigShape;
+    const superTokensAuth: SuperTokensAuthShape = {
+      enabled: true,
+      handleApiRequest: () => Effect.die("not used"),
+      verifyRequestSession: () => Effect.die("not used"),
+      revokeRequestSession: () =>
+        Effect.sync(() => {
+          revocations.count += 1;
+          return [
+            [
+              "sAccessToken",
+              "",
+              { expires: new Date(0), httpOnly: true, path: "/", sameSite: "lax" },
+            ],
+          ] as const;
+        }),
+    };
+
+    await withAuthEffectServer(
+      config,
+      makeServerAuth(sideEffects),
+      async (serverOrigin) => {
+        const response = await fetch(
+          `${serverOrigin}/api/auth/logout`,
+          mutationRequest({
+            origin: "https://synara.example.test",
+            credential: "cookie",
+          }),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ revoked: true, reauthPath: "/auth" });
+        expect(response.headers.getSetCookie()).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("synara_session="),
+            expect.stringContaining("sAccessToken="),
+          ]),
+        );
+        expect(revocations.count).toBe(1);
+      },
+      authEffectRouteLayer,
+      superTokensAuth,
+    );
   });
 });
 
