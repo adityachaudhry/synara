@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { bootstrapSuperTokensAuth } from "./superTokensBootstrap";
 
@@ -10,6 +10,10 @@ function response(body: unknown) {
 }
 
 describe("bootstrapSuperTokensAuth", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders the standalone auth page on /auth", async () => {
     const renderAuth = vi.fn().mockResolvedValue(undefined);
     const fetch = vi.fn();
@@ -40,6 +44,30 @@ describe("bootstrapSuperTokensAuth", () => {
         renderAuth: vi.fn(),
       }),
     ).resolves.toBe("redirecting");
+    expect(replace).toHaveBeenCalledWith("/auth");
+  });
+
+  it("preserves the browser receiver when using window.fetch", async () => {
+    const replace = vi.fn();
+    vi.stubGlobal("window", {
+      location: { pathname: "/", replace },
+    });
+    vi.stubGlobal(
+      "fetch",
+      function browserFetch(this: unknown) {
+        if (this !== globalThis) {
+          return Promise.reject(new TypeError("Illegal invocation"));
+        }
+        return Promise.resolve(
+          response({
+            authenticated: false,
+            auth: { externalProvider: "supertokens" },
+          }),
+        );
+      },
+    );
+
+    await expect(bootstrapSuperTokensAuth()).resolves.toBe("redirecting");
     expect(replace).toHaveBeenCalledWith("/auth");
   });
 

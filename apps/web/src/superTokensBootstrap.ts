@@ -10,7 +10,7 @@ interface SuperTokensBootstrapDependencies {
 export async function bootstrapSuperTokensAuth(
   dependencies: SuperTokensBootstrapDependencies = {
     pathname: window.location.pathname,
-    fetch: globalThis.fetch,
+    fetch: globalThis.fetch.bind(globalThis),
     replace: (path) => window.location.replace(path),
     renderAuth: async () => {
       const { renderSuperTokensAuth } = await import("./superTokensAuth/render");
