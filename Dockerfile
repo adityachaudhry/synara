@@ -51,7 +51,7 @@ RUN case "$(dpkg --print-architecture)" in \
   && ln -s "$sdk_claude" /usr/local/bin/claude \
   && mkdir -p /data /home/node/Documents/Synara \
   && chmod +x /app/docker-entrypoint.sh \
-  && chown -R node:node /data /home/node/Documents /app
+  && chown -R node:node /data /home/node/Documents
 
 ENV HOME=/home/node \
   NODE_ENV=production \
