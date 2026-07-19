@@ -1,0 +1,11 @@
+services:
+  synara:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: synara-local:latest
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env}
+    ports:
+      - "127.0.0.1:${SYNARA_PORT:-3773}:3773"
+    stop_grace_period: 30s

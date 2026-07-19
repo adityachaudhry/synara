@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+socat TCP-LISTEN:3773,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:3774 &
+proxy_pid=$!
+
+node /app/apps/server/dist/index.mjs &
+server_pid=$!
+
+shutdown() {
+  kill -TERM "$proxy_pid" "$server_pid" 2>/dev/null || true
+}
+
+trap shutdown INT TERM
+
+set +e
+wait -n "$proxy_pid" "$server_pid"
+exit_code=$?
+set -e
+
+shutdown
+wait "$proxy_pid" "$server_pid" 2>/dev/null || true
+exit "$exit_code"
