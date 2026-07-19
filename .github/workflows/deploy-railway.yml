@@ -1,0 +1,41 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches:
+      - glasswingos/main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-v4-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy v4
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli@5.15.0
+
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: >-
+          railway up
+          --service synara
+          --environment production
+          --ci
+          --message "GitHub Actions ${GITHUB_SHA}"
