@@ -40,8 +40,8 @@ import {
   UI_DENSITY_MODES,
   normalizeUiDensity as normalizeUiDensityValue,
 } from "./lib/appDensity";
+import { APP_SETTINGS_STORAGE_KEY } from "./appSettingsStorage";
 
-const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
@@ -157,6 +157,9 @@ const PersistedProviderKind = Schema.Literals([
 );
 
 export const AppSettingsSchema = Schema.Struct({
+  // Local presentation mode. Authentication and the Glasswing product identity remain active
+  // when disabled; this gates the Glasswing theme and future Glasswing-specific features.
+  glasswingMode: Schema.Boolean.pipe(withDefaults(() => true)),
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),

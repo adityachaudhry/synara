@@ -9,10 +9,15 @@ import { appHistory } from "./appNavigation";
 import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
 import { isElectron } from "./env";
+import {
+  applyGlasswingModeAttribute,
+  getGlasswingModeForCurrentPage,
+} from "./glasswingMode";
 
 const router = getRouter(appHistory);
 
 document.title = APP_DISPLAY_NAME;
+applyGlasswingModeAttribute(document.documentElement, getGlasswingModeForCurrentPage());
 
 if (isElectron) {
   document.documentElement.dataset.runtime = "electron";

@@ -245,6 +245,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
+import { getGlasswingModeForCurrentPage } from "../glasswingMode";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
@@ -298,6 +299,7 @@ import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import { disposeAndCloseTerminalSession, randomTerminalId } from "./terminal/terminalSession";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
+import { IN_APP_BRAND_HEADING_FONT_CLASS_NAME } from "~/branding";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -1150,6 +1152,8 @@ export default function ChatView({
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
   const isEditorRail = presentationMode === "editor";
+  const usesGlasswingDockLauncher =
+    getGlasswingModeForCurrentPage() && surfaceMode === "single" && !isEditorRail;
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
@@ -4606,8 +4610,8 @@ export default function ChatView({
     terminalState.workspaceLayout,
     terminalWorkspaceOpen,
   ]);
-  // The terminal's panel toggle mirrors the right dock's collapse control: it shows
-  // or hides the side panel only when this thread already has a pane to show.
+  // Manual opens in Glasswing Mode land on the dock launcher; direct pane actions
+  // still open their target immediately through the route-level dock handlers.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
   const isMobileViewport = useIsMobile();
   // Temporary threads are visually identical to regular chats — they use the same
@@ -4670,14 +4674,37 @@ export default function ChatView({
     (store) => selectRightDockState(threadId)(store).panes.length > 0,
   );
   const setRightDockOpen = useRightDockStore((store) => store.setDockOpen);
+  const openRightDockLauncher = useRightDockStore((store) => store.openDockLauncher);
   const toggleRightDock = useCallback(() => {
-    setRightDockOpen(threadId, !rightDockOpen);
-  }, [rightDockOpen, setRightDockOpen, threadId]);
+    if (rightDockOpen) {
+      setRightDockOpen(threadId, false);
+      return;
+    }
+    if (usesGlasswingDockLauncher) {
+      openRightDockLauncher(threadId);
+      return;
+    }
+    setRightDockOpen(threadId, true);
+  }, [
+    openRightDockLauncher,
+    rightDockOpen,
+    setRightDockOpen,
+    threadId,
+    usesGlasswingDockLauncher,
+  ]);
+  const canToggleRightDock = usesGlasswingDockLauncher || hasRightDockPanes;
+  const dockLauncherAction = useMemo(
+    () =>
+      usesGlasswingDockLauncher
+        ? { open: rightDockOpen, onToggle: toggleRightDock }
+        : null,
+    [rightDockOpen, toggleRightDock, usesGlasswingDockLauncher],
+  );
   const terminalDrawerProps = useMemo(
     () => ({
       threadId,
-      onTogglePanel: hasRightDockPanes ? toggleRightDock : undefined,
-      isPanelOpen: hasRightDockPanes ? rightDockOpen : undefined,
+      onTogglePanel: canToggleRightDock ? toggleRightDock : undefined,
+      isPanelOpen: canToggleRightDock ? rightDockOpen : undefined,
       cwd: gitCwd ?? activeProject?.cwd ?? "",
       runtimeEnv: threadTerminalRuntimeEnv,
       height: terminalState.terminalHeight,
@@ -4768,7 +4795,7 @@ export default function ChatView({
       threadTerminalRuntimeEnv,
       toggleRightDock,
       rightDockOpen,
-      hasRightDockPanes,
+      canToggleRightDock,
     ],
   );
   const runProjectScript = useCallback(
@@ -11409,9 +11436,10 @@ export default function ChatView({
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
           showGitActions={showGitActions && !isEditorRail}
-          showDiffToggle={!isEditorRail}
+          showDiffToggle={!isEditorRail && !usesGlasswingDockLauncher}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
+          dockLauncherAction={dockLauncherAction}
           environment={isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
@@ -11547,7 +11575,10 @@ export default function ChatView({
                     <GlasswingBrand aria-label="Glasswing AI" className="h-10 w-auto" />
                     <h2
                       data-testid="empty-landing-heading"
-                      className="font-serif text-[27px] font-normal leading-[1.15] tracking-[-0.018em] text-foreground/95 sm:text-[31px]"
+                      className={cn(
+                        IN_APP_BRAND_HEADING_FONT_CLASS_NAME,
+                        "text-[27px] font-normal leading-[1.15] tracking-[-0.018em] text-foreground/95 sm:text-[31px]",
+                      )}
                     >
                       {isEmptyChatLanding ? (
                         "What should we work on?"

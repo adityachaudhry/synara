@@ -124,12 +124,14 @@ export function sanitizeRightDockThreadState(value: unknown): RightDockThreadSta
         .filter((pane): pane is RightDockPane => pane !== null)
     : [];
   const activePaneId =
-    typeof candidate.activePaneId === "string" &&
-    panes.some((pane) => pane.id === candidate.activePaneId)
-      ? candidate.activePaneId
-      : (panes[0]?.id ?? null);
+    candidate.activePaneId === null
+      ? null
+      : typeof candidate.activePaneId === "string" &&
+          panes.some((pane) => pane.id === candidate.activePaneId)
+        ? candidate.activePaneId
+        : (panes[0]?.id ?? null);
   return {
-    open: panes.length > 0 && candidate.open === true,
+    open: candidate.open === true,
     panes,
     activePaneId,
   };
@@ -316,6 +318,16 @@ export function setDockOpenInState(
     return state;
   }
   return { ...state, open };
+}
+
+// Manual dock opens land on the pane launcher instead of implicitly restoring
+// the last active tool. Existing tabs remain available in the header, while a
+// brand-new thread can open the same launcher before any pane exists.
+export function openDockLauncherInState(state: RightDockThreadState): RightDockThreadState {
+  if (state.open && state.activePaneId === null) {
+    return state;
+  }
+  return { ...state, open: true, activePaneId: null };
 }
 
 export function updatePaneInState(

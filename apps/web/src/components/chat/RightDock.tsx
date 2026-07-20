@@ -30,6 +30,7 @@ import {
 } from "../ui/sidebar";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+import { RightDockLauncher } from "./RightDockLauncher";
 import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
@@ -268,6 +269,12 @@ export function RightDock(props: RightDockProps) {
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">
+            {props.state.open && activePane === null ? (
+              <RightDockLauncher
+                paneKinds={props.addMenuKinds}
+                onSelectPane={props.onAddPane}
+              />
+            ) : null}
             {renderedPanes.map((pane) => {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;

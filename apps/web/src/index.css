@@ -6,7 +6,6 @@
   --animate-skeleton: skeleton 2s -1s infinite linear;
   --font-sans: var(--font-ui-family);
   --font-mono: var(--font-mono-family);
-  --font-serif: var(--font-brand-serif-family);
   --color-brand: var(--brand);
   --color-brand-strong: var(--brand-strong);
   --color-brand-tint: var(--brand-tint);
@@ -512,7 +511,6 @@
     monospace
   );
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
-  --font-brand-serif-family: "Source Serif 4", "Iowan Old Style", Georgia, "Times New Roman", serif;
   --brand: #d90a2e;
   --brand-strong: #b00824;
   --brand-tint: #fceaed;

@@ -139,6 +139,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Appearance ───────────────────────────────────────────────────────────────
   {
+    id: "appearance:glasswing-mode",
+    section: "appearance",
+    title: "Glasswing Mode",
+    keywords:
+      "Use the Glasswing color treatment and enable Glasswing-specific features. branding theme mode",
+  },
+  {
     id: "appearance:theme",
     section: "appearance",
     title: "Theme",

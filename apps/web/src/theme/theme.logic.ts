@@ -238,7 +238,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
 
 export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> = {
   dark: {
-    accent: "#e52d4f",
+    accent: "#339cff",
     contrast: 0,
     fonts: { code: null, ui: null },
     ink: "#ffffff",
@@ -251,7 +251,7 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
     surface: "#181818",
   },
   light: {
-    accent: "#d90a2e",
+    accent: "#339cff",
     contrast: 0,
     fonts: { code: null, ui: null },
     ink: "#1a1c1f",
@@ -266,6 +266,19 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
 };
 
 export const DEFAULT_THEME_STATE: ThemeState = {
+  chromeThemes: {
+    dark: getCodeThemeSeed("codex", "dark"),
+    light: getCodeThemeSeed("codex", "light"),
+  },
+  codeThemeIds: {
+    dark: "codex",
+    light: "codex",
+  },
+  systemUiFont: true,
+  mode: "system",
+};
+
+export const GLASSWING_THEME_STATE: ThemeState = {
   chromeThemes: {
     dark: getCodeThemeSeed("synara", "dark"),
     light: getCodeThemeSeed("synara", "light"),

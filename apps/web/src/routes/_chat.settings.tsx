@@ -113,6 +113,7 @@ import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { getGlasswingModeForCurrentPage } from "../glasswingMode";
 import { isUiDensity } from "../lib/appDensity";
 import { playAppSnapCaptureSound } from "../lib/appSnapSound";
 import { CentralIcon } from "../lib/central-icons";
@@ -723,6 +724,9 @@ function SettingsRouteView() {
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
+  const glasswingModeForCurrentPage = getGlasswingModeForCurrentPage();
+  const glasswingModeRequiresRefresh =
+    settings.glasswingMode !== glasswingModeForCurrentPage;
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
@@ -1044,6 +1048,7 @@ function SettingsRouteView() {
     settings.piBinaryPath !== defaults.piBinaryPath ||
     settings.piAgentDir !== defaults.piAgentDir;
   const changedSettingLabels = [
+    ...(settings.glasswingMode !== defaults.glasswingMode ? ["Glasswing Mode"] : []),
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
@@ -1979,6 +1984,44 @@ function SettingsRouteView() {
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
+      <SettingsSection title="Glasswing">
+        <SettingsRow
+          title="Glasswing Mode"
+          description="Use the Glasswing color treatment and enable future Glasswing-specific features. Glasswing AI branding and sign-in always remain active."
+          status={
+            glasswingModeRequiresRefresh
+              ? "Change saved. Refresh the page to apply it everywhere."
+              : glasswingModeForCurrentPage
+                ? "Glasswing styling is active."
+                : "Standard app styling is active."
+          }
+          resetAction={
+            settings.glasswingMode !== defaults.glasswingMode ? (
+              <SettingResetButton
+                label="Glasswing Mode"
+                onClick={() => updateSettings({ glasswingMode: defaults.glasswingMode })}
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              {glasswingModeRequiresRefresh ? (
+                <Button size="xs" variant="outline" onClick={() => window.location.reload()}>
+                  Refresh now
+                </Button>
+              ) : null}
+              <Switch
+                checked={settings.glasswingMode}
+                onCheckedChange={(checked) =>
+                  updateSettings({ glasswingMode: Boolean(checked) })
+                }
+                aria-label="Enable Glasswing Mode"
+              />
+            </div>
+          }
+        />
+      </SettingsSection>
+
       <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
         <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
         <SettingsCard>
@@ -2020,19 +2063,28 @@ function SettingsRouteView() {
           />
         </SettingsCard>
 
-        <div className="space-y-3">
-          {(resolvedTheme === "dark"
-            ? (["dark", "light"] as const)
-            : (["light", "dark"] as const)
-          ).map((variant) => (
-            <ThemePackEditor
-              key={variant}
-              variant={variant}
-              isActive={resolvedTheme === variant}
-              mode={theme}
+        {glasswingModeForCurrentPage ? (
+          <SettingsCard>
+            <SettingsRow
+              title="Theme packs"
+              description="Glasswing Mode controls the active color pack. Your custom light and dark theme packs stay saved and become available again when Glasswing Mode is off."
             />
-          ))}
-        </div>
+          </SettingsCard>
+        ) : (
+          <div className="space-y-3">
+            {(resolvedTheme === "dark"
+              ? (["dark", "light"] as const)
+              : (["light", "dark"] as const)
+            ).map((variant) => (
+              <ThemePackEditor
+                key={variant}
+                variant={variant}
+                isActive={resolvedTheme === variant}
+                mode={theme}
+              />
+            ))}
+          </div>
+        )}
 
         <SettingsCard>
           <SettingsRow

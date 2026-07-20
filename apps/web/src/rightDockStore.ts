@@ -14,6 +14,7 @@ import {
   type RightDockThreadState,
   closePaneInState,
   createDefaultRightDockState,
+  openDockLauncherInState,
   openPaneInState,
   sanitizeRightDockStateByThreadId,
   setActivePaneInState,
@@ -36,6 +37,7 @@ interface RightDockStore {
   ) => void;
   closePane: (threadId: ThreadId, paneId: string) => void;
   setActivePane: (threadId: ThreadId, paneId: string) => void;
+  openDockLauncher: (threadId: ThreadId) => void;
   setDockOpen: (threadId: ThreadId, open: boolean) => void;
   updatePane: (
     threadId: ThreadId,
@@ -100,6 +102,8 @@ export const useRightDockStore = create<RightDockStore>()(
         commit(set, threadId, (state) => closePaneInState(state, paneId)),
       setActivePane: (threadId, paneId) =>
         commit(set, threadId, (state) => setActivePaneInState(state, paneId)),
+      openDockLauncher: (threadId) =>
+        commit(set, threadId, (state) => openDockLauncherInState(state)),
       setDockOpen: (threadId, open) =>
         commit(set, threadId, (state) => setDockOpenInState(state, open)),
       updatePane: (threadId, paneId, patch) =>

@@ -5,6 +5,7 @@ import {
   SINGLETON_PANE_KINDS,
   createDefaultRightDockState,
   isRightDockPaneKind,
+  openDockLauncherInState,
   openPaneInState,
   sanitizeRightDockStateByThreadId,
   sanitizeRightDockThreadState,
@@ -114,6 +115,18 @@ describe("sanitizeRightDockThreadState", () => {
     expect(state.open).toBe(true);
   });
 
+  it("preserves an open launcher alongside existing tabs", () => {
+    const state = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: null,
+      panes: [{ id: "terminal-1", kind: "terminal" }],
+    });
+
+    expect(state.panes).toHaveLength(1);
+    expect(state.activePaneId).toBeNull();
+    expect(state.open).toBe(true);
+  });
+
   it("drops panes with an unknown kind and repoints the active tab", () => {
     const state = sanitizeRightDockThreadState({
       open: true,
@@ -128,7 +141,7 @@ describe("sanitizeRightDockThreadState", () => {
     expect(state.open).toBe(true);
   });
 
-  it("forces the dock closed when no valid panes survive", () => {
+  it("keeps an open launcher when no valid panes survive", () => {
     const state = sanitizeRightDockThreadState({
       open: true,
       activePaneId: "legacy",
@@ -138,7 +151,7 @@ describe("sanitizeRightDockThreadState", () => {
     });
     expect(state.panes).toEqual([]);
     expect(state.activePaneId).toBeNull();
-    expect(state.open).toBe(false);
+    expect(state.open).toBe(true);
   });
 
   it("returns the default state for malformed input", () => {
@@ -152,6 +165,29 @@ describe("sanitizeRightDockThreadState", () => {
       panes: [],
       activePaneId: null,
     });
+  });
+});
+
+describe("openDockLauncherInState", () => {
+  it("opens the launcher before any pane has been created", () => {
+    expect(openDockLauncherInState(createDefaultRightDockState())).toEqual({
+      open: true,
+      panes: [],
+      activePaneId: null,
+    });
+  });
+
+  it("preserves existing panes while replacing the active pane with the launcher", () => {
+    const paneState = openPaneInState(createDefaultRightDockState(), {
+      paneId: "terminal-1",
+      kind: "terminal",
+    });
+
+    const launcherState = openDockLauncherInState({ ...paneState, open: false });
+
+    expect(launcherState.open).toBe(true);
+    expect(launcherState.activePaneId).toBeNull();
+    expect(launcherState.panes).toEqual(paneState.panes);
   });
 });
 

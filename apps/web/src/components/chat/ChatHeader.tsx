@@ -103,6 +103,10 @@ interface ChatHeaderProps {
   showDiffToggle?: boolean;
   diffOpen: boolean;
   diffDisabledReason?: string | null;
+  dockLauncherAction?: {
+    open: boolean;
+    onToggle: () => void;
+  } | null;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   // When provided, the header collapses the
@@ -504,6 +508,7 @@ export const ChatHeader = memo(function ChatHeader({
   showDiffToggle = true,
   diffOpen,
   diffDisabledReason = null,
+  dockLauncherAction = null,
   surfaceMode = "single",
   isSidechat = false,
   environment = null,
@@ -609,6 +614,31 @@ export const ChatHeader = memo(function ChatHeader({
             : diffToggleShortcutLabel
               ? `Toggle diff panel (${diffToggleShortcutLabel})`
               : "Toggle diff panel"}
+      </TooltipPopup>
+    </Tooltip>
+  ) : null;
+
+  const dockLauncherControl = dockLauncherAction ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className={cn(
+              CHAT_HEADER_TOGGLE_CLASS_NAME,
+              "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+            )}
+            pressed={dockLauncherAction.open}
+            onPressedChange={dockLauncherAction.onToggle}
+            aria-label={dockLauncherAction.open ? "Collapse panels" : "Open panels"}
+            variant="default"
+            size="xs"
+          >
+            <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">
+        {dockLauncherAction.open ? "Collapse panels" : "Open panels"}
       </TooltipPopup>
     </Tooltip>
   ) : null;
@@ -833,7 +863,7 @@ export const ChatHeader = memo(function ChatHeader({
         {environment ? (
           <>
             <EnvironmentToggle environment={environment} />
-            {diffToggleControl}
+            {dockLauncherControl ?? diffToggleControl}
           </>
         ) : (
           <>
@@ -854,7 +884,7 @@ export const ChatHeader = memo(function ChatHeader({
                 hideQuickActionLabel={compact}
               />
             ) : null}
-            {diffToggleControl}
+            {dockLauncherControl ?? diffToggleControl}
           </>
         )}
       </div>

@@ -7,6 +7,11 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { isElectron } from "../env";
 import { isMacPlatform } from "../lib/utils";
 import {
+  applyGlasswingModeAttribute,
+  getGlasswingModeForCurrentPage,
+  resolveGlasswingModeThemeState,
+} from "../glasswingMode";
+import {
   DEFAULT_THEME_STATE,
   type ChromeTheme,
   type ThemeFonts,
@@ -153,8 +158,10 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
     root.classList.add("no-transitions");
   }
 
-  const variant = resolveThemeVariant(state.mode, getSystemDark());
-  const activeTheme = resolveThemePack(state, variant);
+  const glasswingMode = getGlasswingModeForCurrentPage();
+  const effectiveState = resolveGlasswingModeThemeState(state, glasswingMode);
+  const variant = resolveThemeVariant(effectiveState.mode, getSystemDark());
+  const activeTheme = resolveThemePack(effectiveState, variant);
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
     electron: isElectron,
     isMac: isMacPlatform(typeof navigator === "undefined" ? "" : navigator.platform),
@@ -162,6 +169,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   });
 
   root.classList.toggle("dark", variant === "dark");
+  applyGlasswingModeAttribute(root, glasswingMode);
   root.setAttribute("data-code-theme-id", activeTheme.codeThemeId);
   root.setAttribute("data-theme-mode", state.mode);
   root.setAttribute("data-theme-variant", variant);
@@ -175,7 +183,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
     root.style.setProperty(name, value);
   }
 
-  syncDesktopTheme(state.mode);
+  syncDesktopTheme(effectiveState.mode);
 
   if (suppressTransitions) {
     // Force a reflow so the no-transitions class takes effect before removal.

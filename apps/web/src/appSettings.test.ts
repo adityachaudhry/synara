@@ -794,6 +794,7 @@ describe("AppSettingsSchema", () => {
         }),
       ),
     ).toMatchObject({
+      glasswingMode: true,
       claudeBinaryPath: "",
       uiDensity: "comfortable",
       chatFontSizePx: DEFAULT_CHAT_FONT_SIZE_PX,
@@ -819,6 +820,12 @@ describe("AppSettingsSchema", () => {
       customOpenCodeModels: [],
       customPiModels: [],
     });
+  });
+
+  it("preserves an explicitly disabled Glasswing mode", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ glasswingMode: false })).glasswingMode).toBe(false);
   });
 
   it("migrates the former AppSnap feature flag", () => {
