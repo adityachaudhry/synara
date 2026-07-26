@@ -5,7 +5,6 @@
 // Exports: KanbanCardView
 
 import { GoRepoForked } from "react-icons/go";
-import { memo } from "react";
 
 import {
   PR_STATE_PRESENTATION_ICONS,
@@ -122,10 +121,12 @@ function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
-  isOverlay = false,
-  isDragSource = false,
+  isOverlay: isOverlayProp,
+  isDragSource: isDragSourceProp,
   nowMs,
 }: KanbanCardViewProps) {
+  const isOverlay = isOverlayProp ?? false;
+  const isDragSource = isDragSourceProp ?? false;
   // Thread-backed draft cards keep their own title, so the unsent prompt is shown
   // separately; local drafts and unsent-prompt cards already title themselves from it.
   const showDraftPreview =
@@ -246,4 +247,4 @@ function KanbanCardViewComponent({
   );
 }
 
-export const KanbanCardView = memo(KanbanCardViewComponent);
+export const KanbanCardView = KanbanCardViewComponent;

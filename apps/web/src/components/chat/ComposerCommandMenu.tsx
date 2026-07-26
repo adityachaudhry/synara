@@ -7,7 +7,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useEffect, useRef, type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import {
@@ -43,6 +43,7 @@ import {
   CommandSeparator,
 } from "../ui/command";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { ProviderIcon } from "../ProviderIcon";
 import {
   COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
   COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
@@ -99,6 +100,10 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
     return "Plugin";
   }
 
+  if (item.type === "thread") {
+    return null;
+  }
+
   if (item.type === "local-root") {
     return "Local";
   }
@@ -133,7 +138,12 @@ function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
     return item.description;
   }
 
-  if (item.type === "plugin" || item.type === "skill" || item.type === "local-root") {
+  if (
+    item.type === "plugin" ||
+    item.type === "skill" ||
+    item.type === "local-root" ||
+    item.type === "thread"
+  ) {
     return item.description;
   }
 
@@ -203,6 +213,15 @@ export type ComposerCommandItem =
     }
   | {
       id: string;
+      type: "thread";
+      threadId: string;
+      provider: ProviderKind;
+      mention: ProviderMentionReference;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
       type: "skill";
       skill: ProviderSkillDescriptor;
       label: string;
@@ -234,11 +253,13 @@ export function groupCommandItems(
 ): ComposerCommandGroupModel[] {
   if (triggerKind === "mention") {
     const pluginItems = items.filter((item) => item.type === "plugin");
+    const threadItems = items.filter((item) => item.type === "thread");
     const localItems = items.filter((item) => item.type === "local-root" || item.type === "path");
     const agentItems = items.filter((item) => item.type === "agent");
     const otherItems = items.filter(
       (item) =>
         item.type !== "plugin" &&
+        item.type !== "thread" &&
         item.type !== "local-root" &&
         item.type !== "path" &&
         item.type !== "agent",
@@ -247,6 +268,9 @@ export function groupCommandItems(
     const groups: ComposerCommandGroupModel[] = [];
     if (pluginItems.length > 0) {
       groups.push({ id: "plugins", label: "Plugins", items: pluginItems });
+    }
+    if (threadItems.length > 0) {
+      groups.push({ id: "chats", label: "Chats", items: threadItems });
     }
     if (localItems.length > 0) {
       groups.push({ id: "local", label: "Local", items: localItems });
@@ -290,7 +314,7 @@ export function groupCommandItems(
   return groups;
 }
 
-export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
+export function ComposerCommandMenu(props: {
   items: ComposerCommandItem[];
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
@@ -302,10 +326,10 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   onSelect: (item: ComposerCommandItem) => void;
 }) {
   const itemRefs = useRef<Record<string, HTMLElement | null>>({});
-  const groups = useMemo(
-    () =>
-      groupCommandItems(props.items, props.triggerKind, props.groupSlashCommandSections ?? true),
-    [props.groupSlashCommandSections, props.items, props.triggerKind],
+  const groups = groupCommandItems(
+    props.items,
+    props.triggerKind,
+    props.groupSlashCommandSections ?? true,
   );
 
   useEffect(() => {
@@ -385,7 +409,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                   : "Loading commands..."
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
-                  ? "No matching plugin or file."
+                  ? "No matching plugin, chat, or file."
                   : props.triggerKind === "skill"
                     ? "No matching skill."
                     : "No matching command."))}
@@ -394,7 +418,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
       </div>
     </Command>
   );
-});
+}
 
 // Single icon column shared by every menu row. Rows differ only by the glyph,
 // its color, and the name — slot geometry stays constant so files, folders,
@@ -475,6 +499,8 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
       return <BotIcon className={cls} />;
     case "plugin":
       return <PluginIcon className={cls} />;
+    case "thread":
+      return <ProviderIcon provider={item.provider} className={cls} />;
     case "skill":
       return <SkillCubeIcon className={cls} />;
     default:
@@ -482,7 +508,7 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
   }
 }
 
-const ComposerCommandItemIcon = memo(function ComposerCommandItemIcon(props: {
+function ComposerCommandItemIcon(props: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
   isActive: boolean;
@@ -497,9 +523,21 @@ const ComposerCommandItemIcon = memo(function ComposerCommandItemIcon(props: {
       {commandMenuItemGlyph(props.item, props.resolvedTheme)}
     </span>
   );
-});
+}
 
-const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
+// Props are destructured rather than read off a `props` object: `itemRef` lands on a JSX `ref`,
+// which makes React Compiler treat it as a ref — and through `props.itemRef` that verdict spreads
+// to the whole `props` object, so every later `props.x` read looks like a ref access during render
+// and the component bails out of compilation entirely. Separate bindings keep the verdict on
+// `itemRef` alone. Do not collapse these back into a `props` parameter.
+const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem({
+  item,
+  resolvedTheme,
+  isActive,
+  itemRef,
+  onHighlight,
+  onSelect,
+}: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
   isActive: boolean;
@@ -507,38 +545,34 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onHighlight: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  const secondaryText = commandMenuSecondaryText(props.item);
-  const trailingMeta = commandMenuTrailingMeta(props.item);
+  const secondaryText = commandMenuSecondaryText(item);
+  const trailingMeta = commandMenuTrailingMeta(item);
 
   return (
     <CommandItem
-      ref={props.itemRef}
-      value={props.item.id}
+      ref={itemRef}
+      value={item.id}
       className={cn(
         COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
-        props.isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
+        isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
       )}
       onMouseMove={() => {
-        if (!props.isActive) props.onHighlight(props.item.id);
+        if (!isActive) onHighlight(item.id);
       }}
       onMouseDown={(event) => {
         event.preventDefault();
       }}
       onClick={() => {
-        props.onSelect(props.item);
+        onSelect(item);
       }}
     >
-      <ComposerCommandItemIcon
-        item={props.item}
-        resolvedTheme={props.resolvedTheme}
-        isActive={props.isActive}
-      />
+      <ComposerCommandItemIcon item={item} resolvedTheme={resolvedTheme} isActive={isActive} />
       <div className="min-w-0 flex flex-1 items-center gap-3">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
           <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
-            {props.item.type === "slash-command" || props.item.type === "provider-native-command"
-              ? commandMenuTitle(props.item)
-              : props.item.label}
+            {item.type === "slash-command" || item.type === "provider-native-command"
+              ? commandMenuTitle(item)
+              : item.label}
           </span>
           {secondaryText ? (
             <span className="truncate text-[11px] text-muted-foreground/55">{secondaryText}</span>

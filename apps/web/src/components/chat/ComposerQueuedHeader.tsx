@@ -6,8 +6,6 @@
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
-import { memo } from "react";
-
 import type { QueuedComposerTurn } from "../../composerDraftStore";
 import { SteerIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -67,14 +65,15 @@ interface ComposerQueuedHeaderProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
+export const ComposerQueuedHeader = function ComposerQueuedHeader({
   queuedTurns,
   onSteer,
   onRemove,
   onEdit,
   cwd,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: ComposerQueuedHeaderProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   if (queuedTurns.length === 0) {
     return null;
   }
@@ -107,4 +106,4 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
       ))}
     </ComposerStackedPanel>
   );
-});
+};

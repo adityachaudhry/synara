@@ -1,34 +1,29 @@
 # Effect ACP Deletion Plan
 
-**Status:** Not started — planning only  
-**Decision date:** 2026-07-18  
-**Validated with:** Fable 5 High  
-**Related PR:** [#390 — Add Kimi Code provider support](https://github.com/Emanuele-web04/synara/pull/390)
+**Status:** Code complete — focused verification green; heavyweight workspace verification deferred
+**Decision date:** 2026-07-18
+**Implementation date:** 2026-07-20
+**Validated with:** Fable 5 High
 
 ## Decision
 
-Remove `effect-acp` from `main` before deciding whether to merge the Kimi provider.
+Remove `effect-acp` from the providers and shared ACP runtime currently present on `main`.
 
 Keep the Effect framework. Effect continues to own scopes, typed failures, queues, cancellation,
 process supervision, teardown, and Synara lifecycle policy. The official
 `@agentclientprotocol/sdk` becomes the only owner of standard ACP transport, validation, method
 definitions, and request/response types.
 
-PR #390 remains unmerged while Kimi cannot be tested with an authenticated account. After the
-deletion lands on `main`, rebase the Kimi branch and port its small residual type surface to the new
-ACP boundary. Do not keep `effect-acp` alive for an optional provider.
+## Why this belongs on `main`
 
-## Why deletion comes first
-
-- Kimi is not currently a release candidate because there is no subscription/account-backed smoke
-  test available.
 - `effect-acp` is already only a transitional schema/error compatibility package; the official SDK
   owns the production wire.
-- Deleting the compatibility layer now simplifies the permanent architecture without making a
-  product decision about Kimi.
-- PR #390 has five type-only `effect-acp` references and no Kimi-specific runtime codec or error
-  construction. Its later port should be mechanical.
-- The deletion must not wait indefinitely for a provider that may never be merged.
+- The shared runtime and the existing Grok, Droid, and Cursor adapters still consume its types or
+  errors.
+- Retaining it leaves two ACP type authorities and a generated schema that can drift from the
+  pinned official SDK.
+- The cleanup is valuable independently of any future provider work and should have no dependency
+  on an unmerged branch.
 
 ## Target architecture
 
@@ -38,8 +33,8 @@ Production ACP code may depend on:
 2. `effect` for Synara runtime and lifecycle ownership.
 3. Two small local modules beside the ACP runtime:
    - `AcpErrors.ts`, containing only the Effect-native errors Synara still consumes;
-   - `AcpExtensions.ts`, containing only the non-standard `session/set_model` types and the minimal
-     config-option codecs that genuinely require runtime decoding.
+   - `AcpExtensions.ts`, containing only the minimal config-option codecs that genuinely require
+     runtime decoding.
 
 The final tree must not contain:
 
@@ -56,7 +51,24 @@ The final tree must not contain:
   tool-call merging, event ordering, or resume behavior.
 - Do not upgrade `@agentclientprotocol/sdk` during this migration.
 - Do not refactor unrelated provider architecture or large runtime files.
-- Do not merge, redesign, or product-approve Kimi as part of this migration.
+- Do not include or prepare unmerged provider implementations as part of this migration.
+
+## Implementation result
+
+- Standard ACP types now come directly from pinned `@agentclientprotocol/sdk` 1.2.1.
+- `AcpErrors.ts` owns only Synara's three Effect-native runtime errors, and `AcpExtensions.ts` owns
+  only the two required config-option codecs.
+- The redundant `session/update` decode and official-SDK array conversion helpers are deleted;
+  elicitation handlers use the official SDK response shape directly.
+- Grok, Droid, Cursor, their shared runtime, and focused tests no longer import `effect-acp`.
+- `packages/effect-acp`, its server dependency, release-manifest entry, benchmark engine, and lockfile
+  entries are deleted. Historical audit, changelog, What's New, and benchmark-result references are
+  intentionally preserved.
+- Focused verification: 20 test files passed with 168 tests passed and 3 environment-dependent tests
+  skipped; the official SDK conformance suite passed 10/10. The server build and official-SDK-only
+  benchmark smoke passed, and `git diff --check` plus zero-import searches passed.
+- Heavyweight workspace verification (`bun fmt`, `bun lint`, `bun typecheck`, and the full test/build
+  matrix) remains deferred by instruction; no full-workspace pass is claimed for this implementation.
 
 ## Execution plan
 
@@ -96,10 +108,8 @@ phase must be behavior-neutral.
 
 Create `apps/server/src/provider/acp/AcpExtensions.ts` containing only:
 
-1. Small request/response TypeScript types for `session/set_model`, which is not part of the pinned
-   official SDK method table.
-2. A minimal Effect codec for the parts of `SessionConfigOption` Synara reads.
-3. A minimal `SetSessionConfigOptionResponse` codec built from that config-option codec.
+1. A minimal Effect codec for the parts of `SessionConfigOption` Synara reads.
+2. A minimal `SetSessionConfigOptionResponse` codec built from that config-option codec.
 
 The two retained runtime decode sites are:
 
@@ -183,23 +193,6 @@ Run one bundled final pass:
 The ACP conformance and Grok/Droid/Cursor focused suites must match or improve on the Phase 0
 baseline.
 
-## Future Kimi handoff
-
-Only after the deletion is complete:
-
-1. Rebase PR #390 onto the new `main`.
-2. Replace its five type-only `effect-acp` references with official SDK types and the local
-   `AcpErrors.ts` type where required.
-3. Replace Kimi's effect-acp-only plural `SessionConfigSelectOptions` type with the explicit SDK
-   union:
-   `ReadonlyArray<SessionConfigSelectOption> | ReadonlyArray<SessionConfigSelectGroup>`.
-4. Confirm the Kimi branch does not recreate local standard ACP types or compatibility shims.
-5. Run Kimi ACP support, adapter, registry, health, and integration tests.
-6. Require an authenticated, account-backed `kimi acp` smoke test before making the final merge
-   decision.
-
-If Kimi is abandoned, no additional cleanup should be necessary on `main`.
-
 ## Stop conditions
 
 Stop and report rather than forcing the migration if:
@@ -219,5 +212,4 @@ The migration is complete only when:
 - Effect still owns Synara runtime/lifecycle policy;
 - live source imports from `effect-acp` are zero;
 - `packages/effect-acp` and all live workspace/release/lockfile references are deleted;
-- focused ACP gates and the final workspace verification are green;
-- PR #390 is either still safely unmerged or rebased without reintroducing `effect-acp`.
+- focused ACP gates and the final workspace verification are green.

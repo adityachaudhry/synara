@@ -7,7 +7,6 @@
 
 import type { PullRequestListEntry } from "@synara/contracts";
 import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
-import { memo } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
@@ -43,10 +42,10 @@ function TruncatedTitle({ title, number }: { title: string; number: number }) {
   );
 }
 
-export const PullRequestRow = memo(function PullRequestRow({
+export const PullRequestRow = function PullRequestRow({
   entry,
   selected,
-  showProjectTitle = false,
+  showProjectTitle: showProjectTitleProp,
   onClick,
   onTogglePinned,
 }: {
@@ -57,6 +56,7 @@ export const PullRequestRow = memo(function PullRequestRow({
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
+  const showProjectTitle = showProjectTitleProp ?? false;
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =
@@ -164,4 +164,4 @@ export const PullRequestRow = memo(function PullRequestRow({
       </Tooltip>
     </div>
   );
-});
+};

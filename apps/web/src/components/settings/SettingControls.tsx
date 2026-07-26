@@ -1,9 +1,10 @@
 // FILE: SettingControls.tsx
 // Purpose: Reusable settings row controls (reset button, select, segmented control).
 // Layer: Settings UI components
-// Exports: SettingResetButton, SettingsSelectControl, SettingsSegmentedControl
+// Exports: SettingResetButton, SettingsSelectControl, SettingsSegmentedControl,
+//          useSettingsRestoreSignal
 
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Select, SelectTrigger, SelectValue } from "~/components/ui/select";
@@ -11,6 +12,17 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { Undo2Icon } from "~/lib/icons";
 import { SETTINGS_CONTROL_RADIUS_CLASS_NAME } from "~/settingsPanelStyles";
 import { SettingsSelectPopup } from "./SettingsPanelPrimitives";
+
+export function useSettingsRestoreSignal(epoch: number, onRestore: () => void): void {
+  const previousEpochRef = useRef(epoch);
+  const restore = useEffectEvent(onRestore);
+
+  useEffect(() => {
+    if (previousEpochRef.current === epoch) return;
+    previousEpochRef.current = epoch;
+    restore();
+  }, [epoch]);
+}
 
 export function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -40,7 +52,7 @@ export function SettingsSelectControl({
   value,
   onValueChange,
   ariaLabel,
-  triggerClassName = "w-full sm:w-44",
+  triggerClassName: triggerClassNameProp,
   valueContent,
   children,
 }: {
@@ -51,6 +63,7 @@ export function SettingsSelectControl({
   valueContent: ReactNode;
   children: ReactNode;
 }) {
+  const triggerClassName = triggerClassNameProp ?? "w-full sm:w-44";
   return (
     <Select
       value={value}

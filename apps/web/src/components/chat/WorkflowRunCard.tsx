@@ -13,7 +13,7 @@
 import type { ThreadId } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
-import { memo, useState } from "react";
+import { useState } from "react";
 
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import {
@@ -39,10 +39,8 @@ import { Button } from "../ui/button";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import {
-  resolveWorkflowSelectedPhaseTitle,
   workflowElapsedMs,
   type WorkflowAgentRow,
-  type WorkflowPhaseSelection,
   type WorkflowRunState,
 } from "./WorkflowRunCard.logic";
 import {
@@ -147,7 +145,7 @@ function WorkflowAgentDetail({
   return (
     <div
       data-testid="workflow-agent-detail"
-      className="mb-1 ml-3.5 space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
+      className="mb-1 ml-[14px] space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/70">
@@ -225,7 +223,7 @@ function WorkflowAgentRowView({
       <button
         type="button"
         data-testid="workflow-agent-row"
-        className="group flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+        className="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
         title={agent.description}
         aria-expanded={expanded}
         onClick={onToggle}
@@ -255,7 +253,7 @@ function WorkflowAgentRowView({
           ) : null}
         </span>
         {meta ? (
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/45">{meta}</span>
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{meta}</span>
         ) : null}
         <span
           className={cn("shrink-0 text-[11px]", subagentStatusTextToneClassName(agent.statusKind))}
@@ -277,7 +275,7 @@ function WorkflowAgentRowView({
   );
 }
 
-export const WorkflowRunCard = memo(function WorkflowRunCard({
+export function WorkflowRunCard({
   workflowRun,
   nowMs,
   compact,
@@ -287,12 +285,13 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
   onPause,
   onResume,
   onDismiss,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: WorkflowRunCardProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  // Rail auto-follows the current phase; a manual click sticks until the run
-  // advances to a new current phase or the user clicks the selection again.
-  const [manualPhase, setManualPhase] = useState<WorkflowPhaseSelection | null>(null);
+  // Default view lists every phase's agents (grouped); a pill click narrows to
+  // one phase, clicking it again returns to the full list.
+  const [filterPhaseTitle, setFilterPhaseTitle] = useState<string | null>(null);
   const [expandedAgentIds, setExpandedAgentIds] = useState<ReadonlySet<string>>(new Set());
   const toggleAgentExpanded = (taskId: string) => {
     setExpandedAgentIds((previous) => {
@@ -329,19 +328,24 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
     phase,
     agents: workflowRun.agents.filter((agent) => agent.phase === phase.title),
   }));
-  const currentPhaseTitle = workflowRun.phases?.find((phase) => phase.isCurrent)?.title ?? null;
-  const selectedPhaseTitle = resolveWorkflowSelectedPhaseTitle(workflowRun.phases, manualPhase);
-  const selectedGroup = phaseGroups?.find(({ phase }) => phase.title === selectedPhaseTitle);
-  // A single phase carries no navigation value: skip the pills and list every
-  // agent flat. With several phases the pills filter the list to the selection.
+  // A single phase carries no navigation value: skip the pills and captions
+  // and list every agent flat. With several phases everything stays visible,
+  // grouped under small captions, and the pills act as optional filters.
   const showPhasePills = (phaseGroups?.length ?? 0) > 1;
-  const visibleAgents = showPhasePills ? (selectedGroup?.agents ?? []) : workflowRun.agents;
+  const selectedPhaseTitle =
+    filterPhaseTitle !== null && phaseGroups?.some(({ phase }) => phase.title === filterPhaseTitle)
+      ? filterPhaseTitle
+      : null;
+  const visibleGroups =
+    showPhasePills && phaseGroups
+      ? phaseGroups.filter(
+          ({ phase, agents }) =>
+            (selectedPhaseTitle === null || phase.title === selectedPhaseTitle) &&
+            agents.length > 0,
+        )
+      : null;
   const selectPhase = (title: string) => {
-    setManualPhase((previous) =>
-      previous !== null && title === selectedPhaseTitle
-        ? null
-        : { title, currentTitleAtSelect: currentPhaseTitle },
-    );
+    setFilterPhaseTitle((previous) => (previous === title ? null : title));
   };
 
   return (
@@ -445,7 +449,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
           {showPhasePills ? (
             <div
               data-testid="workflow-phase-rail"
-              className="flex min-w-0 flex-wrap items-center gap-1 px-1 pb-1"
+              className="-ml-2 flex min-w-0 flex-wrap items-center gap-1 pb-1"
             >
               {phaseGroups!.map(({ phase }) => (
                 <button
@@ -456,7 +460,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                     "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] transition-colors",
                     phase.title === selectedPhaseTitle
                       ? "bg-[var(--color-background-button-secondary)] text-foreground/85"
-                      : "text-muted-foreground/55 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/70",
+                      : "text-muted-foreground/60 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/70",
                   )}
                   title={phase.detail ?? undefined}
                   aria-pressed={phase.title === selectedPhaseTitle}
@@ -475,8 +479,30 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
             </div>
           ) : null}
           <div className="space-y-0" data-testid="workflow-phase-group">
-            {visibleAgents.length > 0 ? (
-              visibleAgents.map((agent) => (
+            {visibleGroups ? (
+              visibleGroups.length > 0 ? (
+                visibleGroups.map(({ phase, agents }) => (
+                  <div key={phase.title}>
+                    <div className="pt-1 text-[10px] font-medium text-muted-foreground/50">
+                      {phase.title}
+                    </div>
+                    {agents.map((agent) => (
+                      <WorkflowAgentRowView
+                        key={agent.taskId}
+                        agent={agent}
+                        nowMs={nowMs}
+                        expanded={expandedAgentIds.has(agent.taskId)}
+                        onToggle={() => toggleAgentExpanded(agent.taskId)}
+                        onOpenThread={onOpenThread}
+                      />
+                    ))}
+                  </div>
+                ))
+              ) : (
+                <div className="py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+              )
+            ) : workflowRun.agents.length > 0 ? (
+              workflowRun.agents.map((agent) => (
                 <WorkflowAgentRowView
                   key={agent.taskId}
                   agent={agent}
@@ -487,13 +513,13 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                 />
               ))
             ) : (
-              <div className="px-1 py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+              <div className="py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
             )}
           </div>
           {savedLine.length > 0 ? (
             <div
               data-testid="workflow-saved-line"
-              className="mt-0.5 flex min-w-0 items-center gap-1.5 px-1"
+              className="mt-0.5 flex min-w-0 items-center gap-1.5"
             >
               <span className="shrink-0 text-[11px] text-muted-foreground/50">Saved</span>
               <span
@@ -519,4 +545,4 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
       </DisclosureRegion>
     </ComposerStackedPanel>
   );
-});
+}

@@ -3,15 +3,26 @@
 //          folders while always creating chats as rows inside the shared Chats container.
 // Layer: Chat / empty-state entrypoint
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { type ProjectDirectoryEntry, type ProjectId } from "@synara/contracts";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
+import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
 import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
+import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
+import { SpaceIcon } from "../SpaceIcon";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { PickerPanelShell } from "./PickerPanelShell";
 import {
@@ -25,7 +36,8 @@ import {
   ComboboxSeparator,
   ComboboxTrigger,
 } from "../ui/combobox";
-import { useWorkspaceStore } from "../../workspaceStore";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
+import { useSpacesUiStore } from "../../spacesUiStore";
 
 interface ProjectPickerProps {
   align?: "start" | "center" | "end";
@@ -40,13 +52,48 @@ interface ProjectPickerProps {
   onResetToHome?: (() => void | Promise<void>) | undefined;
   /** Class override for the trigger button (e.g. tighter height in the composer tray). */
   triggerClassName?: string;
+  /**
+   * Replaces the default PickerTriggerButton with a custom trigger element (e.g. the inline
+   * project name in the new-chat heading). The element receives the combobox trigger props.
+   */
+  renderTrigger?: ReactElement<Record<string, unknown>>;
+  /** Copy overrides for folder-tagging contexts (e.g. Studio) where picking never creates a project. */
+  emptyTriggerLabel?: string;
+  addActionLabel?: string;
+  resetActionLabel?: string;
+  searchPlaceholder?: string;
 }
 
 interface ActiveFolderOption {
   projectId: ProjectId | null;
+  spaceId: SpaceId | null;
+  spaceName: string;
   cwd: string;
   primaryLabel: string;
   secondaryLabel: string | null;
+}
+
+/**
+ * Existing projects switch the draft into that project; raw paths stay workspace roots.
+ *
+ * Module scope on purpose: the caller runs this inside a `try`, and React Compiler cannot lower a
+ * conditional expression there — inlining it makes the whole picker skip compilation.
+ */
+function startActiveFolderSelection(
+  folder: ActiveFolderOption,
+  handlers: {
+    isProjectSelectionMode: boolean;
+    onSelectProject?: ((projectId: ProjectId) => void | Promise<void>) | undefined;
+    onSelectWorkspaceRoot?: ((workspaceRoot: string) => void) | undefined;
+  },
+): void | Promise<void> {
+  if (folder.projectId && handlers.onSelectProject) {
+    return handlers.onSelectProject(folder.projectId);
+  }
+  if (handlers.isProjectSelectionMode) {
+    return undefined;
+  }
+  return handlers.onSelectWorkspaceRoot?.(folder.cwd);
 }
 
 function basenameOfPath(value: string | null | undefined): string | null {
@@ -79,21 +126,37 @@ function getNavigatorPlatform(): string {
 }
 
 export const ProjectPicker = memo(function ProjectPicker({
-  align = "start",
-  side = "bottom",
-  selectionMode = "workspace-root",
-  showResetToHome = false,
-  selectedProjectId = null,
-  selectedWorkspaceRoot = null,
+  align: alignProp,
+  side: sideProp,
+  selectionMode: selectionModeProp,
+  showResetToHome: showResetToHomeProp,
+  selectedProjectId: selectedProjectIdProp,
+  selectedWorkspaceRoot: selectedWorkspaceRootProp,
   onSelectProject,
   onSelectWorkspaceRoot,
   onCreateProjectFromPath,
   onResetToHome,
   triggerClassName,
+  renderTrigger,
+  emptyTriggerLabel: emptyTriggerLabelProp,
+  addActionLabel,
+  resetActionLabel: resetActionLabelProp,
+  searchPlaceholder: searchPlaceholderProp,
 }: ProjectPickerProps) {
+  const align = alignProp ?? "start";
+  const side = sideProp ?? "bottom";
+  const selectionMode = selectionModeProp ?? "workspace-root";
+  const showResetToHome = showResetToHomeProp ?? false;
+  const selectedProjectId = selectedProjectIdProp ?? null;
+  const selectedWorkspaceRoot = selectedWorkspaceRootProp ?? null;
+  const emptyTriggerLabel = emptyTriggerLabelProp ?? "Work in a project";
+  const resetActionLabel = resetActionLabelProp ?? "Don't work in a project";
+  const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
+  const spaces = useStore((state) => state.spaces);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -106,6 +169,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
     const nextOptions: ActiveFolderOption[] = [];
+    const projectById = new Map(projects.map((project) => [project.id, project] as const));
+    const getSpaceName = (spaceId: SpaceId | null) => spaceDisplayName(spaceId, spaces);
 
     for (const project of projects.filter((project) => project.kind === "project")) {
       const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
@@ -116,7 +181,15 @@ export const ProjectPicker = memo(function ProjectPicker({
       const primaryLabel = project.localName?.trim() || folderName;
       const secondaryLabel =
         project.localName?.trim() && project.localName.trim() !== folderName ? folderName : null;
-      nextOptions.push({ projectId: project.id, cwd: project.cwd, primaryLabel, secondaryLabel });
+      const spaceId = project.spaceId ?? null;
+      nextOptions.push({
+        projectId: project.id,
+        spaceId,
+        spaceName: getSpaceName(spaceId),
+        cwd: project.cwd,
+        primaryLabel,
+        secondaryLabel,
+      });
     }
 
     if (!isProjectSelectionMode) {
@@ -132,8 +205,11 @@ export const ProjectPicker = memo(function ProjectPicker({
           continue;
         }
         seen.add(workspaceRoot);
+        const spaceId = projectById.get(thread.projectId)?.spaceId ?? null;
         nextOptions.push({
           projectId: null,
+          spaceId,
+          spaceName: getSpaceName(spaceId),
           cwd: workspaceRoot,
           primaryLabel: folderName,
           secondaryLabel: null,
@@ -151,6 +227,8 @@ export const ProjectPicker = memo(function ProjectPicker({
     ) {
       nextOptions.unshift({
         projectId: null,
+        spaceId: activeSpaceId,
+        spaceName: getSpaceName(activeSpaceId),
         cwd: selectedWorkspaceRoot,
         primaryLabel: selectedFolderName,
         secondaryLabel: null,
@@ -158,7 +236,14 @@ export const ProjectPicker = memo(function ProjectPicker({
     }
 
     return nextOptions;
-  }, [isProjectSelectionMode, projects, selectedWorkspaceRoot, sidebarThreads]);
+  }, [
+    activeSpaceId,
+    isProjectSelectionMode,
+    projects,
+    selectedWorkspaceRoot,
+    sidebarThreads,
+    spaces,
+  ]);
   const activeFolderPathSet = useMemo(
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
@@ -179,16 +264,30 @@ export const ProjectPicker = memo(function ProjectPicker({
   );
 
   const normalizedQuery = deferredQuery.trim().toLowerCase();
-  const filteredActiveFolderOptions = useMemo(() => {
+  const matchingActiveFolderOptions = useMemo(() => {
     if (normalizedQuery.length === 0) return activeFolderOptions;
     return activeFolderOptions.filter((entry) =>
-      [entry.primaryLabel, entry.secondaryLabel, entry.cwd]
+      [entry.primaryLabel, entry.secondaryLabel, entry.spaceName, entry.cwd]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery),
     );
   }, [activeFolderOptions, normalizedQuery]);
+  const filteredActiveFolderGroups = useMemo(
+    () =>
+      groupItemsBySpace({
+        items: matchingActiveFolderOptions,
+        spaces,
+        activeSpaceId,
+        spaceIdOf: (option) => option.spaceId,
+      }),
+    [activeSpaceId, matchingActiveFolderOptions, spaces],
+  );
+  const filteredActiveFolderOptions = useMemo(
+    () => filteredActiveFolderGroups.flatMap((group) => group.items),
+    [filteredActiveFolderGroups],
+  );
   const filteredLocalFolderOptions = useMemo(() => {
     if (normalizedQuery.length === 0) return localFolderOptions;
     return localFolderOptions.filter(({ entry }) =>
@@ -246,7 +345,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       ) : null}
     </span>
   ) : (
-    "Work in a project"
+    emptyTriggerLabel
   );
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {
@@ -267,50 +366,58 @@ export const ProjectPicker = memo(function ProjectPicker({
     ) {
       return;
     }
-    const api = readNativeApi();
-    if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
-      return;
-    }
+    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint
+    // render), which also keeps this component eligible for React Compiler.
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      const api = readNativeApi();
+      if (!api) {
+        setErrorMessage("App is still connecting. Try again in a moment.");
+        return;
+      }
 
-    setIsLoadingDirectories(true);
-    setErrorMessage(null);
-    void api.projects
-      .listDirectories({ cwd: homeDir })
-      .then((result) => {
-        setDirectoryEntries(
-          result.entries.flatMap((entry) =>
-            entry.kind === "directory"
-              ? [
-                  {
-                    path: entry.path,
-                    name: entry.name,
-                    hasChildren: entry.hasChildren ?? false,
-                    ...(entry.parentPath ? { parentPath: entry.parentPath } : {}),
-                  } satisfies ProjectDirectoryEntry,
-                ]
-              : [],
-          ),
-        );
-      })
-      .catch((error) => {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
-      })
-      .finally(() => {
-        setIsLoadingDirectories(false);
-      });
+      setIsLoadingDirectories(true);
+      setErrorMessage(null);
+      void api.projects
+        .listDirectories({ cwd: homeDir })
+        .then((result) => {
+          setDirectoryEntries(
+            result.entries.flatMap((entry) =>
+              entry.kind === "directory"
+                ? [
+                    {
+                      path: entry.path,
+                      name: entry.name,
+                      hasChildren: entry.hasChildren ?? false,
+                      ...(entry.parentPath ? { parentPath: entry.parentPath } : {}),
+                    } satisfies ProjectDirectoryEntry,
+                  ]
+                : [],
+            ),
+          );
+        })
+        .catch((error) => {
+          setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
+        })
+        .finally(() => {
+          setIsLoadingDirectories(false);
+        });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [directoryEntries.length, homeDir, isLoadingDirectories, isProjectSelectionMode, open]);
 
   const handleSelectActiveFolder = useCallback(
     (folder: ActiveFolderOption) => {
       try {
-        // Existing projects should switch the draft into that project; raw paths stay workspace roots.
-        const selection =
-          folder.projectId && onSelectProject
-            ? onSelectProject(folder.projectId)
-            : isProjectSelectionMode
-              ? undefined
-              : onSelectWorkspaceRoot?.(folder.cwd);
+        const selection = startActiveFolderSelection(folder, {
+          isProjectSelectionMode,
+          onSelectProject,
+          onSelectWorkspaceRoot,
+        });
         void Promise.resolve(selection)
           .then(() => {
             setOpen(false);
@@ -343,8 +450,10 @@ export const ProjectPicker = memo(function ProjectPicker({
       }
       if (onCreateProjectFromPath) {
         await onCreateProjectFromPath(pickedPath);
-      } else {
-        onSelectWorkspaceRoot?.(pickedPath);
+      } else if (onSelectWorkspaceRoot) {
+        // Spelled out instead of `onSelectWorkspaceRoot?.(…)`: an optional call is a value block,
+        // which React Compiler cannot lower inside a `try`.
+        onSelectWorkspaceRoot(pickedPath);
       }
       setIsPicking(false);
       setOpen(false);
@@ -356,7 +465,13 @@ export const ProjectPicker = memo(function ProjectPicker({
 
   const handleResetToHome = useCallback(() => {
     try {
-      void Promise.resolve(onResetToHome?.())
+      // Statement form, not `onResetToHome?.()` or a ternary, for the same reason as
+      // `handleAddNewProject`: any value block inside a `try` is one the compiler rejects.
+      let reset: void | Promise<void> | undefined;
+      if (onResetToHome) {
+        reset = onResetToHome();
+      }
+      void Promise.resolve(reset)
         .then(() => {
           setOpen(false);
         })
@@ -369,7 +484,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, [onResetToHome]);
 
   const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
-  const addProjectLabel = isProjectSelectionMode ? "New project" : "Add new project";
+  const addProjectLabel =
+    addActionLabel ?? (isProjectSelectionMode ? "New project" : "Add new project");
   const loadingAddProjectLabel = isProjectSelectionMode
     ? "Adding project..."
     : "Opening folder picker...";
@@ -419,20 +535,22 @@ export const ProjectPicker = memo(function ProjectPicker({
     >
       <ComboboxTrigger
         render={
-          <PickerTriggerButton
-            data-testid={
-              isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
-            }
-            icon={<FolderClosed className="size-3.5" />}
-            label={triggerLabel}
-            hideChevron
-            {...(triggerClassName ? { className: triggerClassName } : {})}
-          />
+          renderTrigger ?? (
+            <PickerTriggerButton
+              data-testid={
+                isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
+              }
+              icon={<FolderClosed className="size-3.5" />}
+              label={triggerLabel}
+              hideChevron
+              {...(triggerClassName ? { className: triggerClassName } : {})}
+            />
+          )
         }
       />
       <ComboboxPopup align={align} side={side} className="p-0">
         <PickerPanelShell
-          searchPlaceholder="Search projects"
+          searchPlaceholder={searchPlaceholder}
           query={query}
           onQueryChange={setQuery}
           footer={
@@ -455,7 +573,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                   onClick={handleResetToHome}
                 >
                   <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                  <span className="truncate">Don&apos;t work in a project</span>
+                  <span className="truncate">{resetActionLabel}</span>
                 </button>
               ) : null}
               {errorMessage ? (
@@ -472,19 +590,25 @@ export const ProjectPicker = memo(function ProjectPicker({
                 : "No matches"}
           </ComboboxEmpty>
           <ComboboxList className="max-h-64">
-            {isProjectSelectionMode && filteredActiveFolderOptions.length > 0
-              ? filteredActiveFolderOptions.map((folder, index) =>
-                  renderActiveFolderOption(folder, index),
-                )
-              : null}
-            {!isProjectSelectionMode && filteredActiveFolderOptions.length > 0 ? (
-              <ComboboxGroup>
-                <ComboboxGroupLabel>Active folders</ComboboxGroupLabel>
-                {filteredActiveFolderOptions.map((folder, index) =>
-                  renderActiveFolderOption(folder, index),
-                )}
-              </ComboboxGroup>
-            ) : null}
+            {filteredActiveFolderGroups.map((group, groupIndex) => {
+              const precedingOptionCount = filteredActiveFolderGroups
+                .slice(0, groupIndex)
+                .reduce((count, candidate) => count + candidate.items.length, 0);
+              return (
+                <Fragment key={group.key}>
+                  {groupIndex > 0 ? <ComboboxSeparator /> : null}
+                  <ComboboxGroup>
+                    <ComboboxGroupLabel className="flex items-center gap-1.5">
+                      <SpaceIcon icon={group.icon} className="size-3 shrink-0" />
+                      <span className="min-w-0 truncate">{group.label}</span>
+                    </ComboboxGroupLabel>
+                    {group.items.map((folder, index) =>
+                      renderActiveFolderOption(folder, precedingOptionCount + index),
+                    )}
+                  </ComboboxGroup>
+                </Fragment>
+              );
+            })}
             {filteredActiveFolderOptions.length > 0 && filteredLocalFolderOptions.length > 0 ? (
               <ComboboxSeparator />
             ) : null}

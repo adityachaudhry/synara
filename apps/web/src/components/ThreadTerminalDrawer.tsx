@@ -132,7 +132,7 @@ function TerminalViewport({
   threadId,
   terminalId,
   terminalLabel,
-  terminalCliKind = null,
+  terminalCliKind: terminalCliKindProp,
   cwd,
   runtimeEnv,
   onSessionExited,
@@ -143,6 +143,7 @@ function TerminalViewport({
   autoFocus,
   isVisible,
 }: TerminalViewportProps) {
+  const terminalCliKind = terminalCliKindProp ?? null;
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const onAddTerminalContextRef = useRef(onAddTerminalContext);
@@ -350,7 +351,7 @@ function TerminalViewport({
     };
   }, [terminalId]);
 
-  const showSelectionAction = useCallback(async () => {
+  const showSelectionAction = useCallback(() => {
     if (selectionActionOpenRef.current) {
       return;
     }
@@ -363,20 +364,21 @@ function TerminalViewport({
     if (!api) return;
     const requestId = ++selectionActionRequestIdRef.current;
     selectionActionOpenRef.current = true;
-    try {
-      const clicked = await api.contextMenu.show(
-        [{ id: "add-to-chat", label: "Add to chat" }],
-        nextAction.position,
-      );
-      if (requestId !== selectionActionRequestIdRef.current || clicked !== "add-to-chat") {
-        return;
-      }
-      onAddTerminalContextRef.current(nextAction.selection);
-      terminalRef.current?.clearSelection();
-      terminalRuntimeRegistry.focus(runtimeKey);
-    } finally {
-      selectionActionOpenRef.current = false;
-    }
+    // Promise chain instead of async/try-finally: React Compiler does not yet
+    // support try/finally, and it would skip optimizing this whole component.
+    void api.contextMenu
+      .show([{ id: "add-to-chat", label: "Add to chat" }], nextAction.position)
+      .then((clicked) => {
+        if (requestId !== selectionActionRequestIdRef.current || clicked !== "add-to-chat") {
+          return;
+        }
+        onAddTerminalContextRef.current(nextAction.selection);
+        terminalRef.current?.clearSelection();
+        terminalRuntimeRegistry.focus(runtimeKey);
+      })
+      .finally(() => {
+        selectionActionOpenRef.current = false;
+      });
   }, [clearSelectionAction, readSelectionAction, runtimeKey]);
 
   useEffect(() => {
@@ -497,7 +499,7 @@ export default function ThreadTerminalDrawer({
   runtimeEnv,
   height,
   presentationMode,
-  isVisible = true,
+  isVisible: isVisibleProp,
   terminalIds,
   terminalLabelsById,
   terminalTitleOverridesById,
@@ -530,6 +532,7 @@ export default function ThreadTerminalDrawer({
   onTogglePanel,
   isPanelOpen,
 }: ThreadTerminalDrawerProps) {
+  const isVisible = isVisibleProp ?? true;
   const isWorkspaceMode = presentationMode === "workspace";
   const previousRuntimeKeysRef = useRef<Set<string>>(new Set());
   const { drawerHeight, handleResizePointerDown, handleResizePointerMove, handleResizePointerEnd } =

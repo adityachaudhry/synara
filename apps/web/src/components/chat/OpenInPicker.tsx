@@ -5,7 +5,6 @@
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { memo } from "react";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -31,11 +30,11 @@ import {
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
 
-export const OpenInPicker = memo(function OpenInPicker({
+export function OpenInPicker({
   keybindings: keybindingsProp,
   availableEditors: availableEditorsProp,
   openInTarget,
-  labelMode = "responsive",
+  labelMode: labelModeProp,
   defaultEditor,
 }: {
   // Editor config is optional: callers that already hold it (e.g. the chat
@@ -55,6 +54,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   // to the OS viewer (e.g. Preview) while still listing installed editors.
   defaultEditor?: EditorId;
 }) {
+  const labelMode = labelModeProp ?? "responsive";
   // Only subscribe to the config query when the caller did not supply config.
   const needsConfig = keybindingsProp === undefined || availableEditorsProp === undefined;
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: needsConfig });
@@ -135,4 +135,4 @@ export const OpenInPicker = memo(function OpenInPicker({
       </Menu>
     </ChatHeaderSplitGroup>
   );
-});
+}

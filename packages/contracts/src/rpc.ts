@@ -9,9 +9,13 @@ import {
   AutomationCreateInput,
   AutomationDefinition,
   AutomationDeleteInput,
+  AutomationGetMemoryInput,
   AutomationListInput,
   AutomationListResult,
   AutomationMarkRunReadInput,
+  AutomationMemory,
+  AutomationResolveProposalInput,
+  AutomationResolveProposalResult,
   AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
@@ -19,6 +23,13 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
+import {
+  ExternalMcpCreateIntegrationInput,
+  ExternalMcpCreateIntegrationResult,
+  ExternalMcpIntegration,
+  ExternalMcpRefreshPairingInput,
+  ExternalMcpRevokeIntegrationInput,
+} from "./externalMcp";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
@@ -45,6 +56,7 @@ import {
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitWorkingTreeDiffStatsResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
@@ -426,6 +438,12 @@ export const WsGitReadWorkingTreeDiffRpc = Rpc.make(WS_METHODS.gitReadWorkingTre
   error: WsRpcError,
 });
 
+export const WsGitWorkingTreeDiffStatsRpc = Rpc.make(WS_METHODS.gitWorkingTreeDiffStats, {
+  payload: GitReadWorkingTreeDiffInput,
+  success: GitWorkingTreeDiffStatsResult,
+  error: WsRpcError,
+});
+
 export const WsGitSummarizeDiffRpc = Rpc.make(WS_METHODS.gitSummarizeDiff, {
   payload: GitSummarizeDiffInput,
   success: GitSummarizeDiffResult,
@@ -681,6 +699,42 @@ export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvide
   error: ServerProviderUpdateError,
 });
 
+export const WsServerListExternalMcpIntegrationsRpc = Rpc.make(
+  WS_METHODS.serverListExternalMcpIntegrations,
+  {
+    payload: Schema.Struct({}),
+    success: Schema.Array(ExternalMcpIntegration),
+    error: WsRpcError,
+  },
+);
+
+export const WsServerCreateExternalMcpIntegrationRpc = Rpc.make(
+  WS_METHODS.serverCreateExternalMcpIntegration,
+  {
+    payload: ExternalMcpCreateIntegrationInput,
+    success: ExternalMcpCreateIntegrationResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerRevokeExternalMcpIntegrationRpc = Rpc.make(
+  WS_METHODS.serverRevokeExternalMcpIntegration,
+  {
+    payload: ExternalMcpRevokeIntegrationInput,
+    success: Schema.Struct({ revoked: Schema.Boolean }),
+    error: WsRpcError,
+  },
+);
+
+export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
+  WS_METHODS.serverRefreshExternalMcpPairing,
+  {
+    payload: ExternalMcpRefreshPairingInput,
+    success: ExternalMcpCreateIntegrationResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -853,6 +907,12 @@ export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   error: WsRpcError,
 });
 
+export const WsAutomationGetMemoryRpc = Rpc.make(WS_METHODS.automationGetMemory, {
+  payload: AutomationGetMemoryInput,
+  success: Schema.NullOr(AutomationMemory),
+  error: WsRpcError,
+});
+
 export const WsAutomationCreateRpc = Rpc.make(WS_METHODS.automationCreate, {
   payload: AutomationCreateInput,
   success: AutomationDefinition,
@@ -892,6 +952,12 @@ export const WsAutomationMarkRunReadRpc = Rpc.make(WS_METHODS.automationMarkRunR
 export const WsAutomationArchiveRunRpc = Rpc.make(WS_METHODS.automationArchiveRun, {
   payload: AutomationArchiveRunInput,
   success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationResolveProposalRpc = Rpc.make(WS_METHODS.automationResolveProposal, {
+  payload: AutomationResolveProposalInput,
+  success: AutomationResolveProposalResult,
   error: WsRpcError,
 });
 
@@ -937,6 +1003,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
+  WsGitWorkingTreeDiffStatsRpc,
   WsGitSummarizeDiffRpc,
   WsGitPullRpc,
   WsGitRunStackedActionRpc,
@@ -978,6 +1045,10 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsServerListExternalMcpIntegrationsRpc,
+  WsServerCreateExternalMcpIntegrationRpc,
+  WsServerRevokeExternalMcpIntegrationRpc,
+  WsServerRefreshExternalMcpPairingRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
@@ -1004,6 +1075,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAutomationListRpc,
+  WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,
   WsAutomationUpdateRpc,
   WsAutomationDeleteRpc,
@@ -1011,6 +1083,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationCancelRunRpc,
   WsAutomationMarkRunReadRpc,
   WsAutomationArchiveRunRpc,
+  WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
 );
 

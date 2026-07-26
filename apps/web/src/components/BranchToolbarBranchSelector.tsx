@@ -239,7 +239,7 @@ function handleCheckoutError(
   const dirtyWorktree = parseDirtyWorktreeError(error);
   if (dirtyWorktree) {
     const copyText = toBranchActionErrorMessage(error);
-    const dirtyToastId = addBranchRecoveryToast({
+    addBranchRecoveryToast({
       type: "warning",
       title: "Uncommitted changes block checkout.",
       description: formatDirtyWorktreeDescription(dirtyWorktree.files),
@@ -263,7 +263,7 @@ function handleCheckoutError(
               if (isStashConflictError(stashError)) {
                 await invalidateGitQueries(input.queryClient);
                 input.onSuccess();
-                const stashConflictToastId = addBranchRecoveryToast({
+                addBranchRecoveryToast({
                   type: "warning",
                   title: "Changes saved, but not reapplied.",
                   description:
@@ -375,8 +375,9 @@ export function BranchToolbarBranchSelector({
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
-  variant = "toolbar",
+  variant: variantProp,
 }: BranchToolbarBranchSelectorProps) {
+  const variant = variantProp ?? "toolbar";
   const isPanel = variant === "panel";
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);

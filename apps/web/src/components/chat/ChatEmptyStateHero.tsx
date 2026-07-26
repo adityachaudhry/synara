@@ -3,11 +3,10 @@
 // Layer: Chat presentation
 // Depends on: the caller-supplied project display name.
 
-import { memo } from "react";
 import { IN_APP_BRAND_HEADING_FONT_CLASS_NAME } from "~/branding";
 import { GlasswingBrand } from "~/components/GlasswingBrand";
 
-export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
+export const ChatEmptyStateHero = function ChatEmptyStateHero({
   projectName,
 }: {
   projectName: string | undefined;
@@ -26,4 +25,4 @@ export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
       </div>
     </div>
   );
-});
+};

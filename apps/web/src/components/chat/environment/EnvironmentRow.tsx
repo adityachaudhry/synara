@@ -8,6 +8,7 @@
 import { useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChevronDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -88,13 +89,14 @@ export function EnvironmentLabeledSection({
  */
 export function EnvironmentCollapsibleSection({
   label,
-  defaultOpen = true,
+  defaultOpen: defaultOpenProp,
   children,
 }: {
   label: ReactNode;
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const defaultOpen = defaultOpenProp ?? true;
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col">
@@ -109,12 +111,9 @@ export function EnvironmentCollapsibleSection({
         <span className={cn(ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME, "min-w-0 truncate")}>
           {label}
         </span>
-        <ChevronDownIcon
-          aria-hidden
-          className={cn(
-            "size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60 transition-transform duration-220 ease-out motion-reduce:transition-none",
-            open ? "rotate-0" : "-rotate-90",
-          )}
+        <DisclosureChevron
+          open={open}
+          className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60"
         />
       </CollapsibleTrigger>
       <CollapsiblePanel>
@@ -133,7 +132,7 @@ export function EnvironmentRowBody({
   icon,
   label,
   trailing,
-  compact = false,
+  compact: compactProp,
 }: {
   icon: ReactNode;
   label: ReactNode;
@@ -141,6 +140,7 @@ export function EnvironmentRowBody({
   /** Skip the 16px icon gutter — for cramped dock/diff header pickers. */
   compact?: boolean;
 }) {
+  const compact = compactProp ?? false;
   return (
     <>
       {compact ? (

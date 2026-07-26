@@ -4,7 +4,6 @@
 // Exports: ActiveTaskListCard
 
 import { pluralize } from "@synara/shared/text";
-import { memo } from "react";
 import {
   PiArrowsInSimple,
   PiArrowsOutSimple,
@@ -48,13 +47,15 @@ function taskStatusIcon(status: ActiveTaskListState["tasks"][number]["status"]) 
   return <span className="block size-[7px] rounded-full border border-current" />;
 }
 
-export const ActiveTaskListCard = memo(function ActiveTaskListCard({
+export function ActiveTaskListCard({
   activeTaskList,
-  backgroundTaskCount = 0,
-  compact = false,
+  backgroundTaskCount: backgroundTaskCountProp,
+  compact: compactProp,
   onCompactChange,
   onOpenSidebar,
 }: ActiveTaskListCardProps) {
+  const backgroundTaskCount = backgroundTaskCountProp ?? 0;
+  const compact = compactProp ?? false;
   const totalCount = activeTaskList.tasks.length;
   const completedCount = activeTaskList.tasks.filter((task) => task.status === "completed").length;
   const hasInProgressTask = activeTaskList.tasks.some((task) => task.status === "inProgress");
@@ -159,6 +160,6 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
       )}
     </>
   );
-});
+}
 
 export type { ActiveTaskListCardProps };
