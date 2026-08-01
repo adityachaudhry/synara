@@ -141,7 +141,11 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-  }, 10_000);
+    // First test in the file pays the full dynamic-import cost of the
+    // MessagesTimeline module graph, which exceeds 10s under CI thread
+    // contention (observed flaking on 4-thread runners while passing in
+    // ~2s locally).
+  }, 30_000);
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -1140,6 +1144,53 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Compacting conversation...");
     expect(markup).toContain("Working for");
     expect(markup).not.toContain("h-px flex-1 bg-border");
+  });
+
+  it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-live-status");
+    const assistantCreatedAt = "2026-03-17T19:12:29.000Z";
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-tasks-updated",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-tasks-updated",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              label: "Tasks updated",
+              tone: "info",
+              turnId: activeTurnId,
+            },
+          },
+          {
+            id: "entry-live-assistant",
+            kind: "message",
+            createdAt: assistantCreatedAt,
+            message: {
+              id: MessageId.makeUnsafe("message-live-assistant"),
+              role: "assistant",
+              text: "",
+              createdAt: assistantCreatedAt,
+              streaming: false,
+              turnId: activeTurnId,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Tasks updated");
+    expect(markup).toContain("Thinking");
+    expect(markup).not.toContain(formatShortTimestamp(assistantCreatedAt, "locale"));
+    expect(markup).toMatch(/class="[^"]*\bpb-1\b[^"]*" data-timeline-row-kind="message"/);
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {

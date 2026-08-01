@@ -5,6 +5,7 @@ import {
   type ModelSlug,
   type ProviderApprovalDecision,
   type ProviderKind,
+  type ProviderRequestKind,
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
@@ -53,7 +54,9 @@ export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
 export interface PendingFileUndo {
   readonly threadId: ThreadIdType;
-  readonly turnCount: number;
+  // A changes card can merge several turns; one Undo reverts all of them, so the
+  // request only settles once every targeted turn has settled (or one failed).
+  readonly turnCounts: readonly number[];
   readonly existingFailureActivityIds: readonly string[];
 }
 
@@ -65,10 +68,16 @@ export function hasFileUndoSettled(input: {
     return false;
   }
 
-  const targetSummary = input.thread.turnDiffSummaries.find(
-    (summary) => summary.checkpointTurnCount === input.pending.turnCount,
+  const targetTurnCounts = new Set(input.pending.turnCounts);
+  const targetSummaries = input.thread.turnDiffSummaries.filter(
+    (summary) =>
+      summary.checkpointTurnCount !== undefined &&
+      targetTurnCounts.has(summary.checkpointTurnCount),
   );
-  if (targetSummary?.files.length === 0) {
+  if (
+    targetSummaries.length > 0 &&
+    targetSummaries.every((summary) => summary.files.length === 0)
+  ) {
     return true;
   }
 
@@ -79,31 +88,147 @@ export function hasFileUndoSettled(input: {
       existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
-      !("turnCount" in activity.payload)
+      !("turnCount" in activity.payload) ||
+      typeof activity.payload.turnCount !== "number"
     ) {
       return false;
     }
-    return activity.payload.turnCount === input.pending.turnCount;
+    return targetTurnCounts.has(activity.payload.turnCount);
   });
 }
-
-const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
 
 /**
  * "Always allow" (acceptForSession) only auto-approves the live provider turn.
  * Because the client is the source of truth for runtime mode (it sends it with
- * every turn), the choice must also flip the thread to full-access so it survives
- * idle-stop and runtime restarts instead of reverting to approval-required on the
- * next turn. Returns the runtime mode to persist, or null when nothing changes.
+ * every turn), a supervised thread must also flip to full-access so the choice
+ * survives idle-stop and runtime restarts. Auto is different: its AI reviewer
+ * remains the durable policy, while acceptForSession applies only to the current
+ * live provider session. Returns the runtime mode to persist, or null when
+ * nothing changes.
  */
 export function resolveRuntimeModeAfterApprovalDecision(
   currentRuntimeMode: RuntimeMode,
   decision: ProviderApprovalDecision,
+  requestKind?: ProviderRequestKind,
 ): RuntimeMode | null {
-  if (decision === "acceptForSession" && currentRuntimeMode !== ALWAYS_ALLOW_RUNTIME_MODE) {
-    return ALWAYS_ALLOW_RUNTIME_MODE;
+  // Permission-profile grants are narrower than a runtime-mode override.
+  // Their acceptForSession decision is persisted by the provider for only
+  // that permission set and must not silently broaden the whole thread.
+  if (requestKind === "permissions") {
+    return null;
+  }
+  if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
+    return "full-access";
   }
   return null;
+}
+
+export async function commitAfterRuntimeModePersistence(input: {
+  currentRuntimeMode: RuntimeMode;
+  nextRuntimeMode: RuntimeMode;
+  persistRuntimeMode: (mode: RuntimeMode) => Promise<boolean>;
+  commit: () => void;
+}): Promise<boolean> {
+  if (
+    input.nextRuntimeMode !== input.currentRuntimeMode &&
+    !(await input.persistRuntimeMode(input.nextRuntimeMode))
+  ) {
+    return false;
+  }
+  input.commit();
+  return true;
+}
+
+export interface RuntimeModePersistenceQueue {
+  syncAcknowledgedMode: (mode: RuntimeMode) => void;
+  persist: (
+    mode: RuntimeMode,
+    operation: (currentMode: RuntimeMode, nextMode: RuntimeMode) => Promise<boolean>,
+  ) => Promise<boolean>;
+}
+
+/**
+ * Serializes access-mode writes for one thread. Equality is checked only when a
+ * queued choice starts, after earlier choices have settled, so Auto → Full
+ * access → Auto cannot drop the final Auto choice against a stale render.
+ */
+export function createRuntimeModePersistenceQueue(
+  initialMode: RuntimeMode,
+): RuntimeModePersistenceQueue {
+  let acknowledgedMode = initialMode;
+  let pendingCount = 0;
+  let tail: Promise<void> = Promise.resolve();
+
+  return {
+    syncAcknowledgedMode(mode) {
+      if (pendingCount === 0) {
+        acknowledgedMode = mode;
+      }
+    },
+    persist(mode, operation) {
+      pendingCount += 1;
+      const result = tail.then(async () => {
+        if (mode === acknowledgedMode) {
+          return true;
+        }
+        const persisted = await operation(acknowledgedMode, mode);
+        if (persisted) {
+          acknowledgedMode = mode;
+        }
+        return persisted;
+      });
+      tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result.finally(() => {
+        pendingCount -= 1;
+      });
+    },
+  };
+}
+
+export function modelSelectionsEqual(left: ModelSelection, right: ModelSelection): boolean {
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null) &&
+    (left.provider !== "claudeAgent" ||
+      right.provider !== "claudeAgent" ||
+      left.supportsAutoMode === right.supportsAutoMode)
+  );
+}
+
+/**
+ * Runtime-mode validation uses the canonical thread model. Persist a changed
+ * model first when enabling Auto, but downgrade from Auto first so an
+ * incompatible replacement model is not rejected by the old policy.
+ */
+export async function persistModelSelectionBeforeRuntimeMode(input: {
+  currentModelSelection: ModelSelection;
+  nextModelSelection?: ModelSelection;
+  currentRuntimeMode: RuntimeMode;
+  nextRuntimeMode: RuntimeMode;
+  persistModelSelection: (selection: ModelSelection) => Promise<unknown>;
+  persistRuntimeMode: (mode: RuntimeMode) => Promise<unknown>;
+}): Promise<void> {
+  const nextModelSelection = input.nextModelSelection;
+  const modelChanged =
+    nextModelSelection !== undefined &&
+    !modelSelectionsEqual(input.currentModelSelection, nextModelSelection);
+  const runtimeChanged = input.currentRuntimeMode !== input.nextRuntimeMode;
+  const downgradesFromAuto =
+    input.currentRuntimeMode === "auto" && input.nextRuntimeMode !== "auto";
+
+  if (runtimeChanged && downgradesFromAuto) {
+    await input.persistRuntimeMode(input.nextRuntimeMode);
+  }
+  if (modelChanged && nextModelSelection !== undefined) {
+    await input.persistModelSelection(nextModelSelection);
+  }
+  if (runtimeChanged && !downgradesFromAuto) {
+    await input.persistRuntimeMode(input.nextRuntimeMode);
+  }
 }
 
 export function shouldRenderProviderHealthBanner(input: {
@@ -168,7 +293,7 @@ export interface PromptHistoryNavigationResult {
 }
 
 export function derivePromptHistoryFromMessages(
-  messages: ReadonlyArray<Pick<ChatMessage, "role" | "source" | "text">>,
+  messages: ReadonlyArray<Pick<ChatMessage, "id" | "role" | "source" | "text">>,
   limit: number = PROMPT_HISTORY_MAX_ENTRIES,
 ): string[] {
   if (limit <= 0) {
@@ -182,6 +307,7 @@ export function derivePromptHistoryFromMessages(
     }
     const prompt = deriveDisplayedUserMessageState(message.text, {
       hideImageOnlyBootstrapPrompt: true,
+      messageId: message.id,
     }).copyText.trim();
     if (prompt.length === 0) {
       continue;
@@ -799,6 +925,7 @@ export interface WorktreeSetupSnapshotOptions {
 
 export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
   worktreeSetupStepId?: WorktreeSetupStepId;
+  expectedUserMessageId?: ChatMessage["id"];
 }
 
 function worktreeSetupStepDefinitions(
@@ -857,6 +984,7 @@ export function worktreeSetupHasError(snapshot: WorktreeSetupSnapshot | null): b
 export interface LocalDispatchSnapshot {
   startedAt: string;
   worktreeSetup: WorktreeSetupSnapshot | null;
+  expectedUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: Thread["latestTurn"] extends infer T
     ? T extends { turnId: infer U }
       ? U | null
@@ -884,6 +1012,7 @@ export function createLocalDispatchSnapshot(
     worktreeSetup: options?.worktreeSetupStepId
       ? createWorktreeSetupSnapshot(options.worktreeSetupStepId, options)
       : null,
+    expectedUserMessageId: options?.expectedUserMessageId ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
@@ -925,6 +1054,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
   session: Thread["session"] | null;
+  messages: readonly ChatMessage[];
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
   threadError: string | null | undefined;
@@ -937,6 +1067,15 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.hasPendingApproval ||
     input.hasPendingUserInput ||
     Boolean(input.threadError)
+  ) {
+    return true;
+  }
+  if (
+    input.localDispatch.expectedUserMessageId !== null &&
+    input.messages.some(
+      (message) =>
+        message.role === "user" && message.id === input.localDispatch?.expectedUserMessageId,
+    )
   ) {
     return true;
   }
@@ -968,11 +1107,12 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 }
 
 /**
- * Steering a non-Codex provider interrupts the live turn and lets the server
- * re-dispatch the steer text as a fresh turn. Between the abort and the
- * steered turn's start the thread briefly looks idle, which would otherwise
- * let the queued-composer auto-dispatch race the steered turn (and fire every
- * queued message at once). The gate holds auto-dispatch through that gap.
+ * Steering a provider without native mid-turn steering interrupts the live
+ * turn and lets the server re-dispatch the steer text as a fresh turn.
+ * Between the abort and the steered turn's start the thread briefly looks
+ * idle, which would otherwise let the queued-composer auto-dispatch race the
+ * steered turn (and fire every queued message at once). The gate holds
+ * auto-dispatch through that gap.
  */
 export interface QueuedSteerGate {
   /** The abort gap has been observed (phase left "running" after the steer). */
@@ -1070,6 +1210,7 @@ export function deriveComposerSendState(options: {
   imageCount: number;
   fileCount: number;
   assistantSelectionCount: number;
+  browserAnnotationCount: number;
   fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
@@ -1095,6 +1236,7 @@ export function deriveComposerSendState(options: {
       options.imageCount > 0 ||
       options.fileCount > 0 ||
       options.assistantSelectionCount > 0 ||
+      options.browserAnnotationCount > 0 ||
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0,

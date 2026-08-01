@@ -22,6 +22,208 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.4",
+    date: "Aug 1",
+    features: [
+      {
+        id: "visible-browser-control",
+        title: "Agents can use the visible browser",
+        description:
+          "Let supported agents navigate and operate the same browser surface you can see, with tabs, snapshots, screenshots, input, dialogs, and workspace-safe file transfer.",
+        details:
+          "The browser bridge is provider-agnostic and session-scoped: it reuses Synara's visible Electron WebView, cookies, and authenticated state instead of creating a hidden browser. Agents get bounded semantic snapshots, trusted clicks, typing, key presses, scrolling, selection, dragging, waits, and page diagnostics, while navigation, target refs, timeouts, popup sign-in, uploads, and download approval boundaries stay explicit.",
+      },
+      {
+        id: "browser-dom-annotations",
+        title: "Annotate the page before you ask",
+        description:
+          "Select elements in the visible browser and send compact, redacted annotations with your message so an agent knows exactly what you mean.",
+        details:
+          "Annotations preserve bounded element role, name, text, selector, and page context, support multiple marks with a compact overflow row, survive drafts and transcript rendering, and keep exact-page affinity local. Untrusted page data is clearly separated from user instructions and document-only metadata is removed before provider injection.",
+      },
+      {
+        id: "runtime-modes-and-autonomy",
+        title: "Choose how much autonomy each run has",
+        description:
+          "Pick Approval required, Auto, or Full access when the selected provider and model support it, with clearer model, effort, and approval controls.",
+        details:
+          "Runtime mode is validated before dispatch, and automation or delegated work cannot silently escalate its privilege. Codex and Claude Code expose Auto only when capability is confirmed; unsupported or unknown capabilities fail closed to approval-required. The composer and model pickers now explain the effective mode and pending approvals more clearly.",
+      },
+      {
+        id: "native-turn-steering",
+        title: "Steer live turns without breaking the transcript",
+        description:
+          "Send guidance into a running Codex or Claude turn, or keep follow-ups queued, while the current task remains correctly attributed.",
+        details:
+          "Native steer calls travel through provider-aware command handling, runtime activity projection, and lifecycle fencing. Sent user messages, live assistant answers, child work, and terminal events stay attached to the right turn across late or replayed updates, interruptions, and provider restarts.",
+      },
+      {
+        id: "stable-streaming-chat",
+        title: "Streaming conversations stay anchored",
+        description:
+          "Long or fast responses no longer yank the viewport away from the point you are reading.",
+        details:
+          "Tail following now uses one shared anchor path across estimated and virtualized rows, sent-message reveals, and native browser end-space. New real transcript messages drive auto-follow; tool rows, buffering, measurements, and reconnect-only updates no longer impersonate user-visible message arrivals.",
+      },
+      {
+        id: "lighter-reconnects",
+        title: "Reconnects use less bandwidth and recover more state",
+        description:
+          "Synara negotiates one authenticated connection, compresses large traffic, and resumes thread detail from a cursor when possible.",
+        details:
+          "A single handshake negotiates compatibility and permessage-deflate; delta-capable subscriptions replay from safe cursors with conservative snapshot fallback; precompressed web assets and cache headers speed first loads. Hydration also reads durable projections directly, retries missing snapshots after timed-out starts, and keeps provider notification drains alive until sessions settle.",
+      },
+      {
+        id: "right-dock-launcher",
+        title: "Open workspace tools from one right dock",
+        description:
+          "A new launcher puts review, terminal, browser, files, side chat, and source control one click away without crowding the composer.",
+        details:
+          "Dock panes open at a stable half-shell split, keep live terminal state mounted when switching, and gate tools on the current project and repository. Missed draft promotions are recovered during event routing, so a message is less likely to disappear when the dock or task changes.",
+      },
+      {
+        id: "provider-capability-clarity",
+        title: "Provider choices show their real capabilities",
+        description:
+          "Model discovery and runtime menus stay useful across cold starts, Claude capabilities, and mixed provider sessions.",
+        details:
+          "Claude models can be discovered on a cold start, model and effort options use capability-aware ordering and labels, and thread hover cards expose the active provider and model context. Unknown provider update statuses no longer break self-update flows, and Antigravity returns a decision for inactive hook requests instead of launching Synara.",
+      },
+      {
+        id: "repository-aware-git-workflows",
+        title: "Git workflows explain what needs attention",
+        description:
+          "When a branch is behind upstream, Environment surfaces Pull before risky actions, and generated PR bodies can follow repository templates.",
+        details:
+          "Git action availability now uses one consistent upstream and working-tree state model. PR generation discovers applicable `.github` templates, removes boilerplate instructions, and asks the selected provider to fill the repository's own sections while preserving the fallback body when none exists.",
+      },
+    ],
+  },
+  {
+    version: "0.6.3",
+    date: "Jul 27",
+    features: [
+      {
+        id: "responsive-stop-controls",
+        title: "Stop stays responsive under load",
+        description:
+          "Interrupt and stop actions now take priority over new work, even when a busy Synara server has filled its ordinary command queue.",
+        details:
+          "Control, user, and background commands now use separate admission priorities while preserving reserved capacity for recovery. Provider calls and lifecycle locks are bounded too, so one wedged session cannot hold every other task hostage, and failed stop requests now surface an actionable error instead of silently leaving the UI spinning.",
+      },
+      {
+        id: "compensating-checkpoint-reverts",
+        title: "Undo can recover from a partial failure",
+        description:
+          "File and conversation reverts now preserve a rescue snapshot before changing your worktree and restore it if the provider rollback fails.",
+        details:
+          "Reverts validate checkpoints before mutation, work without a live provider session, retry their deterministic completion step, and clean up managed refs only after the operation commits. Grouped file-change cards undo newest-first, while failures identify any retained rescue ref so recovery remains explicit.",
+      },
+      {
+        id: "durable-session-settlement",
+        title: "Interrupted sessions settle cleanly",
+        description:
+          "Turns are less likely to remain stuck as running after terminal provider events, restarts, stale resumes, or delayed lifecycle updates.",
+        details:
+          "Synara retains enough turn identity to settle late Claude results, fences stale lifecycle generations, reconciles durable provider commands and runtime events, and aligns Codex, Claude, Cursor, and ACP session ownership through start, stop, reconnect, and restart boundaries.",
+      },
+      {
+        id: "safe-follow-up-queues",
+        title: "Follow-ups no longer disappear into stale queues",
+        description:
+          "A thread that looks busy but has no real active turn keeps the composer available instead of accepting a message that cannot be dispatched.",
+        details:
+          "Queue draining now requires a queueable live turn, the transcript keeps the newest answer open while terminal state converges, and visible stop failures are reported immediately. These safeguards keep the conversation usable while server-side recovery repairs stale session state.",
+      },
+      {
+        id: "visible-thread-rehydration",
+        title: "Open tasks stay present during refreshes",
+        description:
+          "Visible task details are retained and re-requested across overlapping snapshot, subscription, and eviction work instead of briefly rendering as an empty conversation.",
+        details:
+          "Thread-detail retention now understands what is on screen, re-arms refreshes that race an in-flight snapshot, and normalizes projections more defensively. Cleanup also preserves archived tasks, newly forked or handed-off tasks, and soft-deleted history without proven manual-delete provenance.",
+      },
+    ],
+  },
+  {
+    version: "0.6.2",
+    date: "Jul 27",
+    features: [
+      {
+        id: "universal-live-tool-activity",
+        title: "Every agent's live tool work is visible",
+        description:
+          "Follow tools as they start, update, and finish across supported providers, with consistent labels and details directly in the transcript.",
+        details:
+          "Synara now normalizes live and settled tool activity into one presentation model, preserves expandable tool details and interactions, and reconciles terminal states without leaving duplicate or permanently running work rows behind.",
+      },
+      {
+        id: "reliable-live-recovery",
+        title: "Live tasks recover after reconnects",
+        description:
+          "Provider status, active turns, and thread details converge back to the server's real state after dropped connections or delayed events.",
+        details:
+          "Reconnect refreshes preserve useful status while new data arrives, stale live projections are fenced and repaired, settled turns stop polling, and thread-detail ownership is reconciled across lease, snapshot, and subscription races.",
+      },
+      {
+        id: "follow-up-dispatch-mode",
+        title: "Choose whether follow-ups queue or steer",
+        description:
+          "Set new messages sent during active work to wait their turn or steer the current agent immediately.",
+        details:
+          "The new conversation setting is searchable in Settings and is applied consistently by the composer while a task is running, with Queue as the predictable default and Steer available for more interactive workflows.",
+      },
+      {
+        id: "recover-blocked-threads",
+        title: "Blocked threads can be recovered",
+        description:
+          "When an uncertain provider delivery quarantines a thread, the error banner now offers a safe Unblock thread action.",
+        details:
+          "Synara abandons ambiguous blockers oldest-first, then replays only the skipped turn starts. This restores the conversation without risking a duplicate resend of the command whose delivery could not be proven.",
+      },
+      {
+        id: "automation-and-desktop-resilience",
+        title: "Automations and desktop recovery are tougher",
+        description:
+          "Dedicated automation runs, clearer completion policies, and bounded desktop crash recovery make unattended work more dependable.",
+        details:
+          "Automation self-cancellation is explicitly authorized, run state and completion policies persist more reliably, renderer crashes use bounded reload recovery with actionable prompts, and process supervision, executable lookup, terminal wrappers, worktrees, and Git status broadcasting handle failure boundaries more carefully.",
+      },
+      {
+        id: "faster-startup-and-diffs",
+        title: "Startup and large diffs do less work",
+        description:
+          "Synara loads expensive provider and diff machinery only when needed and computes working-tree statistics without transferring full patches.",
+        details:
+          "Shell environment probes and orchestration startup state are reused, route chunks are preloaded selectively, supervised process scans are throttled, and React Compiler coverage protects chat, picker, hook, and UI hot paths.",
+      },
+      {
+        id: "storage-and-artifact-safety",
+        title: "Local state stays safer",
+        description:
+          "Exclusive SQLite locking and stricter migration-artifact cleanup reduce the chance of competing writers or abandoned update files.",
+        details:
+          "Database access now proves exclusive ownership, migration backups and resumable artifacts receive broader retention and reclamation coverage, and orphan cleanup stays bounded to verified Synara-owned paths.",
+      },
+      {
+        id: "custom-void-space",
+        title: "Make the Void space your own",
+        description:
+          "Rename Void and choose its icon so unassigned projects fit the way you organize your workspace.",
+        details:
+          "The custom presentation is stored locally and appears consistently in the sidebar, Space switcher, project pickers, and creation flows, with validation and a one-step reset to the default.",
+      },
+      {
+        id: "readability-and-interface-polish",
+        title: "Small details are calmer and clearer",
+        description:
+          "Completion notifications retain useful Markdown context, command menus explain loading and empty states, and Settings are organized around user intent.",
+        details:
+          "This release also standardizes settings cards and elevated hover surfaces, simplifies subagent transcript rows, preserves the landing project color, keeps Ctrl-minus zoom working on Windows and browser guests, improves diff and composer hot paths, and makes fenced code, references, nested Markdown, and technical completion summaries safer and easier to read.",
+      },
+    ],
+  },
+  {
     version: "0.6.1",
     date: "Jul 25",
     features: [

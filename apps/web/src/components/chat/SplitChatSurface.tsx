@@ -17,7 +17,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
-  ChatMountSkeleton,
+  ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
   LazyDiffPanel,
@@ -76,6 +76,7 @@ import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
+import { routeSplitBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import { cn } from "~/lib/utils";
 
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
@@ -723,7 +724,31 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       ? () => togglePanePanel(activeSplitView.focusedPaneId, "browser")
       : null,
     onOpen: activeSplitView
-      ? () => updatePanePanelState(activeSplitView.focusedPaneId, { panel: "browser" })
+      ? (requestedThreadId) => {
+          routeSplitBrowserPanelOpenRequest({
+            splitView: activeSplitView,
+            requestedThreadId,
+            focusPane: (paneId) => setFocusedPane(activeSplitView.id, paneId),
+            replacePaneThread: (paneId, threadId) =>
+              replacePaneThread(activeSplitView.id, paneId, threadId),
+            openBrowserPanel: (paneId) =>
+              setPanePanelState(activeSplitView.id, paneId, {
+                panel: "browser",
+                diffTurnId: null,
+                diffFilePath: null,
+                hasOpenedPanel: true,
+                lastOpenPanel: "browser",
+              }),
+            navigateToThread: (threadId) => {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId },
+                replace: true,
+                search: () => ({ splitViewId: activeSplitView.id }),
+              });
+            },
+          });
+        }
       : null,
   });
 
@@ -881,7 +906,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const splitThreadIds = new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []);
 
   if (!activeSplitView) {
-    return <ChatMountSkeleton />;
+    return <ChatMountLoader />;
   }
 
   const chooseThreadForPane = (threadId: ThreadId, paneOverride?: PaneId) => {

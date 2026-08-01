@@ -45,6 +45,7 @@ import {
 } from "./chatHeaderControls";
 import {
   getRightDockPaneMeta,
+  type RightDockLauncherItem,
   resolveRightDockPaneIcon,
   resolveRightDockPaneLabel,
 } from "./rightDockPaneMeta";
@@ -66,6 +67,7 @@ interface RightDockProps {
   // swapping the generic kind icon for its live state glyph.
   paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
+  launcherItems?: readonly RightDockLauncherItem[];
   // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts
   // provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
@@ -251,7 +253,7 @@ export function RightDock(props: RightDockProps) {
                 />
               ))}
             </div>
-            {props.addMenuKinds.length > 0 ? (
+            {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
               <Menu modal={false}>
                 <MenuTrigger
                   render={
@@ -294,8 +296,11 @@ export function RightDock(props: RightDockProps) {
           <div className="relative min-h-0 flex-1">
             {props.state.open && activePane === null ? (
               <RightDockLauncher
-                paneKinds={props.addMenuKinds}
-                onSelectPane={props.onAddPane}
+                items={
+                  props.launcherItems ??
+                  props.addMenuKinds.map((kind) => ({ kind, ...getRightDockPaneMeta(kind) }))
+                }
+                onOpen={props.onAddPane}
               />
             ) : null}
             {renderedPanes.map((pane) => {

@@ -21,6 +21,7 @@ import { type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
@@ -52,6 +53,10 @@ interface ChatTranscriptPaneProps {
   onTogglePinMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
+  tailAnchorMessageId?: ComponentProps<typeof MessagesTimeline>["tailAnchorMessageId"];
+  tailAnchorScrollInFlightRef?: ComponentProps<
+    typeof MessagesTimeline
+  >["tailAnchorScrollInFlightRef"];
   crossTaskOrigin?: ComponentProps<typeof MessagesTimeline>["crossTaskOrigin"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
@@ -79,9 +84,6 @@ interface ChatTranscriptPaneProps {
   resolvedTheme: "light" | "dark";
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   scrollButtonVisible: boolean;
-  subagentToolTraceByThreadId?: ComponentProps<
-    typeof MessagesTimeline
-  >["subagentToolTraceByThreadId"];
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   timestampFormat: TimestampFormat;
@@ -112,6 +114,8 @@ export function ChatTranscriptPane({
   onTogglePinMessage,
   threadMarkers,
   enteringUserMessageIds,
+  tailAnchorMessageId,
+  tailAnchorScrollInFlightRef,
   crossTaskOrigin,
   markdownCwd,
   onExpandTimelineImage,
@@ -139,7 +143,6 @@ export function ChatTranscriptPane({
   resolvedTheme,
   revertTurnCountByUserMessageId,
   scrollButtonVisible,
-  subagentToolTraceByThreadId,
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
   timestampFormat,
@@ -183,7 +186,6 @@ export function ChatTranscriptPane({
             markdownCwd={markdownCwd}
             onBack={onCloseAgentActivityDetail}
             onImageExpand={onExpandTimelineImage}
-            onOpenThread={onOpenThread}
             timestampFormat={timestampFormat}
           />
         ) : (
@@ -202,13 +204,14 @@ export function ChatTranscriptPane({
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
+            tailAnchorMessageId={tailAnchorMessageId ?? null}
+            {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}
             {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
-            {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
             {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
@@ -270,7 +273,8 @@ export function ChatTranscriptPane({
               aria-hidden={!scrollButtonVisible}
               tabIndex={scrollButtonVisible ? 0 : -1}
               className={cn(
-                "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]",
+                "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md hover:cursor-pointer",
+                ELEVATED_HOVER_SURFACE_CLASS_NAME,
                 scrollButtonVisible ? "pointer-events-auto" : "pointer-events-none",
               )}
             >

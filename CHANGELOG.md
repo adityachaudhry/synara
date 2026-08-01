@@ -1,5 +1,144 @@
 # Changelog
 
+## 0.6.4 - 2026-08-01
+
+### Added
+
+- Added provider-agnostic browser automation backed by Synara's shared visible Electron WebView. Supported agents can inspect bounded semantic snapshots, capture screenshots and diagnostics, navigate tabs, click, hover, drag, type, select, press keys, scroll, wait for page conditions, evaluate bounded expressions, handle dialogs, upload workspace-relative files, and observe explicit popup, download, timeout, and host-boundary states without creating a hidden browser.
+- Added DOM annotations for the visible browser so users can select one or more page elements, attach optional comments, and send precise, compact context through the composer. Annotation transport is versioned, count- and field-bounded, keeps exact-page affinity local, and strips document-only metadata before provider injection.
+- Added provider-aware runtime modes and Auto/auto-approval support across the orchestration, automation, gateway, Codex, Claude, and ACP paths. Approval-required, Auto, and Full access selections now carry capability checks, privilege limits, and explicit pending-approval state.
+- Added a right-dock launcher for opening Review, Terminal, Browser, Files, Side chat, and Source control panes from one place, with keep-mounted live panes and project/repository-aware availability.
+- Added negotiated transport capabilities: a single connect handshake, authenticated WebSocket `permessage-deflate`, cursor-resumable delta subscriptions with safe snapshot fallback, and precompressed web assets with cache headers and identity fallback.
+- Added repository PR-template discovery so generated pull-request bodies can follow the selected repository's `.github` template while retaining the existing fallback format when no applicable template exists.
+
+### Changed
+
+- Reworked transcript tail following around one shared anchor path for estimated and virtualized rows, sent-message reveals, native browser end-space, and fast streaming. Auto-follow is now driven by real transcript messages rather than tool rows, measurements, buffering, or reconnect-only activity.
+- Added native turn steering for Codex and Claude while preserving queued follow-ups as an explicit alternative. Provider commands, lifecycle generations, runtime activity, child work, sent messages, live answers, and terminal events now retain the correct turn identity through late, replayed, interrupted, and restarted sessions.
+- Changed thread hydration and reconnect behavior to use durable projections directly, resume detail from high-water cursors when safe, re-arm refreshes after snapshot races, retry missing snapshots after timed-out turn starts, and keep provider notification drains alive until a session settles.
+- Improved runtime-mode and model pickers with capability-aware options, clearer effort labels, Claude model discovery on cold starts, and thread hover-card details for the active provider and model.
+- Changed Environment and Git action presentation so branches behind upstream surface Pull before commit, push, or PR actions, using one consistent working-tree and upstream state model.
+- Recovered missed draft promotions during event routing and capped stacked composer panels so large agent fleets cannot hide the composer.
+- Bumped Synara release package versions to `0.6.4` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed tail-anchor overshoot, sent-message jumps, stale estimated-row offsets, and viewport loss while virtualized messages reveal or provider responses stream.
+- Fixed native steering activity projection and turn settlement when provider updates arrive late, are replayed, or use an unknown self-update status.
+- Fixed session startup and local dispatch acknowledgement races, hydration recovery that could render an empty visible task, and timed-out turn starts that failed to retry a missing snapshot.
+- Fixed provider notification pumps that could be disposed too early, leaving later session events unobserved, and fixed Antigravity inactive `PreToolUse` hooks that did not receive a decision.
+- Fixed runtime stalls that could kill active turns, including provider lifecycle and browser-host boundary cases; bounded browser input, navigation, semantic snapshot, file-transfer, and teardown paths so failures remain attributable to the correct tab and task.
+- Fixed browser annotation metadata handling, stale annotation validators, contenteditable descendant redaction, id-less timeline estimates, draft promotion, and browser-to-composer contract gaps.
+- Fixed Tailwind scanning for utility-class overrides and updated browser/desktop protocol boundaries so the visible browser cannot be mistaken for a separate or privileged host surface.
+- Fixed right-dock activation and pane-state races that could lose a draft or unmount live terminal state when switching tools.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,652 files.
+- `bun run lint` passed with 350 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing TS44 informational schema messages and Astro/Vite deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecations, plugin-timing notices, and large-chunk warnings remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 2m48.35s. Web passed 274 files / 3,378 tests; server/CLI passed 290 files / 3,185 tests with 2 skipped files / 7 skipped tests; desktop passed 55 files / 525 tests with 1 skipped file / 5 skipped tests; shared passed 47 files / 467 tests with 1 skipped test; contracts passed 17 files / 189 tests; scripts passed 13 files / 84 tests. No targeted reruns or flaky failures were needed.
+
+## 0.6.3 - 2026-07-27
+
+### Added
+
+- Added explicit control, user, and normal orchestration lanes so stop, interrupt, and settlement commands drain ahead of new turns and background projection work without weakening reserved-capacity or shutdown admission rules.
+- Added a compensating checkpoint-revert saga that captures the pre-revert worktree in a managed rescue ref and restores it if provider conversation rollback fails.
+- Added deterministic, retryable revert completion and user-visible failure activities that identify retained rescue refs when manual recovery may be needed.
+- Added bounded provider-command attempts and urgent lifecycle control so one unresponsive adapter or per-thread lock cannot stall every task.
+
+### Changed
+
+- Reworked provider lifecycle coordination and runtime reconciliation across Codex, Claude, Cursor, and ACP sessions so durable commands, terminal events, ownership, generations, and restart recovery converge on one session state.
+- Unified checkpoint cwd resolution, validation, ref encoding, cleanup, and recovery behavior across file-only undo, conversation rollback, and edit-and-resend.
+- Improved thread snapshot projection, visible-detail retention, store normalization, and refresh re-arming across lease, subscription, eviction, and reconnect races.
+- Improved provider runtime activity attribution so late or replayed terminal events settle the intended turn without duplicating work-log output.
+- Changed grouped file-change undo to revert every represented turn newest-first and stop on the first failure rather than silently leaving the card partially applied.
+- Bumped Synara release package versions to `0.6.3` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed stop and interrupt actions being starved behind a saturated queue, rejected during overload, or blocked indefinitely by a wedged provider start.
+- Fixed new turns being admitted while the orchestration engine was quiescing, which could orphan work during shutdown.
+- Fixed Claude terminal results without live turn state leaving a thread permanently marked as running, and bounded Claude interrupt acknowledgements that could otherwise hang their caller.
+- Fixed provider delivery timeouts holding the process-wide delivery lock forever; uncertain outcomes now settle explicitly for later reconciliation.
+- Fixed checkpoint revert requiring a live provider session, diffing the wrong checkout, mutating before checkpoint validation, or trimming a provider conversation twice after a half-applied retry.
+- Fixed invalid rescue-ref names for subagent thread identifiers, ineffective rescue-ref leak assertions, and unnecessary full-tree snapshots for no-op conversation rollbacks.
+- Fixed stale Claude resumes leaving task chips stranded or retrying a native conversation that the provider had already reported missing.
+- Fixed queued follow-ups being accepted while no real active turn existed, which could swallow the message instead of dispatching it.
+- Fixed the newest live answer collapsing into a completed disclosure while provider terminal state was still converging.
+- Fixed failed stop controls producing no visible explanation in the composer or keyboard shortcut path.
+- Fixed visible thread details being evicted or losing a refresh race and temporarily rendering as an empty conversation.
+- Fixed profile-stat cleanup purging soft-deleted threads without evidence of a manual delete, and retention sweeping archived or newly created fork and handoff threads because of inherited message timestamps.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,536 files.
+- `bun run lint` passed with 300 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only the existing TS44 informational schema messages remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 11m14.547s. Web passed 264 files / 3,255 tests; server/CLI passed 279 files / 2,988 tests with 2 skipped files / 7 skipped tests. No targeted reruns or flaky failures were needed.
+
+## 0.6.2 - 2026-07-27
+
+### Added
+
+- Added universal live tool activity across supported providers, with normalized running and settled states, consistent labels, expandable details, and transcript interactions.
+- Added a configurable follow-up dispatch mode so messages sent during active work can either queue for the next turn or steer the current turn.
+- Added an `Unblock thread` recovery action for provider-delivery quarantines; blockers are abandoned oldest-first and skipped turn starts are replayed without resending an ambiguous command.
+- Added local customization for the Void space name and icon, including validation, reset behavior, and consistent presentation across the sidebar, Space switcher, project pickers, and project creation.
+- Added dedicated automation-run handling, explicit completion policies, and authorized automation self-cancellation.
+- Added bounded Electron renderer-crash recovery with reload limits and actionable recovery prompts.
+- Added server-side working-tree diff statistics and shared unified-patch parsing so large diff totals no longer require transferring complete patches to the client.
+- Added React Compiler parity coverage for chat, picker, hook, and shared UI hot paths.
+
+### Changed
+
+- Reworked reconnect reconciliation so provider status, active turns, work logs, and terminal thread projections converge to the server snapshot without stale refreshes winning races or settled tasks polling indefinitely.
+- Batched stale thread-detail eviction and reconciled ownership across lease, reconnect, snapshot, and subscription-retention boundaries.
+- Reduced startup and steady-state work by lazily loading provider and diff-parser dependencies, caching login-shell environment probes, reusing in-memory orchestration state, selectively preloading route chunks, and throttling supervised-process descendant scans.
+- Hardened automation scheduling, projection, persistence, completion, and cancellation lifecycles for unattended work.
+- Hardened desktop and server process management across executable discovery, shell-environment hydration, backend supervision, terminal wrappers, managed worktrees, Git status broadcasting, and replacement of stale processes.
+- Enforced exclusive SQLite ownership and expanded verified retention, reclamation, and cleanup behavior for migration backups and interrupted update artifacts.
+- Simplified subagent activity in the transcript and consolidated live and settled tool presentation around the shared work log.
+- Reorganized Settings by user intent and consolidated shared settings cards, empty states, elevated surfaces, and hover styles.
+- Improved completion notifications so bounded Markdown summaries preserve fenced and nested code, technical context, references, delimiters, and turn-scoped copy while remaining safe to render.
+- Improved composer command-menu loading and empty states, shared picker styling, and React Compiler-friendly code paths.
+- Bumped Synara release package versions to `0.6.2` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed universal tool rows that could duplicate, lose interactions, regress after settlement, or remain visually active after a tool or turn reached a terminal state.
+- Fixed stale live thread projections after reconnect, including delayed refresh races, mismatched repair identity, stale terminal turns, and polling that continued after convergence.
+- Fixed provider status disappearing or being replaced by stale data while a reconnect refresh was in flight.
+- Fixed unowned thread details surviving lease, reconnect, and snapshot races.
+- Fixed permanently quarantined threads that previously exposed the delivery blocker but offered no client recovery path.
+- Fixed desktop renderer crashes that could leave Synara blank instead of recovering within a bounded retry policy.
+- Fixed competing SQLite access that could proceed without proving exclusive database ownership.
+- Fixed startup overhead from repeated shell probes, eagerly loaded provider SDKs and diff parsers, redundant orchestration reads, and over-frequent process-tree inspection.
+- Fixed orphaned or interrupted migration artifacts not being reclaimed under the expanded retention policy.
+- Fixed Windows `Ctrl+-` zoom behavior while preserving native menu shortcuts, browser-guest shortcuts help, and cross-platform shortcut boundaries.
+- Fixed completion notifications that could flatten or truncate fenced code, nested inline code, Markdown references, technical detail, or delimiter-sensitive text.
+- Fixed composer command-menu state transitions and exact-optional browser fixture typing when no empty-state label is supplied.
+- Fixed completion-summary parsing when a closing inline-code run is absent.
+- Fixed a default-parameter call in `ChatView` that caused React Compiler to bail out of a protected hot path.
+- Fixed macOS release artifact builds exhausting Node's default heap while bundling the production web client.
+- Fixed the landing project heading inheriting the wrong text color.
+
+### Verification
+
+- Final `bun run fmt:check` passed across 15,535 files.
+- Final `bun run lint` passed with 296 warnings and 0 errors.
+- Final `bun run typecheck` passed across all 7 packages after fixing two release-blocking exactness checks; only existing TS44 informational messages and Astro deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecations, plugin timing notices, and large-chunk warnings remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 10m58.197s after fixing one React Compiler bailout. Web passed 264 files / 3,250 tests; server/CLI passed 278 files / 2,951 tests with 2 skipped files / 7 skipped tests; desktop passed 39 files / 362 tests with 1 skipped file / 5 skipped tests; shared passed 41 files / 424 tests with 1 skipped test; contracts passed 13 files / 135 tests; scripts passed 13 files / 83 tests.
+- Focused reruns passed for completion-notification logic (48 tests), the composer command menu (4 browser tests), and React Compiler hot-path parity (12 tests). No flaky test was identified.
+
 ## 0.6.1 - 2026-07-25
 
 ### Added

@@ -58,6 +58,7 @@ import {
 } from "../Services/AgentGatewayOperationRepository.ts";
 import { AgentGatewayLive } from "./AgentGateway.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
+import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -280,6 +281,7 @@ function makeHarnessLayer(
     };
   } = {},
 ) {
+  const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
   const dispatched: Array<OrchestrationCommand> = [];
   const automationCreates: Array<AutomationCreateInput> = [];
   const automationMemoryUpdates: Array<{ automationId: string | null; content: string }> = [];
@@ -334,6 +336,8 @@ function makeHarnessLayer(
           }
         : null;
     },
+    issueStdioBootstrapToken: () => "bootstrap-test-token",
+    exchangeStdioBootstrapToken: () => null,
     bindWriteAuthority: (token: string, turnId: string) => {
       const threadId = VALID_TOKENS[token];
       return threadId
@@ -348,6 +352,20 @@ function makeHarnessLayer(
     },
     verifyWriteAuthority: (authority) =>
       authority.sessionKey === `session-for-${authority.threadId}`,
+    registerInFlightRequest: inFlightRequests.register,
+    cancelInFlightRequests: inFlightRequests.cancel,
+    cancelSessionTurnRequests: (token, turnId) => {
+      const threadId = VALID_TOKENS[token];
+      return threadId
+        ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
+        : Promise.resolve();
+    },
+    retireSessionTurn: (token, turnId) => {
+      const threadId = VALID_TOKENS[token];
+      return threadId
+        ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
+        : Promise.resolve();
+    },
     revokeSessionToken: () => undefined,
     connectionForThread: (threadId: ThreadIdType) => ({
       url: "http://127.0.0.1:3773/mcp",
@@ -751,7 +769,12 @@ function makeHarnessLayer(
             ],
           },
         ],
-        claudeAgent: [{ slug: "claude-sonnet-5", name: "Claude Sonnet 5" }],
+        claudeAgent: [
+          {
+            slug: "claude-sonnet-5",
+            name: "Claude Sonnet 5",
+          },
+        ],
         cursor: [{ slug: "auto", name: "Auto" }],
         antigravity: [
           {
@@ -1367,6 +1390,8 @@ describe("AgentGateway", () => {
       const initResult = (init.body as { result: Record<string, unknown> }).result;
       assert.equal(initResult.protocolVersion, "2025-06-18");
       assert.isString(initResult.instructions);
+      assert.isBelow(String(initResult.instructions).length, 200);
+      assert.notInclude(String(initResult.instructions), "[Synara harness policy");
 
       const list = yield* harness.postRaw({
         authorizationHeader: "Bearer token-parent",
@@ -1414,6 +1439,24 @@ describe("AgentGateway", () => {
       assert.property(createThreadProperties, "baseRef");
       assert.notProperty(createThreadProperties, "baseBranch");
       assert.notProperty(createThreadProperties, "branchName");
+      assert.deepEqual(
+        (createThreadProperties?.runtimeMode as { enum?: string[] } | undefined)?.enum,
+        ["approval-required", "full-access"],
+      );
+      const createThreadsTool = tools.find((tool) => tool.name === "synara_create_threads");
+      const createThreadsItems = (
+        createThreadsTool?.inputSchema.properties?.threads as
+          | {
+              items?: {
+                properties?: Record<string, unknown>;
+              };
+            }
+          | undefined
+      )?.items;
+      assert.deepEqual(
+        (createThreadsItems?.properties?.runtimeMode as { enum?: string[] } | undefined)?.enum,
+        ["approval-required", "full-access"],
+      );
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");

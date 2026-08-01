@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   RIGHT_DOCK_PANE_KINDS,
   SINGLETON_PANE_KINDS,
+  closePaneInState,
   createDefaultRightDockState,
   isRightDockPaneKind,
   openDockLauncherInState,
@@ -188,6 +189,19 @@ describe("openDockLauncherInState", () => {
     expect(launcherState.open).toBe(true);
     expect(launcherState.activePaneId).toBeNull();
     expect(launcherState.panes).toEqual(paneState.panes);
+  });
+
+  it("returns to the launcher after the final pane closes", () => {
+    const open = openPaneInState(createDefaultRightDockState(), {
+      paneId: "browser-1",
+      kind: "browser",
+    });
+
+    expect(closePaneInState(open, "browser-1")).toEqual({
+      open: true,
+      panes: [],
+      activePaneId: null,
+    });
   });
 });
 

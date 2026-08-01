@@ -17,6 +17,7 @@ import {
   type ProviderMentionReference,
   type ProviderNativeCommandDescriptor,
   type ProviderPluginDescriptor,
+  type ProviderRequestKind,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderStartOptions,
@@ -38,6 +39,7 @@ import {
   RuntimeMode,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
@@ -164,9 +166,12 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
   buildTranscriptAutoFollowSignal,
+  commitAfterRuntimeModePersistence,
+  createRuntimeModePersistenceQueue,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
   hasFileUndoSettled,
+  persistModelSelectionBeforeRuntimeMode,
   promptStillMatchesActiveHistoryBrowse,
   type PendingFileUndo,
   type PromptHistoryNavigationState,
@@ -211,6 +216,7 @@ import {
   createComposerThreadMentionSourcesSelector,
   createThreadSelector,
 } from "../storeSelectors";
+import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canOfferForkSlashCommand,
@@ -231,6 +237,7 @@ import {
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
+  omitRoutedSubagentWorkEntries,
   buildSourceProposedPlanReference,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
@@ -278,6 +285,10 @@ import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
 import { GlasswingBrand } from "./GlasswingBrand";
+import {
+  normalizeRuntimeModeForProvider,
+  providerModelSupportsAutoRuntimeMode,
+} from "../lib/runtimeMode";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
   formatShortcutLabel,
@@ -323,6 +334,7 @@ import {
   getProviderStartOptions,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
+  resolveFollowUpDispatchMode,
   useAppSettings,
 } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -331,6 +343,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerAssistantSelectionAttachment,
+  type BrowserAnnotationDraft,
   type DraftThreadEnvMode,
   type PersistedComposerImageAttachment,
   type QueuedComposerChatTurn,
@@ -369,6 +382,10 @@ import {
   formatAssistantSelectionQueuePreview,
   formatAssistantSelectionTitleSeed,
 } from "../lib/assistantSelections";
+import {
+  appendBrowserAnnotationsToPrompt,
+  formatBrowserAnnotationLabel,
+} from "../lib/browserAnnotations";
 import {
   appendFileCommentsToPrompt,
   formatFileCommentLabel,
@@ -476,10 +493,6 @@ import {
   deriveComposerSubagentStripItems,
   type ComposerSubagentStripItem,
 } from "./chat/ComposerSubagentStrip.logic";
-import {
-  deriveSubagentToolTraceByThreadId,
-  type SubagentToolTrace,
-} from "./chat/subagentToolTrace.logic";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import {
   buildWorkflowResumePrompt,
@@ -581,7 +594,6 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
-const EMPTY_SUBAGENT_TOOL_TRACES: ReadonlyMap<string, SubagentToolTrace> = new Map();
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -932,6 +944,7 @@ function buildQueuedComposerPreviewText(input: {
   images: ReadonlyArray<ComposerImageAttachment>;
   files: ReadonlyArray<ComposerFileAttachment>;
   assistantSelections: ReadonlyArray<{ id: string }>;
+  browserAnnotations: ReadonlyArray<BrowserAnnotationDraft>;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
@@ -949,6 +962,10 @@ function buildQueuedComposerPreviewText(input: {
   }
   if (input.assistantSelections.length > 0) {
     return formatAssistantSelectionQueuePreview(input.assistantSelections.length);
+  }
+  const firstBrowserAnnotation = input.browserAnnotations[0];
+  if (firstBrowserAnnotation) {
+    return `#${firstBrowserAnnotation.ordinal} ${formatBrowserAnnotationLabel(firstBrowserAnnotation)}`;
   }
   const firstTerminalContext = input.terminalContexts[0];
   if (firstTerminalContext) {
@@ -1058,6 +1075,7 @@ interface ChatViewProps {
   isFocusedPane?: boolean;
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
+  onToggleRightDock?: () => void;
   onToggleBrowserPanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
@@ -1120,6 +1138,7 @@ export default function ChatView({
   isFocusedPane: isFocusedPaneProp,
   panelState,
   onToggleDiffPanel,
+  onToggleRightDock,
   onToggleBrowserPanel,
   onOpenBrowserUrl,
   onOpenTurnDiffPanel,
@@ -1176,6 +1195,7 @@ export default function ChatView({
   const composerImages = composerDraft.images;
   const composerFiles = composerDraft.files;
   const composerAssistantSelections = composerDraft.assistantSelections;
+  const composerBrowserAnnotations = composerDraft.browserAnnotations;
   const composerFileComments = composerDraft.fileComments;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerPastedTexts = composerDraft.pastedTexts;
@@ -1190,12 +1210,14 @@ export default function ChatView({
         imageCount: composerImages.length,
         fileCount: composerFiles.length,
         assistantSelectionCount: composerAssistantSelections.length,
+        browserAnnotationCount: composerBrowserAnnotations.length,
         fileCommentCount: composerFileComments.length,
         terminalContexts: composerTerminalContexts,
         pastedTexts: composerPastedTexts,
       }),
     [
       composerAssistantSelections.length,
+      composerBrowserAnnotations.length,
       composerFileComments.length,
       composerFiles.length,
       composerImages.length,
@@ -1233,6 +1255,12 @@ export default function ChatView({
   const removeComposerDraftFile = useComposerDraftStore((store) => store.removeFile);
   const addComposerDraftAssistantSelection = useComposerDraftStore(
     (store) => store.addAssistantSelection,
+  );
+  const addComposerDraftBrowserAnnotations = useComposerDraftStore(
+    (store) => store.addBrowserAnnotations,
+  );
+  const removeComposerDraftBrowserAnnotation = useComposerDraftStore(
+    (store) => store.removeBrowserAnnotation,
   );
   const clearComposerDraftAssistantSelections = useComposerDraftStore(
     (store) => store.clearAssistantSelections,
@@ -1329,6 +1357,9 @@ export default function ChatView({
   }, [optimisticUserMessages]);
   const composerAssistantSelectionsRef = useRef<ComposerAssistantSelectionAttachment[]>(
     composerAssistantSelections,
+  );
+  const composerBrowserAnnotationsRef = useRef<BrowserAnnotationDraft[]>(
+    composerBrowserAnnotations,
   );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const composerFileCommentsRef = useRef<FileCommentDraft[]>(composerFileComments);
@@ -1511,8 +1542,9 @@ export default function ChatView({
     restoredSourceProposedPlan ?? null,
   );
   const autoDispatchingQueuedTurnRef = useRef(false);
-  // Holds queued-composer auto-dispatch through a non-Codex steer's
-  // interrupt→re-dispatch gap; see resolveQueuedSteerGateTransition.
+  // Holds queued-composer auto-dispatch through a non-natively-steerable
+  // provider steer's interrupt→re-dispatch gap; see
+  // resolveQueuedSteerGateTransition.
   const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(null);
   // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
   // blocked it; nothing else re-triggers the effect once they reset.
@@ -1684,6 +1716,17 @@ export default function ChatView({
     },
     [discardPromptHistoryNavigationForComposerMutation, removeComposerDraftPastedText, threadId],
   );
+  const removeComposerBrowserAnnotationFromDraft = useCallback(
+    (annotationId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      removeComposerDraftBrowserAnnotation(threadId, annotationId);
+    },
+    [
+      discardPromptHistoryNavigationForComposerMutation,
+      removeComposerDraftBrowserAnnotation,
+      threadId,
+    ],
+  );
   // "Show in text field": drop the full pasted text back into the editor (appended
   // to the current prompt) and discard the card so it can be edited as normal text.
   const showComposerPastedTextInField = useCallback(
@@ -1748,6 +1791,20 @@ export default function ChatView({
   }, [activeThread, pendingFileUndo]);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const runtimeModePersistenceQueuesRef = useRef(
+    new Map<ThreadId, ReturnType<typeof createRuntimeModePersistenceQueue>>(),
+  );
+  useEffect(() => {
+    const existing = runtimeModePersistenceQueuesRef.current.get(threadId);
+    if (existing) {
+      existing.syncAcknowledgedMode(runtimeMode);
+      return;
+    }
+    runtimeModePersistenceQueuesRef.current.set(
+      threadId,
+      createRuntimeModePersistenceQueue(runtimeMode),
+    );
+  }, [runtimeMode, threadId]);
   const interactionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
@@ -1762,6 +1819,9 @@ export default function ChatView({
   // `foo?.bar` read inside a memo makes React Compiler infer `foo` as the dependency, which
   // no longer matches the hand-written `foo?.bar` dep and bails the whole component out.
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
+  const activeLatestTurnStartedAt = activeLatestTurn?.startedAt ?? null;
+  const activeLatestTurnState = activeLatestTurn?.state ?? null;
+  const activeLatestTurnCompletedAt = activeLatestTurn?.completedAt ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
@@ -2167,15 +2227,36 @@ export default function ChatView({
     customModelsByProvider,
     availableModelOptionsByProvider: modelOptionsByProvider,
   });
-  const selectedRuntimeModel = useMemo(
-    () =>
-      resolveRuntimeModelDescriptor({
-        provider: selectedProvider,
-        model: selectedModel,
-        runtimeModels: runtimeModelsByProvider[selectedProvider],
-      }),
-    [runtimeModelsByProvider, selectedModel, selectedProvider],
-  );
+  const draftModelSelectionForSelectedProvider =
+    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+  const persistedClaudeSupportsAutoMode =
+    selectedProvider === "claudeAgent"
+      ? draftModelSelectionForSelectedProvider?.provider === "claudeAgent" &&
+        draftModelSelectionForSelectedProvider.model === selectedModel
+        ? draftModelSelectionForSelectedProvider.supportsAutoMode
+        : activeThread?.modelSelection.provider === "claudeAgent" &&
+            activeThread.modelSelection.model === selectedModel
+          ? activeThread.modelSelection.supportsAutoMode
+          : undefined
+      : undefined;
+  const selectedRuntimeModel = useMemo(() => {
+    const discovered = resolveRuntimeModelDescriptor({
+      provider: selectedProvider,
+      model: selectedModel,
+      runtimeModels: runtimeModelsByProvider[selectedProvider],
+    });
+    if (discovered) {
+      return discovered;
+    }
+    return selectedProvider === "claudeAgent" &&
+      typeof persistedClaudeSupportsAutoMode === "boolean"
+      ? {
+          slug: selectedModel,
+          name: selectedModel,
+          supportsAutoMode: persistedClaudeSupportsAutoMode,
+        }
+      : undefined;
+  }, [persistedClaudeSupportsAutoMode, runtimeModelsByProvider, selectedModel, selectedProvider]);
   const composerProviderState = useMemo(
     () =>
       getComposerProviderState({
@@ -2189,8 +2270,6 @@ export default function ChatView({
   );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
     if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
       return buildModelSelection(
@@ -2199,12 +2278,18 @@ export default function ChatView({
         selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
       );
     }
-    return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch);
+    return buildModelSelection(
+      selectedProvider,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      selectedProvider === "claudeAgent" ? selectedRuntimeModel?.supportsAutoMode : undefined,
+    );
   }, [
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
+    selectedRuntimeModel,
   ]);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const selectedModelForPicker =
@@ -2278,10 +2363,22 @@ export default function ChatView({
   }, [activeLatestTurnId, activeThread?.messages]);
   const rawWorkLogEntries = useMemo(
     () =>
-      deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined, {
+      deriveWorkLogEntries(threadActivities, activeLatestTurnId ?? undefined, {
         visibleTurnIds: workLogVisibleTurnIds,
+        activeTurnId: latestTurnLive ? activeLatestTurnId : null,
+        activeTurnStartedAt: activeLatestTurnStartedAt,
+        latestTurnState: activeLatestTurnState,
+        latestTurnCompletedAt: activeLatestTurnCompletedAt,
       }),
-    [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
+    [
+      activeLatestTurnCompletedAt,
+      activeLatestTurnId,
+      activeLatestTurnStartedAt,
+      activeLatestTurnState,
+      latestTurnLive,
+      threadActivities,
+      workLogVisibleTurnIds,
+    ],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -2298,7 +2395,7 @@ export default function ChatView({
       [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries],
     ),
   );
-  const workLogEntries = useMemo(
+  const enrichedWorkLogEntries = useMemo(
     () =>
       hasWorkLogSubagents
         ? enrichSubagentWorkEntries(
@@ -2309,16 +2406,22 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Native-CLI-style nested trace: transcript subagent rows show the child thread's
-  // recent tool calls. Retain child detail subscriptions only while a subagent runs
-  // so its activities stream in live; settled traces stay frozen from whatever the
-  // store already holds.
+  // Subagents are presented by the composer strip (and their own threads); the
+  // transcript drops the routed fan-out rows entirely. The enriched list above is
+  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  const workLogEntries = useMemo(
+    () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
+    [enrichedWorkLogEntries],
+  );
+  // The strip's liveness (running/settled) reads the child thread's own session and
+  // tail activities, so retain a detail subscription while a subagent runs; settled
+  // subagents stay on whatever the store already holds.
   const liveSubagentThreadIdsKey = useMemo(() => {
     if (!hasWorkLogSubagents) {
       return "";
     }
     const threadIds = new Set<string>();
-    for (const entry of workLogEntries) {
+    for (const entry of enrichedWorkLogEntries) {
       for (const subagent of entry.subagents ?? []) {
         if (subagent.isActive && subagent.resolvedThreadId) {
           threadIds.add(subagent.resolvedThreadId);
@@ -2326,7 +2429,7 @@ export default function ChatView({
       }
     }
     return [...threadIds].toSorted().join("\n");
-  }, [hasWorkLogSubagents, workLogEntries]);
+  }, [enrichedWorkLogEntries, hasWorkLogSubagents]);
   useEffect(() => {
     if (!liveSubagentThreadIdsKey) {
       return;
@@ -2340,16 +2443,6 @@ export default function ChatView({
       }
     };
   }, [liveSubagentThreadIdsKey]);
-  const subagentToolTraceByThreadId = useMemo(
-    () =>
-      hasWorkLogSubagents
-        ? deriveSubagentToolTraceByThreadId({
-            workEntries: workLogEntries,
-            threads: relevantWorkLogThreads,
-          })
-        : EMPTY_SUBAGENT_TOOL_TRACES,
-    [hasWorkLogSubagents, relevantWorkLogThreads, workLogEntries],
-  );
   // Native-CLI parity: while a subagent thread is open, the strip derives from the
   // PARENT thread's activities so all sibling subagents (plus a way back to the
   // main thread) stay visible, with the open subagent marked as viewed.
@@ -2370,6 +2463,15 @@ export default function ChatView({
   const stripSourceLatestTurnId = stripParentThread
     ? (stripParentThread.latestTurn?.turnId ?? null)
     : (activeLatestTurn?.turnId ?? null);
+  const stripSourceLatestTurnState = stripParentThread
+    ? (stripParentThread.latestTurn?.state ?? null)
+    : activeLatestTurnState;
+  const stripSourceLatestTurnStartedAt = stripParentThread
+    ? (stripParentThread.latestTurn?.startedAt ?? null)
+    : activeLatestTurnStartedAt;
+  const stripSourceLatestTurnCompletedAt = stripParentThread
+    ? (stripParentThread.latestTurn?.completedAt ?? null)
+    : activeLatestTurnCompletedAt;
   const stripVisibleTurnIds = useMemo(() => {
     if (!stripParentThread) {
       return workLogVisibleTurnIds;
@@ -2392,16 +2494,26 @@ export default function ChatView({
     : latestTurnSettled
       ? null
       : (activeLatestTurn?.turnId ?? null);
-  // Composer-strip source: routed subagent activities are omitted from the timeline
-  // entries above (they render as nested threads), so the strip derives from an
-  // unfiltered pass or it would structurally never see routed subagents.
+  // Composer-strip source: the strip needs the routed subagent entries the
+  // transcript drops, so it derives from the parent thread's own activities.
   const stripRawWorkLogEntries = useMemo(
     () =>
       deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
         visibleTurnIds: stripVisibleTurnIds,
-        includeRoutedSubagentActivities: true,
+        activeTurnId: stripLiveTurnId,
+        activeTurnStartedAt: stripSourceLatestTurnStartedAt,
+        latestTurnState: stripSourceLatestTurnState,
+        latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
       }),
-    [stripSourceActivities, stripSourceLatestTurnId, stripVisibleTurnIds],
+    [
+      stripLiveTurnId,
+      stripSourceActivities,
+      stripSourceLatestTurnCompletedAt,
+      stripSourceLatestTurnId,
+      stripSourceLatestTurnStartedAt,
+      stripSourceLatestTurnState,
+      stripVisibleTurnIds,
+    ],
   );
   const hasStripWorkLogSubagents = useMemo(
     () => stripRawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -2653,7 +2765,7 @@ export default function ChatView({
   // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
   const workflowSubagentThreadsByToolUseId = useMemo(() => {
     const refs = new Map<string, WorkflowSubagentThreadRef>();
-    for (const entry of workLogEntries) {
+    for (const entry of enrichedWorkLogEntries) {
       for (const subagent of entry.subagents ?? []) {
         if (!subagent.providerThreadId) {
           continue;
@@ -2666,7 +2778,7 @@ export default function ChatView({
       }
     }
     return refs;
-  }, [workLogEntries]);
+  }, [enrichedWorkLogEntries]);
   // Persisted (per-thread) workflow run flags: pausedByUser tells the settled
   // card apart from a plain stop; dismissed retires a settled card the run's
   // activities would otherwise keep visible. Survive reloads via
@@ -2709,6 +2821,7 @@ export default function ChatView({
         phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
+        messages: activeThread?.messages ?? EMPTY_MESSAGES,
         hasPendingApproval: activePendingApproval !== null,
         hasPendingUserInput: activePendingUserInput !== null,
         threadError: activeThread?.error,
@@ -2718,6 +2831,7 @@ export default function ChatView({
       activePendingApproval,
       activePendingUserInput,
       activeThread?.error,
+      activeThread?.messages,
       activeThread?.session,
       localDispatch,
       phase,
@@ -2727,6 +2841,16 @@ export default function ChatView({
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
   const hasLiveTurn = phase === "running";
+  // Providers that clear `activeTurnId` on every terminal event (Claude) would
+  // otherwise leave the transcript with no active turn while work is still in
+  // progress, collapsing the newest answer into a closed "Worked for" disclosure.
+  // The latest turn is the transcript's own notion of "current", so fall back to it.
+  const activeTurnIdForTranscript = activeThread?.session?.activeTurnId ?? activeLatestTurnId;
+  // Defence in depth against a session stuck at "running" with no turn to
+  // complete: nothing would ever drain the composer queue, so messages routed
+  // into it would be swallowed. Server-side reconciliation settles these
+  // sessions; this keeps the composer usable until it does.
+  const hasQueueableLiveTurn = hasLiveTurn && activeThread?.session?.activeTurnId != null;
   const {
     automationProjects,
     automationThreads,
@@ -3037,6 +3161,19 @@ export default function ChatView({
     () => new Set(optimisticUserMessages.map((message) => message.id)),
     [optimisticUserMessages],
   );
+  // The user message a local send anchored at the top of the transcript viewport.
+  // Set at the send sites and kept after the turn settles — collapsing the tail
+  // spacer when a turn ends would visibly yank the settled transcript. The next
+  // send replaces it, and thread switches reset it via the per-thread timeline
+  // remount plus the threadId guard at the render site.
+  const [tailAnchor, setTailAnchor] = useState<{
+    threadId: ThreadId;
+    messageId: MessageId;
+  } | null>(null);
+  // True from send until the tail-anchor hook finishes sliding the sent message
+  // to the viewport top. The auto-follow effect stays quiet while set so the
+  // anchored slide has exactly one scroll owner (see useTailAnchorScroll).
+  const tailAnchorScrollInFlightRef = useRef(false);
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
@@ -3185,7 +3322,9 @@ export default function ChatView({
   const handleRetryThreadDetailSync = useCallback(() => {
     useStore.getState().clearThreadDetailSyncFailure(threadId);
     const api = readNativeApi();
-    void api?.orchestration.subscribeThread({ threadId }).catch(() => undefined);
+    void api?.orchestration
+      .subscribeThread(buildThreadSubscribeInput(threadId))
+      .catch(() => undefined);
   }, [threadId]);
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
   // building it inline in JSX would defeat its `memo()` on every keystroke.
@@ -3734,9 +3873,9 @@ export default function ChatView({
       resolveActiveTurnLiveDiffState({
         latestTurnId: activeLatestTurn?.turnId ?? null,
         turnDiffSummaries,
-        workLogEntries: rawWorkLogEntries,
+        workLogEntries,
       }),
-    [activeLatestTurn?.turnId, rawWorkLogEntries, turnDiffSummaries],
+    [activeLatestTurn?.turnId, turnDiffSummaries, workLogEntries],
   );
   const splitTerminalShortcutLabel = useMemo(
     () =>
@@ -4546,46 +4685,102 @@ export default function ChatView({
     [activeProject, persistProjectScripts],
   );
 
-  const handleRuntimeModeChange = useCallback(
-    (mode: RuntimeMode) => {
-      if (mode === runtimeMode) return;
-      setComposerDraftRuntimeMode(threadId, mode);
-      if (isLocalDraftThread) {
-        setDraftThreadContext(threadId, { runtimeMode: mode });
+  const persistRuntimeModeChange = useCallback(
+    async (mode: RuntimeMode): Promise<boolean> => {
+      let queue = runtimeModePersistenceQueuesRef.current.get(threadId);
+      if (!queue) {
+        queue = createRuntimeModePersistenceQueue(runtimeMode);
+        runtimeModePersistenceQueuesRef.current.set(threadId, queue);
       }
-      if (serverThread) {
-        const api = readNativeApi();
-        if (api) {
-          void api.orchestration
-            .dispatchCommand({
-              type: "thread.runtime-mode.set",
-              commandId: newCommandId(),
-              threadId,
-              runtimeMode: mode,
-              createdAt: new Date().toISOString(),
-            })
-            .catch((error) => {
-              toastManager.add({
-                type: "error",
-                title: "Could not update access mode",
-                description:
-                  error instanceof Error ? error.message : "An unexpected error occurred.",
-              });
+      return queue.persist(mode, async (currentMode, nextMode) => {
+        if (serverThread) {
+          const api = readNativeApi();
+          if (!api) {
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: "Synara is not connected to the server.",
             });
+            return false;
+          }
+          const persistenceInput = {
+            currentModelSelection: serverThread.modelSelection,
+            ...(nextMode === "auto" ? { nextModelSelection: selectedModelSelection } : {}),
+            currentRuntimeMode: currentMode,
+            nextRuntimeMode: nextMode,
+            persistModelSelection: (modelSelection: ModelSelection) =>
+              api.orchestration.dispatchCommand({
+                type: "thread.meta.update",
+                commandId: newCommandId(),
+                threadId,
+                modelSelection,
+              }),
+            persistRuntimeMode: (runtimeMode: RuntimeMode) =>
+              api.orchestration.dispatchCommand({
+                type: "thread.runtime-mode.set",
+                commandId: newCommandId(),
+                threadId,
+                runtimeMode,
+                createdAt: new Date().toISOString(),
+              }),
+          };
+          try {
+            await persistModelSelectionBeforeRuntimeMode(persistenceInput);
+          } catch (error) {
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            });
+            return false;
+          }
         }
-      }
-      scheduleComposerFocus();
+        setComposerDraftRuntimeMode(threadId, nextMode);
+        if (isLocalDraftThread) {
+          setDraftThreadContext(threadId, { runtimeMode: nextMode });
+        }
+        scheduleComposerFocus();
+        return true;
+      });
     },
     [
       isLocalDraftThread,
       runtimeMode,
       scheduleComposerFocus,
+      selectedModelSelection,
       serverThread,
       setComposerDraftRuntimeMode,
       setDraftThreadContext,
       threadId,
     ],
   );
+  const handleRuntimeModeChange = useCallback(
+    (mode: RuntimeMode) => {
+      void persistRuntimeModeChange(mode);
+    },
+    [persistRuntimeModeChange],
+  );
+
+  useEffect(() => {
+    if (
+      activeThread &&
+      runtimeMode === "auto" &&
+      !providerModelSupportsAutoRuntimeMode(
+        selectedProvider,
+        selectedRuntimeModel,
+        activeProviderStatus,
+      )
+    ) {
+      handleRuntimeModeChange("approval-required");
+    }
+  }, [
+    activeProviderStatus,
+    activeThread,
+    handleRuntimeModeChange,
+    runtimeMode,
+    selectedProvider,
+    selectedRuntimeModel,
+  ]);
 
   const handleInteractionModeChange = useCallback(
     (mode: ProviderInteractionMode) => {
@@ -4663,30 +4858,27 @@ export default function ChatView({
         return;
       }
 
-      if (
-        input.modelSelection !== undefined &&
-        (input.modelSelection.model !== serverThread.modelSelection.model ||
-          input.modelSelection.provider !== serverThread.modelSelection.provider ||
-          JSON.stringify(input.modelSelection.options ?? null) !==
-            JSON.stringify(serverThread.modelSelection.options ?? null))
-      ) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: input.threadId,
-          modelSelection: input.modelSelection,
-        });
-      }
-
-      if (input.runtimeMode !== serverThread.runtimeMode) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.runtime-mode.set",
-          commandId: newCommandId(),
-          threadId: input.threadId,
-          runtimeMode: input.runtimeMode,
-          createdAt: input.createdAt,
-        });
-      }
+      await persistModelSelectionBeforeRuntimeMode({
+        currentModelSelection: serverThread.modelSelection,
+        ...(input.modelSelection !== undefined ? { nextModelSelection: input.modelSelection } : {}),
+        currentRuntimeMode: serverThread.runtimeMode,
+        nextRuntimeMode: input.runtimeMode,
+        persistModelSelection: (modelSelection) =>
+          api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            modelSelection,
+          }),
+        persistRuntimeMode: (runtimeMode) =>
+          api.orchestration.dispatchCommand({
+            type: "thread.runtime-mode.set",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            runtimeMode,
+            createdAt: input.createdAt,
+          }),
+      });
 
       if (input.interactionMode !== serverThread.interactionMode) {
         await api.orchestration.dispatchCommand({
@@ -4722,6 +4914,8 @@ export default function ChatView({
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
+    // A user scroll gesture takes over from any in-flight tail-anchor slide.
+    tailAnchorScrollInFlightRef.current = false;
   }, []);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
@@ -4827,6 +5021,12 @@ export default function ChatView({
     // Re-apply the bottom stick only for real transcript messages; tool/work
     // rows can arrive quickly and should not churn scroll/layout work.
     const frameId = window.requestAnimationFrame(() => {
+      // The tail-anchor slide owns the scroll after a send; a re-snap here
+      // would hard-jump past the smooth slide mid-flight. Once the anchor
+      // settles the spacer keeps the end position exact, so nothing is missed.
+      if (tailAnchorScrollInFlightRef.current) {
+        return;
+      }
       const shouldAnimate = animateNextAutoFollowScrollRef.current;
       animateNextAutoFollowScrollRef.current = false;
       scrollToEnd(shouldAnimate);
@@ -5145,6 +5345,10 @@ export default function ChatView({
   useEffect(() => {
     composerAssistantSelectionsRef.current = composerAssistantSelections;
   }, [composerAssistantSelections]);
+
+  useEffect(() => {
+    composerBrowserAnnotationsRef.current = composerBrowserAnnotations;
+  }, [composerBrowserAnnotations]);
 
   useEffect(() => {
     composerTerminalContextsRef.current = composerTerminalContexts;
@@ -5608,6 +5812,21 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
+  // UI spinning with no explanation, so the stop affordances report it.
+  const onInterruptFromStopControl = useCallback(() => {
+    void onInterrupt().catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Could not stop the current response",
+        description:
+          error instanceof Error
+            ? error.message
+            : "The interrupt request failed. Try again in a moment.",
+      });
+    });
+  }, [onInterrupt]);
+
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
     if (!api || !activeThread || !workflowRunState) return;
@@ -5686,7 +5905,7 @@ export default function ChatView({
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
 
   const onProviderModelSelect = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
+    async (provider: ProviderKind, model: ModelSlug) => {
       if (!activeThread) return;
       if (lockedProvider !== null && provider !== lockedProvider) {
         scheduleComposerFocus();
@@ -5697,27 +5916,57 @@ export default function ChatView({
         availableOptions: modelOptionsByProvider[provider],
         fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
       });
-      const nextModelSelection: ModelSelection = {
+      const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model: resolvedModel,
-      };
-      setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
-      if (provider === "cursor") {
-        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-          persistSticky: true,
-          model: resolvedModel,
-        });
+        runtimeModels: runtimeModelsByProvider[provider],
+      });
+      const nextModelSelection = buildModelSelection(
+        provider,
+        resolvedModel,
+        undefined,
+        provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
+      );
+      const providerStatus = findProviderStatus(providerStatuses, provider);
+      const nextRuntimeMode =
+        runtimeMode === "auto" &&
+        !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
+          ? "approval-required"
+          : normalizeRuntimeModeForProvider(runtimeMode, provider);
+      // Commit the canonical downgrade before storing an incompatible model.
+      // On failure the Auto draft remains visible so compatibility checks can retry.
+      const didCommitSelection = await commitAfterRuntimeModePersistence({
+        currentRuntimeMode: runtimeMode,
+        nextRuntimeMode,
+        persistRuntimeMode: persistRuntimeModeChange,
+        commit: () => {
+          setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
+          if (provider === "cursor") {
+            setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+              persistSticky: true,
+              model: resolvedModel,
+            });
+          }
+        },
+      });
+      if (!didCommitSelection) {
+        scheduleComposerFocus();
+        return;
       }
       scheduleComposerFocus();
     },
     [
       activeThread,
+      customModelsByProvider,
       lockedProvider,
+      modelOptionsByProvider,
+      persistRuntimeModeChange,
+      providerStatuses,
+      runtimeMode,
+      runtimeModelsByProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
-      customModelsByProvider,
-      modelOptionsByProvider,
     ],
   );
 
@@ -5741,7 +5990,7 @@ export default function ChatView({
       ) {
         event.preventDefault();
         event.stopPropagation();
-        void onInterrupt();
+        onInterruptFromStopControl();
         return;
       }
       // Ctrl+B mirrors the native CLI: background all foreground running
@@ -5998,7 +6247,7 @@ export default function ChatView({
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
     onToggleDiff,
-    onInterrupt,
+    onInterruptFromStopControl,
     onSplitSurface,
     showGitActions,
     isGitRepo,
@@ -6189,7 +6438,7 @@ export default function ChatView({
       }
       const confirmed = await api.dialogs.confirm(
         [
-          "Undo the latest file changes shown in this card?",
+          "Undo the file changes shown in this card?",
           "Earlier file changes will remain available to undo.",
           "Messages and provider conversation history will be kept.",
           "This action cannot be undone.",
@@ -6199,32 +6448,38 @@ export default function ChatView({
 
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
-      const turnCount = Math.max(...turnCounts);
+      // The card can merge several turns. The server refuses to undo a turn while
+      // newer file changes are still applied, so revert newest-first and stop at
+      // the first failure rather than leaving the card half-undone silently.
+      const orderedTurnCounts = [...new Set(turnCounts)].toSorted((left, right) => right - left);
       const requestedAt = new Date().toISOString();
       setPendingFileUndo({
         threadId: activeThread.id,
-        turnCount,
+        turnCounts: orderedTurnCounts,
         existingFailureActivityIds: activeThread.activities
           .filter((activity) => activity.kind === "checkpoint.revert.failed")
           .map((activity) => activity.id),
       });
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.checkpoint.revert",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          turnCount,
-          scope: "files",
-          createdAt: requestedAt,
-        });
-      } catch (err) {
+      const dispatchReverts = async () => {
+        for (const turnCount of orderedTurnCounts) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.checkpoint.revert",
+            commandId: newCommandId(),
+            threadId: activeThread.id,
+            turnCount,
+            scope: "files",
+            createdAt: requestedAt,
+          });
+        }
+      };
+      await dispatchReverts().catch((err: unknown) => {
         setPendingFileUndo(null);
         setIsRevertingCheckpoint(false);
         setThreadError(
           activeThread.id,
           err instanceof Error ? err.message : "Failed to undo file changes.",
         );
-      }
+      });
     },
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
@@ -6618,6 +6873,8 @@ export default function ChatView({
       const restoredFiles = queuedTurn.kind === "chat" ? queuedTurn.files : [];
       const restoredAssistantSelections =
         queuedTurn.kind === "chat" ? queuedTurn.assistantSelections : [];
+      const restoredBrowserAnnotations =
+        queuedTurn.kind === "chat" ? queuedTurn.browserAnnotations : [];
       const restoredFileComments = queuedTurn.kind === "chat" ? queuedTurn.fileComments : [];
       promptRef.current = nextPrompt;
       clearComposerDraftContent(activeThread.id);
@@ -6637,6 +6894,9 @@ export default function ChatView({
         }
         for (const selection of restoredAssistantSelections) {
           addComposerAssistantSelectionToDraft(selection);
+        }
+        if (restoredBrowserAnnotations.length > 0) {
+          addComposerDraftBrowserAnnotations(activeThread.id, restoredBrowserAnnotations);
         }
         for (const comment of restoredFileComments) {
           addComposerFileCommentToDraft(comment);
@@ -6673,6 +6933,7 @@ export default function ChatView({
     [
       activeThread,
       addComposerAssistantSelectionToDraft,
+      addComposerDraftBrowserAnnotations,
       addComposerFileCommentToDraft,
       addComposerFilesToDraft,
       addComposerImagesToDraft,
@@ -6704,9 +6965,15 @@ export default function ChatView({
 
   const onSend = async (
     e?: { preventDefault: () => void },
-    dispatchMode: "queue" | "steer" = "queue",
+    requestedDispatchMode?: "queue" | "steer",
     queuedTurn?: QueuedComposerChatTurn,
   ): Promise<boolean> => {
+    const dispatchMode =
+      requestedDispatchMode ??
+      resolveFollowUpDispatchMode({
+        behavior: settings.followUpBehavior,
+        hasLiveTurn,
+      });
     e?.preventDefault();
     const api = readNativeApi();
     const lateSendHandlers = lateComposerSendHandlersRef.current;
@@ -6786,6 +7053,8 @@ export default function ChatView({
     const composerFilesForSend = queuedChatTurn?.files ?? composerFiles;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
+    const composerBrowserAnnotationsForSend =
+      queuedChatTurn?.browserAnnotations ?? composerBrowserAnnotations;
     const composerFileCommentsForSend = queuedChatTurn?.fileComments ?? composerFileComments;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
@@ -6815,6 +7084,7 @@ export default function ChatView({
       imageCount: composerImagesForSend.length,
       fileCount: composerFilesForSend.length,
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
+      browserAnnotationCount: composerBrowserAnnotationsForSend.length,
       fileCommentCount: composerFileCommentsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
       pastedTexts: composerPastedTextsForSend,
@@ -6838,6 +7108,7 @@ export default function ChatView({
       composerImagesForSend.length > 0 ||
       composerFilesForSend.length > 0 ||
       composerAssistantSelectionsForSend.length > 0 ||
+      composerBrowserAnnotationsForSend.length > 0 ||
       composerFileCommentsForSend.length > 0 ||
       sendableComposerTerminalContexts.length > 0 ||
       sendableComposerPastedTexts.length > 0;
@@ -6853,7 +7124,7 @@ export default function ChatView({
         interactionModeForSend = followUp.interactionMode;
         trimmedPromptForSend = followUp.text.trim();
       } else {
-        if (hasLiveTurn && dispatchMode === "queue") {
+        if (hasQueueableLiveTurn && dispatchMode === "queue") {
           clearComposerInput(activeThread.id);
           scheduleComposerFocus();
           enqueueQueuedComposerTurn(activeThread.id, {
@@ -6885,6 +7156,7 @@ export default function ChatView({
       composerImagesForSend.length === 0 &&
       composerFilesForSend.length === 0 &&
       composerAssistantSelectionsForSend.length === 0 &&
+      composerBrowserAnnotationsForSend.length === 0 &&
       composerFileCommentsForSend.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       sendableComposerPastedTexts.length === 0 &&
@@ -7115,7 +7387,7 @@ export default function ChatView({
       });
     }
 
-    if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
+    if (hasQueueableLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
       clearComposerInput(activeThread.id);
       scheduleComposerFocus();
       const queuedImagesForPersistence = await Promise.all(
@@ -7139,6 +7411,7 @@ export default function ChatView({
           images: queuedImagesForPersistence,
           files: composerFilesForSend,
           assistantSelections: composerAssistantSelectionsForSend,
+          browserAnnotations: composerBrowserAnnotationsForSend,
           terminalContexts: sendableComposerTerminalContexts,
           fileComments: composerFileCommentsForSend,
           pastedTexts: sendableComposerPastedTexts,
@@ -7147,6 +7420,7 @@ export default function ChatView({
         images: queuedImagesForPersistence,
         files: composerFilesForSend,
         assistantSelections: composerAssistantSelectionsForSend,
+        browserAnnotations: composerBrowserAnnotationsForSend,
         fileComments: composerFileCommentsForSend,
         terminalContexts: sendableComposerTerminalContexts,
         pastedTexts: sendableComposerPastedTexts,
@@ -7181,6 +7455,8 @@ export default function ChatView({
         titleSeed = `File: ${composerFilesForSend[0]?.name ?? "attachment"}`;
       } else if (composerAssistantSelectionsForSend.length > 0) {
         titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsForSend.length);
+      } else if (composerBrowserAnnotationsForSend.length > 0) {
+        titleSeed = formatBrowserAnnotationLabel(composerBrowserAnnotationsForSend[0]!);
       } else if (sendableComposerTerminalContexts.length > 0) {
         titleSeed = formatTerminalContextLabel(sendableComposerTerminalContexts[0]!);
       } else if (composerFileCommentsForSend.length > 0) {
@@ -7354,36 +7630,45 @@ export default function ChatView({
       ? setupProjectScript(targetProjectScriptsForSend)
       : null;
     const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
+    const messageIdForSend = newMessageId();
 
     sendInFlightRef.current = true;
-    beginLocalDispatch(
-      baseBranchForWorktree
+    beginLocalDispatch({
+      expectedUserMessageId: messageIdForSend,
+      ...(baseBranchForWorktree
         ? { worktreeSetupStepId: "create-worktree", setupScriptName: worktreeSetupScriptName }
-        : undefined,
-    );
+        : {}),
+    });
 
     const composerImagesSnapshot = [...composerImagesForSend];
     const composerFilesSnapshot = [...composerFilesForSend];
     const composerAssistantSelectionsSnapshot = [...composerAssistantSelectionsForSend];
+    const composerBrowserAnnotationsSnapshot = composerBrowserAnnotationsForSend.map(
+      (annotation) => ({ ...annotation, source: { ...annotation.source } }),
+    );
     const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
     // Trailing blocks are appended innermost-to-outermost: assistant selections,
-    // terminal contexts, file comments, then pasted text (outermost). The display
+    // terminal contexts, file comments, pasted text, then browser annotations
+    // (outermost). The display
     // extractors unwrap them in the reverse order.
-    const messageTextForSend = appendPastedTextsToPrompt(
-      appendFileCommentsToPrompt(
-        appendTerminalContextsToPrompt(
-          appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
-          composerTerminalContextsSnapshot,
+    const messageTextForSend = appendBrowserAnnotationsToPrompt(
+      appendPastedTextsToPrompt(
+        appendFileCommentsToPrompt(
+          appendTerminalContextsToPrompt(
+            appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
+            composerTerminalContextsSnapshot,
+          ),
+          composerFileCommentsSnapshot,
         ),
-        composerFileCommentsSnapshot,
+        composerPastedTextsSnapshot,
       ),
-      composerPastedTextsSnapshot,
+      composerBrowserAnnotationsSnapshot,
+      messageIdForSend,
     );
-    const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingTextSeed =
       messageTextForSend || (composerImagesSnapshot.length > 0 ? IMAGE_ONLY_BOOTSTRAP_PROMPT : "");
@@ -7455,9 +7740,13 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    // Mark the transcript as anchored before the optimistic row lands so the
-    // re-snap effect on row count change pulls us to the new tail.
+    // Mark the transcript as anchored before the optimistic row lands. The tail
+    // anchor sizes the spacer that lets this message sit at the viewport top,
+    // and its hook owns the slide; auto-follow stays armed for bookkeeping but
+    // pauses until the in-flight flag clears.
     armTranscriptAutoFollow(threadIdForSend, true);
+    tailAnchorScrollInFlightRef.current = true;
+    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -7547,6 +7836,9 @@ export default function ChatView({
           targetProjectDefaultModelSelectionForSend?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
+        selectedModelSelectionForSend.provider === "claudeAgent"
+          ? selectedModelSelectionForSend.supportsAutoMode
+          : undefined,
       );
 
       if (isLocalDraftThread) {
@@ -7683,13 +7975,17 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
-      // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer. The
-      // live session provider decides the interrupt path server-side, so the
-      // gate keys off it rather than the requested model selection.
+      // Steers on providers without native mid-turn steering interrupt the live
+      // turn before re-dispatching; hold queued auto-dispatch through that gap
+      // so it can't race the steer. The live session provider decides the
+      // interrupt path server-side, so the gate keys off it rather than the
+      // requested model selection.
       const liveProviderForSteerGate =
         activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
-      if (dispatchMode === "steer" && liveProviderForSteerGate !== "codex") {
+      if (
+        dispatchMode === "steer" &&
+        !providerSupportsNativeTurnSteering(liveProviderForSteerGate)
+      ) {
         setQueuedSteerGate({
           sawInterruptGap: false,
           gapStartedAt: null,
@@ -7767,6 +8063,7 @@ export default function ChatView({
         composerImagesRef.current.length === 0 &&
         composerFilesRef.current.length === 0 &&
         composerAssistantSelectionsRef.current.length === 0 &&
+        composerBrowserAnnotationsRef.current.length === 0 &&
         composerFileCommentsRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0 &&
         composerPastedTextsRef.current.length === 0
@@ -7794,6 +8091,7 @@ export default function ChatView({
         for (const selection of composerAssistantSelectionsSnapshot) {
           addComposerAssistantSelectionToDraft(selection);
         }
+        addComposerDraftBrowserAnnotations(threadIdForSend, composerBrowserAnnotationsSnapshot);
         for (const comment of composerFileCommentsSnapshot) {
           addComposerFileCommentToDraft(comment);
         }
@@ -7824,6 +8122,7 @@ export default function ChatView({
       requestId: ApprovalRequestId,
       decision: ProviderApprovalDecision,
       lifecycleGeneration?: string,
+      requestKind?: ProviderRequestKind,
     ) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
@@ -7832,10 +8131,14 @@ export default function ChatView({
       setRespondingRequestKeys((existing) =>
         existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
-      // Durably persist "always allow" client-side so the next turn (after an
-      // idle-stop or runtime restart) keeps full-access instead of asking again.
-      // The server's session override only covers the current live turn.
-      const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(runtimeMode, decision);
+      // Persist supervised "always allow" client-side so the next turn (after an
+      // idle-stop or runtime restart) uses full access. Auto remains the durable
+      // thread policy; its server-side override applies only to the live session.
+      const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(
+        runtimeMode,
+        decision,
+        requestKind,
+      );
       if (durableRuntimeMode) {
         setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
       }
@@ -8099,7 +8402,7 @@ export default function ChatView({
     });
 
     sendInFlightRef.current = true;
-    beginLocalDispatch();
+    beginLocalDispatch({ expectedUserMessageId: messageIdForSend });
     setThreadError(threadIdForSend, null);
     setOptimisticUserMessages((existing) => [
       ...existing,
@@ -8114,6 +8417,8 @@ export default function ChatView({
       },
     ]);
     armTranscriptAutoFollow(threadIdForSend, true);
+    tailAnchorScrollInFlightRef.current = true;
+    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
@@ -8168,13 +8473,17 @@ export default function ChatView({
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
-      // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer. The
-      // live session provider decides the interrupt path server-side, so the
-      // gate keys off it rather than the requested model selection.
+      // Steers on providers without native mid-turn steering interrupt the live
+      // turn before re-dispatching; hold queued auto-dispatch through that gap
+      // so it can't race the steer. The live session provider decides the
+      // interrupt path server-side, so the gate keys off it rather than the
+      // requested model selection.
       const livePlanProviderForSteerGate =
         activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
-      if (dispatchMode === "steer" && livePlanProviderForSteerGate !== "codex") {
+      if (
+        dispatchMode === "steer" &&
+        !providerSupportsNativeTurnSteering(livePlanProviderForSteerGate)
+      ) {
         setQueuedSteerGate({
           sawInterruptGap: false,
           gapStartedAt: null,
@@ -8242,6 +8551,7 @@ export default function ChatView({
       const editedTextWithOriginalContext = appendOriginalComposerPromptBlocks({
         editedPrompt: text,
         originalPrompt: originalMessage.text,
+        messageId,
       });
       const outgoingMessageText = formatOutgoingComposerPrompt({
         provider: selectedProvider,
@@ -8340,6 +8650,7 @@ export default function ChatView({
       images: [],
       files: [],
       assistantSelections: [],
+      browserAnnotations: [],
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
@@ -8437,7 +8748,7 @@ export default function ChatView({
 
   useEffect(() => {
     if (
-      hasLiveTurn ||
+      hasQueueableLiveTurn ||
       phase === "disconnected" ||
       isSendBusy ||
       isConnecting ||
@@ -8480,7 +8791,7 @@ export default function ChatView({
     isConnecting,
     isSendBusy,
     pendingUserInputs.length,
-    hasLiveTurn,
+    hasQueueableLiveTurn,
     queuedAutoDispatchTick,
     queuedComposerTurns,
     queuedSteerGate,
@@ -9684,7 +9995,14 @@ export default function ChatView({
       !menuIsActive &&
       extractChatAutomationInvocation(snapshot.value) !== null
     ) {
-      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      void onSend(
+        undefined,
+        resolveFollowUpDispatchMode({
+          behavior: settings.followUpBehavior,
+          hasLiveTurn,
+          useOppositeBehavior: event.metaKey || event.ctrlKey,
+        }),
+      );
       return true;
     }
 
@@ -9787,7 +10105,14 @@ export default function ChatView({
         setComposerDraftPromptHistorySavedDraft(threadId, null);
       }
       expectedPromptHistoryPromptRef.current = null;
-      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      void onSend(
+        undefined,
+        resolveFollowUpDispatchMode({
+          behavior: settings.followUpBehavior,
+          hasLiveTurn,
+          useOppositeBehavior: event.metaKey || event.ctrlKey,
+        }),
+      );
       return true;
     }
     return false;
@@ -10035,6 +10360,9 @@ export default function ChatView({
   };
 
   const runtimeUsageControlsProps = {
+    provider: selectedProvider,
+    runtimeModel: selectedRuntimeModel,
+    providerStatus: activeProviderStatus,
     runtimeMode,
     onRuntimeModeChange: handleRuntimeModeChange,
     contextWindow: runtimeUsageContextWindow,
@@ -10476,12 +10804,14 @@ export default function ChatView({
                   {!isComposerApprovalState &&
                     pendingUserInputs.length === 0 &&
                     (composerAssistantSelections.length > 0 ||
+                      composerBrowserAnnotations.length > 0 ||
                       composerFileComments.length > 0 ||
                       composerPastedTexts.length > 0 ||
                       composerFiles.length > 0 ||
                       composerImages.length > 0) && (
                       <ComposerReferenceAttachments
                         assistantSelections={composerAssistantSelections}
+                        browserAnnotations={composerBrowserAnnotations}
                         fileComments={composerFileComments}
                         pastedTexts={composerPastedTexts}
                         files={composerFiles}
@@ -10489,6 +10819,7 @@ export default function ChatView({
                         nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
                         onExpandImage={setExpandedImage}
                         onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                        onRemoveBrowserAnnotation={removeComposerBrowserAnnotationFromDraft}
                         onRemoveFileComments={clearComposerFileCommentsFromDraft}
                         onRemovePastedText={removeComposerPastedTextFromDraft}
                         onShowPastedTextInField={showComposerPastedTextInField}
@@ -10677,7 +11008,7 @@ export default function ChatView({
                           variant="prominent"
                           size="icon-xs"
                           className="sm:size-[26px]"
-                          onClick={() => void onInterrupt()}
+                          onClick={onInterruptFromStopControl}
                           aria-label="Stop generation"
                           title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                         >
@@ -10891,6 +11222,8 @@ export default function ChatView({
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
           dockLauncherAction={dockLauncherAction}
+          rightDockOpen={rightDockOpen}
+          {...(onToggleRightDock ? { onToggleRightDock } : {})}
           environment={isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
@@ -11090,10 +11423,10 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
-                    activeTurnId={activeThread.session?.activeTurnId ?? null}
+                    activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
-                    isWorking={isWorking}
+                    isWorking={hasLiveTurn}
                     worktreeSetup={activeWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
@@ -11104,13 +11437,18 @@ export default function ChatView({
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     enteringUserMessageIds={enteringUserMessageIds}
+                    tailAnchorMessageId={
+                      tailAnchor !== null && tailAnchor.threadId === activeThread.id
+                        ? tailAnchor.messageId
+                        : null
+                    }
+                    tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
                     crossTaskOrigin={crossTaskOrigin}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
-                    subagentToolTraceByThreadId={subagentToolTraceByThreadId}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}

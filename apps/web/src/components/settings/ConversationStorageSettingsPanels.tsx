@@ -5,30 +5,25 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
+import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 
 import { Button } from "~/components/ui/button";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { ArchiveIcon } from "~/lib/icons";
-import {
-  deleteArchivedThreadFromClient,
-  deleteArchivedThreadsFromClient,
-} from "~/lib/archivedThreadDelete";
+import { deleteArchivedThreadsFromClient } from "~/lib/archivedThreadDelete";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { serverQueryKeys, serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
 import { unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
-import {
-  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
-  SETTINGS_EMPTY_STATE_CLASS_NAME,
-} from "~/settingsPanelStyles";
+import { SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createThreadShellsSelector } from "~/storeSelectors";
 import { formatWorktreePathForDisplay } from "~/worktreeCleanup";
 import { toastManager } from "../ui/toast";
-import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { SettingsEmptyState, SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 type WorktreeAssociation = {
   worktreePath?: string | null | undefined;
@@ -60,17 +55,9 @@ function compareArchivedThreads(left: ArchivedSortableThread, right: ArchivedSor
 
 function WorktreesStatus(props: { children: string; error?: boolean }) {
   return (
-    <div
-      className={cn(
-        SETTINGS_EMPTY_STATE_CLASS_NAME,
-        "px-4 py-6 text-sm",
-        props.error
-          ? "border-destructive/30 bg-destructive/5 text-destructive"
-          : "text-muted-foreground",
-      )}
-    >
+    <SettingsEmptyState layout="status" tone={props.error ? "destructive" : "muted"}>
       {props.children}
-    </div>
+    </SettingsEmptyState>
   );
 }
 
@@ -289,7 +276,11 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
   const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
   const projects = useStore((store) => store.projects);
   const archivedGroups = useMemo(() => {
-    const archivedThreads = threadShells.filter((thread) => thread.archivedAt != null);
+    // Subagent threads are archived and restored through their parent, so only
+    // top-level threads are listed here.
+    const archivedThreads = threadShells.filter(
+      (thread) => thread.archivedAt != null && (thread.parentThreadId ?? null) === null,
+    );
     const knownProjectIds = new Set(projects.map((project) => project.id));
     const groups: Array<{
       project: (typeof projects)[number] | null;
@@ -337,9 +328,15 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
       );
       if (!confirmed) return;
       try {
-        await deleteArchivedThreadFromClient({
+        // Subagent threads are hidden from this list and unreachable without their
+        // parent, so deleting the parent removes the whole subtree. Children go
+        // first so a mid-flight failure cannot strand them without a parent entry.
+        const subagentThreadIds = collectSubagentDescendants(threadShells, threadId).map(
+          (thread) => thread.id,
+        );
+        await deleteArchivedThreadsFromClient({
           api: api.orchestration,
-          threadId,
+          threadIds: [...subagentThreadIds.toReversed(), threadId],
           removeDeletedThreadFromClientState,
         });
         toastManager.add({
@@ -355,7 +352,7 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
         });
       }
     },
-    [removeDeletedThreadFromClientState],
+    [removeDeletedThreadFromClientState, threadShells],
   );
 
   const handleContextMenu = useCallback(
@@ -382,7 +379,7 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
 
   if (archivedGroups.length === 0) {
     return (
-      <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
+      <SettingsEmptyState>
         <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
           <ArchiveIcon className="size-5" />
         </div>
@@ -390,7 +387,7 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
         <div className="mt-1 text-sm text-muted-foreground">
           Archived threads will appear here and can be restored to the sidebar.
         </div>
-      </div>
+      </SettingsEmptyState>
     );
   }
 

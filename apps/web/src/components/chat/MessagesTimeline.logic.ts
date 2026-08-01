@@ -22,6 +22,14 @@ import {
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
+export function canSubmitUserMessageEdit(input: {
+  draft: string;
+  allowEmpty: boolean;
+  disabled: boolean;
+}): boolean {
+  return (input.allowEmpty || input.draft.trim().length > 0) && !input.disabled;
+}
+
 // Ordered item folded into a settled turn's single "Worked for Xs" disclosure.
 // A turn can interleave tool work and intermediate assistant narration
 // (preambles), so the collapsed panel keeps both in chronological order.
@@ -972,6 +980,23 @@ function workLogToolDetailsEqual(a: WorkLogEntry["toolDetails"], b: WorkLogEntry
   );
 }
 
+function workLogLiveActivitiesEqual(
+  a: WorkLogEntry["liveActivity"],
+  b: WorkLogEntry["liveActivity"],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.state === b.state &&
+    a.label === b.label &&
+    a.startedAt === b.startedAt &&
+    a.lastActivityAt === b.lastActivityAt &&
+    a.detail === b.detail &&
+    a.progress === b.progress &&
+    a.elapsedSeconds === b.elapsedSeconds
+  );
+}
+
 function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
   return (
     a.id === b.id &&
@@ -995,6 +1020,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     workLogSubagentsEqual(a.subagents, b.subagents) &&
     workLogAutomationsEqual(a.automation, b.automation) &&
     workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
+    workLogLiveActivitiesEqual(a.liveActivity, b.liveActivity) &&
     workLogToolDetailsEqual(a.toolDetails, b.toolDetails)
   );
 }

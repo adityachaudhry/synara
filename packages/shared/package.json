@@ -8,6 +8,10 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./runtimeMode": {
+      "types": "./src/runtimeMode.ts",
+      "import": "./src/runtimeMode.ts"
+    },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"
@@ -31,6 +35,14 @@
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
+    },
+    "./loginShellEnvironment": {
+      "types": "./src/loginShellEnvironment.ts",
+      "import": "./src/loginShellEnvironment.ts"
+    },
+    "./synaraHome": {
+      "types": "./src/synaraHome.ts",
+      "import": "./src/synaraHome.ts"
     },
     "./staticSnapshot": {
       "types": "./src/staticSnapshot.ts",
@@ -128,6 +140,10 @@
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
     },
+    "./threadHierarchy": {
+      "types": "./src/threadHierarchy.ts",
+      "import": "./src/threadHierarchy.ts"
+    },
     "./subagents": {
       "types": "./src/subagents.ts",
       "import": "./src/subagents.ts"
@@ -216,6 +232,18 @@
       "types": "./src/threadMentions.ts",
       "import": "./src/threadMentions.ts"
     },
+    "./browserAutomationCatalogue": {
+      "types": "./src/browserAutomationCatalogue.ts",
+      "import": "./src/browserAutomationCatalogue.ts"
+    },
+    "./browserAutomationErrors": {
+      "types": "./src/browserAutomationErrors.ts",
+      "import": "./src/browserAutomationErrors.ts"
+    },
+    "./browserAutomationMcpError": {
+      "types": "./src/browserAutomationMcpError.ts",
+      "import": "./src/browserAutomationMcpError.ts"
+    },
     "./unifiedPatchStats": {
       "types": "./src/unifiedPatchStats.ts",
       "import": "./src/unifiedPatchStats.ts"
@@ -223,6 +251,10 @@
     "./providerDeliveryBlock": {
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"
+    },
+    "./browserAnnotations": {
+      "types": "./src/browserAnnotations.ts",
+      "import": "./src/browserAnnotations.ts"
     }
   },
   "scripts": {

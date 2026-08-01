@@ -74,6 +74,7 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
+import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
   EditedFileRowContent,
@@ -86,6 +87,7 @@ import {
   type UserTurnMarkerKind,
 } from "./userTurnMarker";
 import {
+  canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
   chunkCollapsedTurnItems,
   computeStableMessagesTimelineRows,
@@ -102,6 +104,7 @@ import {
 } from "./MessagesTimeline.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
+import { useTailAnchorScroll } from "./useTailAnchorScroll";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -140,7 +143,6 @@ import {
   disclosureContentClassName,
 } from "~/lib/disclosureMotion";
 import { getAppTypographyScale } from "../../lib/appTypography";
-import type { SubagentToolTrace } from "./subagentToolTrace.logic";
 import {
   USER_MESSAGE_COLLAPSED_FADE_LINES,
   USER_MESSAGE_COLLAPSED_MAX_LINES,
@@ -378,6 +380,17 @@ interface MessagesTimelineProps {
   threadMarkers?: readonly ThreadMarker[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
+  /**
+   * Just-sent user message to anchor at the top of the viewport for the live turn.
+   * While set, the tail spacer reserves the space below it so the streaming response
+   * fills the remaining viewport; null collapses the reserve (turn finished).
+   */
+  tailAnchorMessageId?: MessageId | null;
+  /**
+   * Shared flag set by ChatView on send and cleared by the tail-anchor hook once
+   * the anchored slide settles; ChatView's auto-follow re-snaps pause while set.
+   */
+  tailAnchorScrollInFlightRef?: RefObject<boolean> | undefined;
   /** Provenance for a conversation created from another Synara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
@@ -390,8 +403,6 @@ interface MessagesTimelineProps {
   onOpenThread?: (threadId: ThreadId) => void;
   /** Open an automation's detail page from a "created automation" transcript card. */
   onOpenAutomation?: (automationId: string) => void;
-  /** Recent child-thread tool calls rendered under subagent rows, keyed by child thread id. */
-  subagentToolTraceByThreadId?: ReadonlyMap<string, SubagentToolTrace>;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
@@ -439,6 +450,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onTogglePinMessage,
   threadMarkers: threadMarkersProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
+  tailAnchorMessageId: tailAnchorMessageIdProp,
+  tailAnchorScrollInFlightRef,
   crossTaskOrigin: crossTaskOriginProp,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
@@ -449,7 +462,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
-  subagentToolTraceByThreadId,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onUndoTurnFiles,
@@ -485,6 +497,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const followLiveOutput = followLiveOutputProp ?? false;
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
+  const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
+  const [settledTailAnchorMessageId, setSettledTailAnchorMessageId] = useState<MessageId | null>(
+    null,
+  );
+  const tailAnchorSlideInFlight =
+    tailAnchorMessageId !== null && tailAnchorMessageId !== settledTailAnchorMessageId;
+  const handleTailAnchorSlideFinished = useCallback((messageId: MessageId) => {
+    setSettledTailAnchorMessageId((current) => (current === messageId ? current : messageId));
+  }, []);
   const crossTaskOrigin = crossTaskOriginProp ?? null;
   const normalizedChatFontSizePx = normalizeChatFontSizePx(
     chatFontSizePxProp ?? DEFAULT_CHAT_FONT_SIZE_PX,
@@ -582,10 +603,30 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
+  // Fixed bottom content inset. The variable space that lets a just-sent
+  // message anchor at the viewport top is reserved natively by LegendList's
+  // `anchoredEndSpace` below, not by resizing this footer — resizing the footer
+  // from outside fights the list's own footer-layout and initial-scroll
+  // machinery (visible as send-time scroll jumps).
   const listFooter = useMemo(
-    () => <div aria-hidden="true" style={{ height: BOTTOM_CONTENT_INSET_PX }} />,
+    () => (
+      <div
+        aria-hidden="true"
+        data-tail-anchor-spacer="true"
+        style={{ height: BOTTOM_CONTENT_INSET_PX }}
+      />
+    ),
     [],
   );
+  useTailAnchorScroll({
+    listRef: resolvedListRef,
+    timelineRootRef,
+    anchorMessageId: tailAnchorMessageId,
+    anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
+    onAnchorSlideFinished: handleTailAnchorSlideFinished,
+    contentChangeSignal: timelineEntries,
+    animateAnchorSlide: !followLiveOutput,
+  });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const rawRows = useMemo(
@@ -613,6 +654,54 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  // Native reserve for the anchored send: LegendList sizes an end space so the
+  // anchor row can sit at the viewport top when scrolled to the end, keeps that
+  // reserve in sync with measured tail sizes inside its own layout pass, and
+  // shrinks it to zero as the streaming response grows (automatic hand-off to
+  // follow-the-tail). `anchorOffset` carries the container's own CSS vertical
+  // padding, which the list cannot see (it only reads style props), so that
+  // "at end" lands the anchor exactly one top-inset below the viewport top.
+  const tailAnchorRowIndex = useMemo(() => {
+    if (tailAnchorMessageId === null) {
+      return -1;
+    }
+    return rows.findIndex(
+      (row) => row.kind === "message" && row.message.id === tailAnchorMessageId,
+    );
+  }, [rows, tailAnchorMessageId]);
+  const [anchorVerticalInsetPx, setAnchorVerticalInsetPx] = useState(0);
+  useLayoutEffect(() => {
+    if (tailAnchorMessageId === null) {
+      return;
+    }
+    const node: unknown = resolvedListRef.current?.getScrollableNode?.();
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+    const style = getComputedStyle(node);
+    const inset =
+      (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+    setAnchorVerticalInsetPx((current) => (Math.abs(current - inset) > 0.5 ? inset : current));
+  }, [resolvedListRef, tailAnchorMessageId]);
+  const anchoredEndSpace = useMemo(
+    () =>
+      tailAnchorRowIndex < 0
+        ? undefined
+        : {
+            anchorIndex: tailAnchorRowIndex,
+            anchorOffset: anchorVerticalInsetPx,
+          },
+    [anchorVerticalInsetPx, tailAnchorRowIndex],
+  );
+  // Surface the live reserve for tests/diagnostics without re-rendering. The
+  // signal (unlike `onSizeChanged`) also reports the collapse to zero after the
+  // anchor is cleared, when no config object exists to receive a callback.
+  useEffect(() => {
+    const state = resolvedListRef.current?.getState?.();
+    return state?.listen?.("anchoredEndSpaceSize", (size) => {
+      timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
+    });
+  }, [resolvedListRef]);
   // The newest work group renders its rows inline while the turn is live; every
   // older run of tool calls folds into a "Ran N commands..." summary row.
   const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);
@@ -929,12 +1018,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setEditingUserMessageId(messageId);
   }, []);
   const submitUserMessageEdit = useCallback(
-    (messageId: MessageId, text: string) => {
+    (messageId: MessageId, text: string, allowEmpty = false) => {
       if (!onEditUserMessage) {
         return Promise.resolve();
       }
       const nextText = text.trim();
-      if (!nextText) {
+      if (!nextText && !allowEmpty) {
         return Promise.resolve();
       }
       setSubmittingEditedUserMessageId(messageId);
@@ -958,11 +1047,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        row.kind === "work" ||
-          row.kind === "working-header" ||
-          (row.kind === "message" && row.message.role === "assistant")
-          ? "pb-2"
-          : "pb-4",
+        row.kind === "working" ||
+          (row.kind === "message" &&
+            row.message.role === "assistant" &&
+            row.assistantTurnInProgress)
+          ? "pb-1"
+          : row.kind === "work" ||
+              row.kind === "working-header" ||
+              (row.kind === "message" && row.message.role === "assistant")
+            ? "pb-2"
+            : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
         row.kind === "message" && row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
@@ -993,10 +1087,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
               markdownCwd={markdownCwd}
               onImageExpand={onImageExpand}
+              timestampFormat={timestampFormat}
               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-              {...(onOpenThread ? { onOpenThread } : {})}
               {...(onOpenAutomation ? { onOpenAutomation } : {})}
-              {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
             />
           );
           const isLiveGroup =
@@ -1108,6 +1201,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
             hideImageOnlyBootstrapPrompt:
               userImages.length > 0 || userFiles.length > 0 || assistantSelections.length > 0,
+            messageId: row.message.id,
           });
           const renderedAssistantSelections =
             assistantSelections.length > 0
@@ -1121,6 +1215,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
           const renderedPastedTexts = displayedUserMessage.pastedTexts;
+          const renderedBrowserAnnotations = displayedUserMessage.browserAnnotations;
           const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
           const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
@@ -1134,11 +1229,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const showEditUserMessage =
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
-            displayedUserMessage.copyText.trim().length > 0;
+            (displayedUserMessage.copyText.trim().length > 0 ||
+              renderedBrowserAnnotations.length > 0);
           const hasLeadingMedia = hasLeadingUserMedia({
             imageCount: userImages.length,
             fileCount: userFiles.length,
             assistantSelectionCount: renderedAssistantSelections.length,
+            browserAnnotationCount: renderedBrowserAnnotations.length,
             fileCommentCount: renderedFileComments.length,
             pastedTextCount: renderedPastedTexts.length,
           });
@@ -1173,6 +1270,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   {renderedAssistantSelections.length > 0 && (
                     <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                       <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
+                    </div>
+                  )}
+                  {renderedBrowserAnnotations.length > 0 && (
+                    <div className="mb-1 flex w-full max-w-[28rem] justify-end self-end">
+                      <BrowserAnnotationStrip
+                        annotations={renderedBrowserAnnotations}
+                        className="justify-end"
+                      />
                     </div>
                   )}
                   {renderedFileComments.length > 0 && (
@@ -1224,9 +1329,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       key={row.message.id}
                       initialValue={displayedUserMessage.copyText}
                       disabled={isSubmittingThisEdit || isRevertingCheckpoint}
+                      allowEmpty={renderedBrowserAnnotations.length > 0}
                       chatTypographyStyle={userMessageTypographyStyle}
                       onCancel={cancelUserMessageEdit}
-                      onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+                      onSubmit={(text) =>
+                        void submitUserMessageEdit(
+                          row.message.id,
+                          text,
+                          renderedBrowserAnnotations.length > 0,
+                        )
+                      }
                     />
                   ) : showUserText ? (
                     <div
@@ -1397,7 +1509,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // so a live turn reads as one block, not a stack of timestamped
           // fragments. `showAssistantCopyButton` is exactly the terminal-message
           // signal (see deriveTerminalAssistantMessageIds).
-          const isTerminalAssistantMessage = row.showAssistantCopyButton;
+          const isTerminalAssistantMessage =
+            row.showAssistantCopyButton && !row.assistantTurnInProgress;
           const assistantMeta = [
             isTerminalAssistantMessage
               ? formatShortTimestamp(row.message.createdAt, timestampFormat)
@@ -1447,10 +1560,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 markdownCwd={markdownCwd}
                 onImageExpand={onImageExpand}
                 onOpenTurnDiff={onOpenTurnDiff}
+                timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                {...(onOpenThread ? { onOpenThread } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
               />
             );
@@ -1549,7 +1661,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   )}
                 {!hasCollapsedWork && display.statusEntries.length > 0 && (
-                  <div className={cn("space-y-0.5", placement === "leading" ? "mb-2" : "mt-2")}>
+                  <div
+                    className={cn(
+                      "space-y-0.5",
+                      placement === "leading"
+                        ? row.assistantTurnInProgress
+                          ? "mb-0.5"
+                          : "mb-2"
+                        : "mt-2",
+                    )}
+                  >
                     {display.statusEntries.map((workEntry) => (
                       <TimelineWorkEntryRow
                         key={`${placement}-status-row:${row.message.id}:${workEntry.id}`}
@@ -1559,10 +1680,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                         markdownCwd={markdownCwd}
                         onImageExpand={onImageExpand}
+                        timestampFormat={timestampFormat}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                        {...(onOpenThread ? { onOpenThread } : {})}
                         {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                        {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
                       />
                     ))}
                   </div>
@@ -1580,10 +1700,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
                 markdownCwd={markdownCwd}
                 onImageExpand={onImageExpand}
+                timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                {...(onOpenThread ? { onOpenThread } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
               />
             ) : (
               <div
@@ -2046,10 +2165,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // LegendList caches rendered rows, so every local expansion map that changes row content
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
-        initialScrollAtEnd
-        maintainScrollAtEnd={followLiveOutput}
+        initialScrollAtEnd={tailAnchorMessageId === null}
+        {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+        maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
         maintainScrollAtEndThreshold={0.1}
-        {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
+        {...(tailAnchorMessageId !== null
+          ? { maintainVisibleContentPosition: false }
+          : !followLiveOutput
+            ? { maintainVisibleContentPosition: true }
+            : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={onMessagesPointerCancel}
@@ -2593,13 +2717,18 @@ function hasOnlyInlineSkillChips(
 const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   initialValue: string;
   disabled: boolean;
+  allowEmpty: boolean;
   chatTypographyStyle: CSSProperties;
   onCancel: () => void;
   onSubmit: (value: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(props.initialValue);
-  const canSubmit = draft.trim().length > 0 && !props.disabled;
+  const canSubmit = canSubmitUserMessageEdit({
+    draft,
+    allowEmpty: props.allowEmpty,
+    disabled: props.disabled,
+  });
 
   useEffect(() => {
     const textarea = textareaRef.current;

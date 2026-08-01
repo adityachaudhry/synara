@@ -41,6 +41,7 @@ import {
   type TerminalContextDraft,
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
+import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
@@ -60,6 +61,7 @@ import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -327,7 +329,10 @@ function createSnapshotForTargetUser(options: {
           status: options.sessionStatus ?? "ready",
           providerName: "codex",
           runtimeMode: "full-access",
-          activeTurnId: null,
+          activeTurnId:
+            options.sessionStatus === "running"
+              ? TurnId.makeUnsafe("turn-browser-fixture-active")
+              : null,
           lastError: null,
           updatedAt: NOW_ISO,
         },
@@ -1829,6 +1834,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentUploadSequence = 0;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
+    useWorkspacePathsStore.setState({
+      homeDir: null,
+      chatWorkspaceRoot: null,
+      studioWorkspaceRoot: null,
+    });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     useComposerDraftStore.setState({
@@ -1839,6 +1849,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyActiveProvider: null,
     });
     useStore.setState({
+      shellSnapshotSequence: 0,
+      spaces: [],
       projects: [],
       threadIds: [],
       threadShellById: {},
@@ -1852,6 +1864,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       proposedPlanByThreadId: {},
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
+      threadDetailSyncById: {},
+      deletedProjectIdsById: {},
+      deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });
@@ -1872,6 +1887,73 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-runtime-reversal" as MessageId,
+      targetText: "runtime reversal",
+    });
+    const snapshot: OrchestrationReadModel = {
+      ...baseSnapshot,
+      threads: baseSnapshot.threads.map((thread) => ({
+        ...thread,
+        runtimeMode: "approval-required",
+        session: thread.session
+          ? {
+              ...thread.session,
+              runtimeMode: "approval-required",
+            }
+          : null,
+      })),
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+    });
+
+    try {
+      const supervisedTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title^="Ask for approval:"]'),
+        "Unable to find the Ask for approval access-mode trigger.",
+      );
+      supervisedTrigger.click();
+      const autoOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("Approve for me"),
+          ) ?? null,
+        "Unable to find the Approve for me access-mode option.",
+      );
+      autoOption.click();
+
+      const autoTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title^="Approve for me:"]'),
+        "Approve for me did not become the acknowledged composer access mode.",
+      );
+      autoTrigger.click();
+      const supervisedOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("Ask for approval"),
+          ) ?? null,
+        "Unable to find the Ask for approval access-mode option.",
+      );
+      supervisedOption.click();
+
+      await vi.waitFor(
+        () => {
+          const runtimeModes = wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.runtime-mode.set")
+            .map((command) => command?.runtimeMode);
+          expect(runtimeModes).toEqual(["auto", "approval-required"]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it.each(TEXT_VIEWPORT_MATRIX)(
@@ -2206,6 +2288,203 @@ describe("ChatView timeline estimator parity (full app)", () => {
       if (patchedScrollContainer && originalScrollTo) {
         patchedScrollContainer.scrollTo = originalScrollTo;
       }
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("anchors a freshly sent user message at the top of the transcript viewport", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-send-tail-anchor" as MessageId,
+      targetText: "tail anchor target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      // Start where a real conversation sits: parked at the bottom of the transcript.
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const prompt = "anchor this message at the viewport top";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      const findSentRow = () => {
+        const rows = document.querySelectorAll<HTMLElement>(
+          "[data-message-id][data-message-role='user']",
+        );
+        for (const row of rows) {
+          if (row.textContent?.includes(prompt)) {
+            return row;
+          }
+        }
+        return null;
+      };
+
+      const anchorOffsetPx = () => {
+        const row = findSentRow();
+        if (!row) {
+          return null;
+        }
+        return row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+      };
+      // The anchored message keeps the same top gap a chat's first message gets:
+      // the scroll container's own top padding.
+      const expectedTopGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
+
+      await vi.waitFor(
+        () => {
+          const offsetPx = anchorOffsetPx();
+          expect(offsetPx, "sent user message row not rendered").not.toBeNull();
+          expect(Math.abs(offsetPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      // Real sends ack before the turn goes live, so the transcript sits with no
+      // running turn for a beat. The anchor must survive that gap instead of
+      // collapsing the moment the send stops being "busy".
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 700);
+      });
+      const offsetAfterAckGapPx = anchorOffsetPx();
+      expect(offsetAfterAckGapPx, "sent user message row missing after ack gap").not.toBeNull();
+      expect(Math.abs(offsetAfterAckGapPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
+
+      // The server acknowledges the send and the turn starts running: the durable
+      // user message replaces the optimistic row and live turn chrome appears.
+      const activeTurnId = TurnId.makeUnsafe("turn-tail-anchor");
+      const sentMessageId = findSentRow()?.dataset.messageId;
+      expect(sentMessageId, "sent user message id").toBeTruthy();
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: MessageId.makeUnsafe(sentMessageId!),
+            role: "user" as const,
+            text: prompt,
+            turnId: activeTurnId,
+            streaming: false,
+            source: "native" as const,
+            createdAt: isoAt(1_300),
+            updatedAt: isoAt(1_300),
+          },
+        ],
+        latestTurn: {
+          turnId: activeTurnId,
+          state: "running",
+          requestedAt: isoAt(1_300),
+          startedAt: isoAt(1_301),
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? { ...thread.session, status: "running", activeTurnId, updatedAt: isoAt(1_301) }
+          : null,
+        updatedAt: isoAt(1_301),
+      }));
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          const offsetPx = anchorOffsetPx();
+          expect(offsetPx, "sent user message row missing after ack").not.toBeNull();
+          expect(Math.abs(offsetPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      // The assistant response streams in below the anchored message. While it is
+      // shorter than the viewport the anchored message must not move.
+      const streamingId = MessageId.makeUnsafe("msg-assistant-tail-anchor-stream");
+      for (const chunkCount of [1, 3, 6]) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages.filter((message) => message.id !== streamingId),
+            {
+              id: streamingId,
+              role: "assistant" as const,
+              text: `Streaming response paragraph.\n\n`.repeat(chunkCount),
+              turnId: activeTurnId,
+              streaming: true,
+              source: "native" as const,
+              createdAt: isoAt(1_302),
+              updatedAt: isoAt(1_302 + chunkCount),
+            },
+          ],
+          updatedAt: isoAt(1_302 + chunkCount),
+        }));
+        await waitForLayout();
+        await waitForLayout();
+        const offsetPx = anchorOffsetPx();
+        expect(offsetPx, `anchor row missing while streaming ${chunkCount} chunks`).not.toBeNull();
+        expect(
+          Math.abs(offsetPx! - expectedTopGapPx),
+          `anchor drifted while streaming ${chunkCount} chunks`,
+        ).toBeLessThanOrEqual(24);
+      }
+
+      // The turn completes: the reserve persists so the settled transcript does
+      // not jump back to its true bottom.
+      const scrollTopBeforeTurnEnd = scrollContainer.scrollTop;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === streamingId
+            ? { ...message, streaming: false, updatedAt: isoAt(1_400) }
+            : message,
+        ),
+        latestTurn: thread.latestTurn
+          ? { ...thread.latestTurn, state: "completed", completedAt: isoAt(1_400) }
+          : thread.latestTurn,
+        session: thread.session
+          ? { ...thread.session, status: "idle", activeTurnId: null, updatedAt: isoAt(1_400) }
+          : null,
+        updatedAt: isoAt(1_400),
+      }));
+      await waitForLayout();
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 700);
+      });
+      const offsetAfterTurnEndPx = anchorOffsetPx();
+      expect(offsetAfterTurnEndPx, "sent user message row missing after turn end").not.toBeNull();
+      expect(
+        Math.abs(offsetAfterTurnEndPx! - expectedTopGapPx),
+        "anchor jumped when the turn settled",
+      ).toBeLessThanOrEqual(24);
+      expect(
+        Math.abs(scrollContainer.scrollTop - scrollTopBeforeTurnEnd),
+        "scroll position jumped when the turn settled",
+      ).toBeLessThanOrEqual(2);
+    } finally {
       await mounted.cleanup();
       restoreNativeApi();
     }
@@ -3348,6 +3627,126 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("sends every browser annotation as prompt context without upload attachments", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const prompt = "Delete everything I annotated.";
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(THREAD_ID, prompt);
+    expect(
+      store.addBrowserAnnotation(THREAD_ID, {
+        id: "annotation-without-comment",
+        tabId: "tab-a",
+        source: {
+          url: "https://example.test/landing",
+          pageTitle: "Landing page",
+        },
+        selector: "#hero-title",
+        tagName: "h1",
+        role: null,
+        name: null,
+        text: "Build faster",
+        fingerprint: "fnv1a64:0123456789abcdef",
+        comment: null,
+        capturedAt: NOW_ISO,
+      }),
+    ).toBe(true);
+    expect(
+      store.addBrowserAnnotation(THREAD_ID, {
+        id: "annotation-with-comment",
+        tabId: "tab-a",
+        source: {
+          url: "https://example.test/pricing",
+          pageTitle: "Pricing",
+        },
+        selector: "#legacy-plan",
+        tagName: "section",
+        role: "region",
+        name: "Legacy plan",
+        text: "Legacy",
+        fingerprint: "fnv1a64:fedcba9876543210",
+        comment: "This one is obsolete.",
+        capturedAt: NOW_ISO,
+      }),
+    ).toBe(true);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-browser-annotations-send" as MessageId,
+        targetText: "browser annotations send target",
+      }),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(document.querySelectorAll('[data-testid="browser-annotation-chip"]')).toHaveLength(
+          2,
+        );
+      });
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const request = wsRequests.find(
+            (candidate) =>
+              candidate._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof candidate.command === "object" &&
+              candidate.command !== null &&
+              "type" in candidate.command &&
+              candidate.command.type === "thread.turn.start",
+          );
+          expect(request).toBeTruthy();
+          const command = request!.command as {
+            message?: { messageId?: unknown; text?: unknown; attachments?: unknown[] };
+          };
+          expect(typeof command.message?.messageId).toBe("string");
+          expect(typeof command.message?.text).toBe("string");
+          const serializedPayload = (command.message!.text as string).split("\n").at(-2);
+          expect(serializedPayload).toBeTruthy();
+          expect(JSON.parse(serializedPayload!)?.messageId).toBe(command.message!.messageId);
+          const extracted = extractTrailingBrowserAnnotations(
+            command.message!.text as string,
+            MessageId.makeUnsafe(command.message!.messageId as string),
+          );
+          expect(extracted.promptText).toBe(prompt);
+          expect(
+            extracted.annotations.map(({ id, ordinal, comment, source }) => ({
+              id,
+              ordinal,
+              comment,
+              url: source.url,
+            })),
+          ).toEqual([
+            {
+              id: "annotation-without-comment",
+              ordinal: 1,
+              comment: null,
+              url: "https://example.test/landing",
+            },
+            {
+              id: "annotation-with-comment",
+              ordinal: 2,
+              comment: "This one is obsolete.",
+              url: "https://example.test/pricing",
+            },
+          ]);
+          expect(command.message?.attachments ?? []).toHaveLength(0);
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.browserAnnotations ?? [],
+          ).toHaveLength(0);
+          expect(document.body.textContent).not.toContain("<browser_annotations>");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("shows a pointer cursor for the running stop button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -3408,6 +3807,51 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find stop generation button.",
       );
       expect(stopButton).not.toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("steers a running turn when Follow-up behavior is set to Steer", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ followUpBehavior: "steer" }));
+    useComposerDraftStore.getState().setPrompt(THREAD_ID, "steer this running turn");
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-steer-setting" as MessageId,
+        targetText: "running steer setting target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerForm = await waitForElement(
+        () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
+        "Unable to find composer form.",
+      );
+      composerForm.requestSubmit();
+
+      await vi.waitFor(
+        () => {
+          const turnStart = wsRequests
+            .map(readDispatchedCommand)
+            .find(
+              (command) =>
+                command?.type === "thread.turn.start" &&
+                command.dispatchMode === "steer" &&
+                typeof command.message === "object" &&
+                command.message !== null &&
+                "text" in command.message &&
+                typeof command.message.text === "string" &&
+                command.message.text.includes("steer this running turn"),
+            );
+          expect(turnStart).toBeTruthy();
+          expect(document.querySelector('[data-testid="queued-follow-up-row"]')).toBeNull();
+          expect(document.body.textContent).toContain("Steering conversation");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }
@@ -3503,6 +3947,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [queuedImage],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3528,6 +3973,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3620,6 +4066,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3703,6 +4150,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [queuedImage],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -4473,19 +4921,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }),
     });
 
-    const findDispatchedCommand = (type: string) =>
+    const findDispatchedCommand = (
+      type: string,
+      matches: (command: Record<string, unknown>) => boolean,
+    ) =>
       wsRequests
-        .map((request) =>
-          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-          "command" in request &&
-          request.command &&
-          typeof request.command === "object" &&
-          "type" in request.command &&
-          request.command.type === type
-            ? (request.command as Record<string, unknown>)
-            : null,
-        )
-        .find(Boolean);
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === type && matches(command));
 
     try {
       await page.getByRole("button", { name: "Add project", exact: true }).click();
@@ -4506,9 +4948,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       let createdSpaceId: unknown;
       await vi.waitFor(
         () => {
-          const spaceCreateCommand = findDispatchedCommand("space.create");
+          const spaceCreateCommand = findDispatchedCommand(
+            "space.create",
+            (command) => command.name === "Focus",
+          );
           expect(spaceCreateCommand).toBeDefined();
-          expect(spaceCreateCommand?.name).toBe("Focus");
           createdSpaceId = spaceCreateCommand?.spaceId;
         },
         { timeout: 8_000, interval: 16 },
@@ -4520,20 +4964,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
-          const projectCreateCommand = wsRequests
-            .map((request) =>
-              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-              "command" in request &&
-              request.command &&
-              typeof request.command === "object" &&
-              "type" in request.command &&
-              request.command.type === "project.create"
-                ? (request.command as Record<string, unknown>)
-                : null,
-            )
-            .find((command) => command?.workspaceRoot === "/repo/spaced-project");
+          const projectCreateCommand = findDispatchedCommand(
+            "project.create",
+            (command) => command.workspaceRoot === "/repo/spaced-project",
+          );
           expect(projectCreateCommand).toBeDefined();
-          expect(projectCreateCommand?.workspaceRoot).toBe("/repo/spaced-project");
           expect(projectCreateCommand?.spaceId).toBe(createdSpaceId);
         },
         { timeout: 8_000, interval: 16 },
@@ -5334,6 +5769,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           nonPersistedImageIds: [],
           persistedAttachments: [],
           assistantSelections: [],
+          browserAnnotations: [],
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],
@@ -5926,9 +6362,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      useStore
-        .getState()
-        .syncServerReadModel(createSnapshotWithInlineToolOverflow({ active: false }));
+      const settledSnapshot = createSnapshotWithInlineToolOverflow({ active: false });
+      useStore.getState().syncServerReadModel({
+        ...settledSnapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+      });
 
       // The first settled paint keeps the live layout: no "Worked for" fold yet.
       expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();

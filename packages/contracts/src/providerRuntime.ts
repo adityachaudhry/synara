@@ -143,6 +143,7 @@ export const CanonicalRequestType = Schema.Literals([
   "command_execution_approval",
   "file_read_approval",
   "file_change_approval",
+  "permissions_approval",
   "apply_patch_approval",
   "exec_command_approval",
   "tool_user_input",
@@ -595,9 +596,15 @@ const TaskCompletedPayload = Schema.Struct({
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
-// A queued mid-task user message was injected into a running subagent.
+// A user message was injected into running work without interrupting it.
+// `target` says where it landed, which decides whether the message needs its own
+// transcript marker: a `"subagent"` steer is delivered on the child thread where
+// nothing else shows it, while a `"turn"` steer is already rendered as the sent
+// user message on the thread it steers. Absent means `"subagent"` (the only
+// producer before turn steering existed).
 const TurnSteeredPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  target: Schema.optional(Schema.Literals(["turn", "subagent"])),
 });
 export type TurnSteeredPayload = typeof TurnSteeredPayload.Type;
 

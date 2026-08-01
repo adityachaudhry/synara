@@ -13,12 +13,18 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { ApprovalRequestId, ThreadId } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  BROWSER_TOOL_NAMES,
+  ThreadId,
+  TurnId,
+  type RuntimeMode,
+} from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
   disableCodexConfigSections,
-  resolveCodexBrowserUsePipePath,
+  SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
 } from "./codexProcessEnv";
 import {
   buildCodexInitializeParams,
@@ -39,16 +45,27 @@ import {
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
-import { acquireAgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
+import {
+  AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
+  acquireAgentGatewaySessionLease,
+} from "./agentGateway/sessionLease.ts";
+import { MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION } from "./provider/codexCliVersion.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
   approvalPolicy: "never",
+  approvalsReviewer: "user",
   sandboxPolicy: { type: "dangerFullAccess" },
 } as const;
 const approvalRequiredTurnOverrides = {
   approvalPolicy: "untrusted",
+  approvalsReviewer: "user",
   sandboxPolicy: { type: "readOnly" },
+} as const;
+const autoTurnOverrides = {
+  approvalPolicy: "on-request",
+  approvalsReviewer: "auto_review",
+  sandboxPolicy: { type: "workspaceWrite" },
 } as const;
 
 describe("Codex Synara harness policy", () => {
@@ -61,6 +78,12 @@ describe("Codex Synara harness policy", () => {
       expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
       expect(instructions).toContain("Synara is the host and harness");
       expect(instructions).toContain("one exact synara_create_threads plan");
+      expect(instructions).toContain("tools.mcp__synara__browser_open");
+      for (const name of BROWSER_TOOL_NAMES) {
+        expect(instructions, name).toContain(`\`${name.slice("browser_".length)}\``);
+      }
+      expect(instructions).toContain("Do not search or filter \`ALL_TOOLS\`");
+      expect(instructions).toContain("sequentially in one \`functions.exec\` invocation");
     }
   });
 
@@ -75,6 +98,8 @@ describe("Codex Synara harness policy", () => {
           endpointUrl: () => endpointUrl,
           acquireSessionLease: () => ({
             connection: { url: endpointUrl, bearerToken: "token" },
+            cancelTurn: () => Promise.resolve(),
+            retireTurn: () => Promise.resolve(),
             release: () => undefined,
           }),
         },
@@ -101,7 +126,7 @@ describe("Codex Synara harness policy", () => {
   });
 });
 
-function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" = "full-access") {
+function createSendTurnHarness(runtimeMode: RuntimeMode = "full-access") {
   const manager = new CodexAppServerManager();
   const context = {
     session: {
@@ -120,6 +145,8 @@ function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" 
       planType: null,
       sparkEnabled: true,
     },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
     reviewTurnIds: new Set<string>(),
@@ -163,6 +190,8 @@ function createThreadControlHarness() {
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
     },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
     reviewTurnIds: new Set<string>(),
@@ -202,6 +231,7 @@ function createPendingUserInputHarness() {
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
     },
+    pendingApprovals: new Map(),
     pendingUserInputs: new Map([
       [
         ApprovalRequestId.makeUnsafe("req-user-input-1"),
@@ -236,9 +266,7 @@ function createPendingUserInputHarness() {
   return { manager, context, requireSession, writeMessage, emitEvent };
 }
 
-function createPendingApprovalHarness(
-  runtimeMode: "approval-required" | "full-access" = "approval-required",
-) {
+function createPendingApprovalHarness(runtimeMode: RuntimeMode = "approval-required") {
   const manager = new CodexAppServerManager();
   const context = {
     lifecycleGeneration: "generation-request-a",
@@ -275,6 +303,7 @@ function createPendingApprovalHarness(
       | undefined
       | {
           approvalPolicy: "never";
+          approvalsReviewer: "user";
           sandboxPolicy: { type: "dangerFullAccess" };
         },
     collabReceiverTurns: new Map(),
@@ -348,11 +377,13 @@ function createCollabNotificationHarness() {
       | undefined
       | {
           approvalPolicy: "never";
+          approvalsReviewer: "user";
           sandboxPolicy: { type: "dangerFullAccess" };
         },
     collabReceiverTurns: new Map<string, string>(),
     collabReceiverParents: new Map<string, string>(),
     reviewTurnIds: new Set<string>(),
+    gatewayCredentialRetired: false,
     nextRequestId: 1,
     stopping: false,
   };
@@ -728,6 +759,86 @@ describe("codex CLI version gate", () => {
     }
   });
 
+  it("does not reuse a general-version verdict for the stricter Auto floor", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-floor-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.100.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.100.0"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+        }),
+      ).rejects.toThrow(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for Auto when the Codex CLI version cannot be parsed", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-unknown-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? "@echo off\r\necho codex-cli development\r\n"
+        : '#!/bin/sh\necho "codex-cli development"\n',
+      { mode: 0o755 },
+    );
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      // Preserve compatibility with custom development builds for ordinary sessions.
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+        }),
+      ).rejects.toThrow(`Auto mode requires v${MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION} or newer`);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("re-probes when the binary behind an unchanged path is replaced", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-swap-"));
     const homePath = path.join(dir, "codex-home");
@@ -912,68 +1023,32 @@ describe("buildCodexProcessEnv", () => {
     expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
   });
 
-  it("allows the configured desktop browser-use socket in the Codex sandbox", async () => {
-    const env = await buildCodexProcessEnv({
-      env: {
-        SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
-        NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
-      },
-      platform: "darwin",
-    });
-
-    expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe("/tmp/codex-browser-use/synara.sock");
-  });
-
-  it("forwards the browser-use socket capability to the Browser MCP helper", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+  it("keeps the private desktop browser host out of the Codex process", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-private-host-"));
+    const codexHome = path.join(tempDir, "codex-home");
+    mkdirSync(codexHome, { recursive: true });
     try {
-      writeFileSync(
-        path.join(tempDir, "config.toml"),
-        [
-          "[mcp_servers.node_repl]",
-          'command = "/tmp/node_repl"',
-          'env_vars = ["EXISTING_BROWSER_ENV"]',
-          "",
-          "[mcp_servers.node_repl.env]",
-          'BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"',
-        ].join("\n"),
-        "utf8",
-      );
-
       const env = await buildCodexProcessEnv({
         env: {
-          SYNARA_HOME: runtimeHome,
-          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
+          CODEX_HOME: codexHome,
+          SYNARA_HOME: tempDir,
+          SYNARA_BROWSER_HOST_PIPE_PATH: "/tmp/synara-browser-host.sock",
+          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/legacy-browser-use.sock",
+          SYNARA_BROWSER_HOST_CAPABILITY: "desktop-capability",
+          SYNARA_BROWSER_HOST_CAPABILITY_FD: "3",
+          NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
         },
-        homePath: tempDir,
         platform: "darwin",
       });
 
-      const codexHome = env.CODEX_HOME;
-      if (typeof codexHome !== "string") {
-        throw new Error("Expected CODEX_HOME to be set.");
-      }
-      const overlayConfig = readFileSync(path.join(codexHome, "config.toml"), "utf8");
-      expect(overlayConfig).toContain(
-        'env_vars = ["NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS", "EXISTING_BROWSER_ENV"]',
-      );
-      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
-        'env_vars = ["EXISTING_BROWSER_ENV"]',
-      );
+      expect(env.SYNARA_BROWSER_HOST_PIPE_PATH).toBeUndefined();
+      expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
+      expect(env.SYNARA_BROWSER_HOST_CAPABILITY).toBeUndefined();
+      expect(env.SYNARA_BROWSER_HOST_CAPABILITY_FD).toBeUndefined();
+      expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBeUndefined();
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
-      rmSync(runtimeHome, { recursive: true, force: true });
     }
-  });
-
-  it("resolves the browser-use pipe path from desktop env aliases", () => {
-    expect(
-      resolveCodexBrowserUsePipePath({
-        env: { SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock" },
-        platform: "darwin",
-      }),
-    ).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
   it("applies durable section suppressions inside Synara's Codex overlay", async () => {
@@ -986,6 +1061,11 @@ describe("buildCodexProcessEnv", () => {
           '[plugins."github@openai-curated"]',
           "enabled = true",
           "",
+          ...SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS.flatMap((header) => [
+            header,
+            "enabled = true",
+            "",
+          ]),
           '[plugins."historical-plugin@local"]',
           "enabled = true",
         ].join("\n"),
@@ -1017,6 +1097,14 @@ describe("buildCodexProcessEnv", () => {
       expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
         '[plugins."historical-plugin@local"]\nenabled = false',
       );
+      for (const header of SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS) {
+        expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+          `${header}\nenabled = false`,
+        );
+        expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+          `${header}\nenabled = true`,
+        );
+      }
       expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
         '[plugins."historical-plugin@local"]\nenabled = true',
       );
@@ -1498,6 +1586,40 @@ describe("startSession", () => {
       await manager.stopAll();
     }
   });
+
+  it("requires a Codex CLI version with AI approval-review support for auto mode", async () => {
+    const manager = new CodexAppServerManager();
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+        throw new Error("Codex Auto version gate");
+      });
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-auto-version"),
+          provider: "codex",
+          runtimeMode: "auto",
+        }),
+      ).rejects.toThrow("Codex Auto version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
 });
 
 describe("sendTurn", () => {
@@ -1581,6 +1703,29 @@ describe("sendTurn", () => {
         {
           type: "text",
           text: "Check this before changing files",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("routes Codex approvals through the AI reviewer in auto mode", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("auto");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Make the routine workspace changes",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...autoTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Make the routine workspace changes",
           text_elements: [],
         },
       ],
@@ -2374,6 +2519,84 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("cancels the exact gateway turn even when Codex omits MCP cancellation notifications", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    let settleCancellation: (() => void) | undefined;
+    const cancelTurn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settleCancellation = resolve;
+        }),
+    );
+    const release = vi.fn();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn-with-live-browser-wait";
+    Object.assign(context, {
+      gatewaySessionLease: {
+        connection: {
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        },
+        cancelTurn,
+        retireTurn: vi.fn(() => Promise.resolve()),
+        release,
+      },
+    });
+    sendRequest.mockResolvedValue({});
+
+    let interruptSettled = false;
+    const interrupt = manager.interruptTurn(asThreadId("thread_1")).then(() => {
+      interruptSettled = true;
+    });
+    await vi.waitFor(() => expect(cancelTurn).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    expect(interruptSettled).toBe(false);
+    expect(cancelTurn).toHaveBeenCalledWith("turn-with-live-browser-wait");
+    expect(release).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn-with-live-browser-wait",
+    });
+    settleCancellation?.();
+    await interrupt;
+    expect(interruptSettled).toBe(true);
+  });
+
+  it("tombstones the parent gateway turn when stopping one collab child", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    const cancelTurn = vi.fn(() => Promise.resolve());
+    const release = vi.fn();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn-parent";
+    Object.assign(context, {
+      gatewaySessionLease: {
+        connection: {
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        },
+        cancelTurn,
+        retireTurn: vi.fn(() => Promise.resolve()),
+        release,
+      },
+    });
+    sendRequest.mockResolvedValue({});
+
+    await manager.interruptTurn(
+      asThreadId("thread_1"),
+      TurnId.makeUnsafe("turn-child"),
+      "provider-child",
+    );
+
+    expect(cancelTurn).toHaveBeenCalledOnce();
+    expect(cancelTurn).toHaveBeenCalledWith("turn-parent");
+    expect(release).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/interrupt", {
+      threadId: "provider-child",
+      turnId: "turn-child",
+    });
+  });
+
   it("settles review interrupt when thread/read already shows exited review mode", async () => {
     const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
     context.session.status = "running";
@@ -2403,9 +2626,36 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("settles a stale local turn when Codex reports that it is already idle", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_stale";
+    sendRequest.mockRejectedValue(new Error("turn/interrupt failed: no active turn to interrupt"));
+
+    await expect(manager.interruptTurn(asThreadId("thread_1"))).resolves.toBeUndefined();
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "turn/aborted",
+        threadId: "thread_1",
+        turnId: "turn_stale",
+        lifecycleGeneration: "generation-request-a",
+      }),
+    );
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
   it("emits compaction progress before waiting for thread/compact/start", async () => {
     const { manager, context, sendRequest, updateSession, emitEvent } =
       createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_compact";
     let resolveRequest: (() => void) | undefined;
     sendRequest.mockImplementation(
       () =>
@@ -2440,6 +2690,29 @@ describe("thread checkpoint control", () => {
 
     resolveRequest?.();
     await compactPromise;
+  });
+
+  it("does not claim running status when compacting outside an active turn", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    sendRequest.mockResolvedValue({});
+
+    await manager.compactThread(asThreadId("thread_1"));
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/compact/start", {
+      threadId: "thread_1",
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "thread/compacting",
+        message: "Compacting context",
+        payload: {
+          threadId: "thread_1",
+          state: "compacting",
+        },
+      }),
+    );
   });
 });
 
@@ -2544,6 +2817,85 @@ describe("respondToRequest", () => {
     expect(
       emitEvent.mock.calls.some(([event]) => (event as { kind?: string }).kind === "request"),
     ).toBe(false);
+  });
+
+  it("keeps later permission-profile requests interactive during an always-allowed session", async () => {
+    const { manager, context, writeMessage, emitEvent } = createPendingApprovalHarness();
+    const permissions = {
+      network: { enabled: true },
+      fileSystem: { read: ["/tmp/example"] },
+    };
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    writeMessage.mockClear();
+    emitEvent.mockClear();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "item/permissions/requestApproval",
+      params: {
+        turnId: "turn_2",
+        itemId: "item_permissions",
+        permissions,
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(1);
+    expect(Array.from(context.pendingApprovals.values())[0]).toEqual(
+      expect.objectContaining({
+        method: "item/permissions/requestApproval",
+        requestedPermissions: permissions,
+      }),
+    );
+    expect(writeMessage).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        method: "item/permissions/requestApproval",
+        requestKind: "permissions",
+      }),
+    );
+  });
+
+  it("does not sweep a pending permission-profile request into always allow", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+    const permissions = {
+      network: { enabled: true },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 101,
+      method: "item/permissions/requestApproval",
+      params: {
+        turnId: "turn_1",
+        itemId: "item_permissions",
+        permissions,
+      },
+    });
+    const permissionRequestId = Array.from(context.pendingApprovals.keys()).find(
+      (requestId) => requestId !== "req-approval-1",
+    );
+    if (permissionRequestId === undefined) {
+      throw new Error("Expected the permission-profile request to remain pending.");
+    }
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    expect(context.pendingApprovals.has(permissionRequestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        id: 101,
+      }),
+    );
   });
 });
 
@@ -2882,6 +3234,83 @@ describe("collab child conversation routing", () => {
     );
   });
 
+  it("responds to permission-profile approvals with the requested native permissions", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+    const permissions = {
+      network: { enabled: true },
+      fileSystem: { read: ["/tmp/example"] },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 45,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_permissions",
+        itemId: "call_permissions",
+        reason: "Needs package metadata",
+        permissions,
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        method: "item/permissions/requestApproval",
+        requestKind: "permissions",
+        requestedPermissions: permissions,
+      }),
+    );
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      pendingRequest.requestId,
+      "acceptForSession",
+    );
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 45,
+      result: { permissions, scope: "session" },
+    });
+    expect(context.sessionApprovalOverride).toBeUndefined();
+    expect(emitEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "item/requestApproval/decision",
+        requestKind: "permissions",
+      }),
+    );
+  });
+
+  it("returns protocol-valid turn scope and omits null permission categories", async () => {
+    const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 46,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_permissions_nullable",
+        itemId: "call_permissions_nullable",
+        permissions: {
+          network: null,
+          fileSystem: { read: ["/tmp/example"] },
+        },
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 46,
+      result: {
+        permissions: {
+          fileSystem: { read: ["/tmp/example"] },
+        },
+        scope: "turn",
+      },
+    });
+  });
+
   it("preserves an unmapped child user-input route through the answered event", async () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
 
@@ -2892,7 +3321,14 @@ describe("collab child conversation routing", () => {
         threadId: "child_provider_unmapped",
         turnId: "turn_child_unmapped",
         itemId: "tool_child_unmapped",
-        questions: [],
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which scope should this change target?",
+            options: [{ label: "child", description: "Only the child thread" }],
+          },
+        ],
       },
     });
 
@@ -2939,6 +3375,7 @@ describe("collab child conversation routing", () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
     context.sessionApprovalOverride = {
       approvalPolicy: "never",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" },
     };
 
@@ -3253,6 +3690,22 @@ describe("handleServerNotification error normalization", () => {
       const emitEvent = vi
         .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
         .mockImplementation(() => {});
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const retireTurn = vi.fn(() => {
+        expect(emitEvent).not.toHaveBeenCalled();
+        return Promise.resolve();
+      });
+      Object.assign(context, {
+        gatewaySessionLease: {
+          connection: {
+            url: "http://127.0.0.1:48123/mcp",
+            bearerToken: "gateway-token",
+          },
+          cancelTurn,
+          retireTurn,
+          release: vi.fn(),
+        },
+      });
       const updateSession = vi
         .spyOn(
           manager as unknown as { updateSession: (...args: unknown[]) => void },
@@ -3273,6 +3726,10 @@ describe("handleServerNotification error normalization", () => {
       });
       vi.advanceTimersByTime(25);
 
+      expect(retireTurn).toHaveBeenCalledOnce();
+      expect(retireTurn).toHaveBeenCalledWith("turn_parent");
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(context.gatewayCredentialRetired).toBe(true);
       expect(updateSession).toHaveBeenCalledWith(context, {
         status: "ready",
         activeTurnId: undefined,
@@ -3284,6 +3741,7 @@ describe("handleServerNotification error normalization", () => {
           turnId: "turn_parent",
           payload: expect.objectContaining({
             recoveredFrom: "codex/event/task_complete",
+            [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
           }),
         }),
       );
@@ -3326,6 +3784,77 @@ describe("handleServerNotification error normalization", () => {
       ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("retires gateway authority before publishing every terminal parent-turn notification", () => {
+    const terminalNotifications = [
+      {
+        expectedTurnId: "turn-completed",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "provider_parent",
+            turn: { id: "turn-completed", status: "completed" },
+          },
+        },
+      },
+      {
+        expectedTurnId: "turn-aborted",
+        notification: {
+          method: "turn/aborted",
+          params: {
+            threadId: "provider_parent",
+            turn: { id: "turn-aborted", status: "interrupted" },
+          },
+        },
+      },
+      {
+        expectedTurnId: "turn-error",
+        notification: {
+          method: "error",
+          params: {
+            threadId: "provider_parent",
+            turnId: "turn-error",
+            error: { message: "terminal provider failure" },
+            willRetry: false,
+          },
+        },
+      },
+    ];
+
+    for (const { expectedTurnId, notification } of terminalNotifications) {
+      const { manager, context, emitEvent } = createCollabNotificationHarness();
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const retireTurn = vi.fn(() => {
+        expect(emitEvent).not.toHaveBeenCalled();
+        return Promise.resolve();
+      });
+      Object.assign(context, {
+        gatewaySessionLease: {
+          connection: {
+            url: "http://127.0.0.1:48123/mcp",
+            bearerToken: "gateway-token",
+          },
+          cancelTurn,
+          retireTurn,
+          release: vi.fn(),
+        },
+      });
+
+      handleServerNotificationForTest(manager, context, notification);
+
+      expect(retireTurn).toHaveBeenCalledOnce();
+      expect(retireTurn).toHaveBeenCalledWith(expectedTurnId);
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(context.gatewayCredentialRetired).toBe(true);
+      expect(emitEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
+          }),
+        }),
+      );
     }
   });
 

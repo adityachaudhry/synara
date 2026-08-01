@@ -319,6 +319,7 @@ import {
   DISCLOSURE_INNER_CLASS,
 } from "~/lib/disclosureMotion";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
+import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
@@ -355,6 +356,7 @@ import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
+import { hasThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import type {
@@ -383,9 +385,7 @@ import {
   SidebarContextMenuIcon,
 } from "./sidebarContextMenuStyles";
 import {
-  VOID_SPACE_ICON,
   VOID_SPACE_KEY,
-  VOID_SPACE_NAME,
   spaceDisplayIcon,
   spaceDisplayName,
   spaceKey,
@@ -2792,8 +2792,18 @@ export default function Sidebar() {
             : []),
           { id: "copy-thread-id", label: "Copy Thread ID" },
           ...(options?.extraItems ?? []),
-          { id: "archive", label: "Archive", separatorBefore: true },
-          { id: "delete", label: "Delete", destructive: true },
+          // Subagent threads are archived and restored through their parent
+          // (thread.archive cascades); archiving one alone would strand it with
+          // no sidebar or Archived-panel row to restore it from.
+          ...(thread.parentThreadId
+            ? []
+            : [{ id: "archive", label: "Archive", separatorBefore: true }]),
+          {
+            id: "delete",
+            label: "Delete",
+            destructive: true,
+            ...(thread.parentThreadId ? { separatorBefore: true } : {}),
+          },
         ],
         position,
       );
@@ -2980,17 +2990,27 @@ export default function Sidebar() {
       }
 
       if (clicked === "archive") {
+        // Subagent threads follow their parent's archive cascade. Archiving one
+        // directly would strand it, and archiving it after its parent in this
+        // loop would fail the not-archived invariant.
+        const archiveIds = ids.filter(
+          (id) => (getThreadFromState(useStore.getState(), id)?.parentThreadId ?? null) === null,
+        );
+        if (archiveIds.length === 0) {
+          removeFromSelection(ids);
+          return;
+        }
         if (appSettings.confirmThreadArchive) {
           const confirmed = await api.dialogs.confirm(
             [
-              `Archive ${count} ${pluralize(count, "thread")}?`,
+              `Archive ${archiveIds.length} ${pluralize(archiveIds.length, "thread")}?`,
               "Archived threads are hidden from the sidebar but can be restored later.",
             ].join("\n"),
           );
           if (!confirmed) return;
         }
 
-        for (const id of ids) {
+        for (const id of archiveIds) {
           await archiveThread(id);
         }
         removeFromSelection(ids);
@@ -3089,13 +3109,15 @@ export default function Sidebar() {
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
     activeSpace,
-    editedSpace,
+    voidSpace,
     spaceEditorOpen,
     spaceEditorMode,
+    spaceEditorInitialValue,
     spaceEditorExistingNames,
     spaceProjectPickerTarget,
     openSpaceCreator,
     openSpaceEditor,
+    openVoidEditor,
     closeSpaceEditor,
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
@@ -3103,6 +3125,8 @@ export default function Sidebar() {
     handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
+    handleRenameVoid,
+    resetVoidSpace,
     handleDeleteSpace,
     handleMoveProjectToSpace,
     handleSpaceEditorSubmit,
@@ -3917,9 +3941,12 @@ export default function Sidebar() {
       visibleThreadIds: visibleSidebarThreadIds,
       activeThreadId: activeSidebarThreadId,
     });
-    const releaseCallbacks = threadIdsToPrewarm.map((threadId) =>
-      retainThreadDetailSubscription(threadId),
-    );
+    // Retaining a thread without cached detail would open a full-history
+    // snapshot stream speculatively; only cursor-resumable threads are cheap
+    // enough to keep warm from scroll position alone.
+    const releaseCallbacks = threadIdsToPrewarm
+      .filter((threadId) => hasThreadDetailResumeCursor(threadId))
+      .map((threadId) => retainThreadDetailSubscription(threadId));
 
     return () => {
       for (const release of releaseCallbacks) {
@@ -4106,6 +4133,7 @@ export default function Sidebar() {
           sourceProjectName={hoverMetadata.sourceProjectName}
           branch={hoverMetadata.branch}
           worktreeName={hoverMetadata.worktreeName}
+          model={resolveThreadModelSummary(thread.modelSelection)}
         />
       </TooltipPopup>
     );
@@ -5152,12 +5180,12 @@ export default function Sidebar() {
           chatWorkspaceRoot,
           studioWorkspaceRoot,
         })
-          ? spaceDisplayName(project.spaceId, spaces)
+          ? spaceDisplayName(project.spaceId, spaces, voidSpace)
           : "Global",
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),
-    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot],
+    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot, voidSpace],
   );
   const searchPaletteActions = useMemo<SidebarSearchAction[]>(
     () => [
@@ -5224,13 +5252,15 @@ export default function Sidebar() {
         ? [
             {
               id: "switch-space-void",
-              label: `Switch to ${VOID_SPACE_NAME}`,
+              label: `Switch to ${voidSpace.name}`,
               description: "Jump to unassigned projects.",
-              keywords: ["space", "switch", "void", "unassigned"],
+              // "void" stays a keyword after a rename: it is what the palette answered to
+              // before, and it is still the only word for this group in the docs.
+              keywords: ["space", "switch", "void", "unassigned", voidSpace.name],
               requiresQuery: true,
               run: () => handleSelectSpace(null),
               icon: ({ className }: { className?: string }) => (
-                <SpaceIcon icon={VOID_SPACE_ICON} className={className} />
+                <SpaceIcon icon={voidSpace.icon} className={className} />
               ),
             } satisfies SidebarSearchAction,
           ]
@@ -5268,6 +5298,7 @@ export default function Sidebar() {
       openSpaceCreator,
       spaces,
       usageSettingsShortcutLabel,
+      voidSpace,
     ],
   );
 
@@ -5710,12 +5741,16 @@ export default function Sidebar() {
                     spaces={spaces}
                     activeSpaceId={activeSpaceId}
                     activityBySpaceId={spaceActivityById}
+                    voidSpace={voidSpace}
                     onSelect={handleSelectSpace}
                     onCreate={() => openSpaceCreator()}
                     onEdit={(space) => openSpaceEditor(space.id)}
                     onDelete={(space) => void handleDeleteSpace(space.id)}
                     onReorder={handleReorderSpaces}
                     onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
+                    onEditVoid={openVoidEditor}
+                    onRenameVoid={handleRenameVoid}
+                    onResetVoid={resetVoidSpace}
                     onDropProject={(projectId, spaceId) =>
                       void handleMoveProjectToSpace(projectId, spaceId)
                     }
@@ -6034,9 +6069,7 @@ export default function Sidebar() {
       <SpaceEditorDialog
         open={spaceEditorOpen}
         mode={spaceEditorMode}
-        {...(editedSpace
-          ? { initialValue: { name: editedSpace.name, icon: editedSpace.icon } }
-          : {})}
+        {...(spaceEditorInitialValue ? { initialValue: spaceEditorInitialValue } : {})}
         existingNames={spaceEditorExistingNames}
         onOpenChange={(open) => {
           if (!open) closeSpaceEditor();
@@ -6160,7 +6193,9 @@ export default function Sidebar() {
                       read-out of where it lives today. It wears the same secondary tone
                       as every other leading glyph in this menu. */}
                   <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                    <SpaceIcon icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces)} />
+                    <SpaceIcon
+                      icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces, voidSpace)}
+                    />
                   </span>
                   <span>Move to space</span>
                 </MenuSubTrigger>
@@ -6175,8 +6210,8 @@ export default function Sidebar() {
                     }}
                   >
                     <MenuRadioItem value={VOID_SPACE_KEY}>
-                      <SpaceIcon icon={VOID_SPACE_ICON} className="size-3.5" />
-                      <span className="min-w-0 truncate">Void</span>
+                      <SpaceIcon icon={voidSpace.icon} className="size-3.5" />
+                      <span className="min-w-0 truncate">{voidSpace.name}</span>
                     </MenuRadioItem>
                     {spaces.map((space) => (
                       <MenuRadioItem key={space.id} value={space.id}>

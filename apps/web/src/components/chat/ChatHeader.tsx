@@ -107,6 +107,8 @@ interface ChatHeaderProps {
     open: boolean;
     onToggle: () => void;
   } | null;
+  rightDockOpen?: boolean;
+  onToggleRightDock?: () => void;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   // When provided, the header collapses the
@@ -524,6 +526,8 @@ export function ChatHeader({
   diffOpen,
   diffDisabledReason: diffDisabledReasonProp,
   dockLauncherAction: dockLauncherActionProp,
+  rightDockOpen: rightDockOpenProp,
+  onToggleRightDock,
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
   environment: environmentProp,
@@ -547,6 +551,7 @@ export function ChatHeader({
   const showDiffToggle = showDiffToggleProp ?? true;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const dockLauncherAction = dockLauncherActionProp ?? null;
+  const rightDockOpen = rightDockOpenProp ?? false;
   const surfaceMode = surfaceModeProp ?? "single";
   const isSidechat = isSidechatProp ?? false;
   const environment = environmentProp ?? null;
@@ -600,27 +605,31 @@ export function ChatHeader({
     );
   };
 
-  // The right-side diff toggle (the "open the diff on the right" affordance). It stays in
-  // the header in both layouts — beside the Environment button when that is enabled, and
-  // inside the legacy cluster otherwise — so the familiar right-sidebar control is always a
-  // single click away. Declared once here to avoid duplicating the markup across branches.
-  const diffToggleControl = showDiffToggle ? (
+  // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts
+  // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
+  // behavior until they gain their own launcher surface.
+  const togglesRightDock = onToggleRightDock !== undefined;
+  const rightPanelToggleControl = showDiffToggle ? (
     <Tooltip>
       <TooltipTrigger
         render={
           <Toggle
             className={cn(
               CHAT_HEADER_TOGGLE_CLASS_NAME,
-              showDiffTotals ? null : "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+              togglesRightDock || !showDiffTotals
+                ? "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0"
+                : null,
             )}
-            pressed={diffOpen}
-            onPressedChange={onToggleDiff}
-            aria-label="Toggle diff panel"
+            pressed={togglesRightDock ? rightDockOpen : diffOpen}
+            onPressedChange={togglesRightDock ? onToggleRightDock : onToggleDiff}
+            aria-label={togglesRightDock ? "Toggle right sidebar" : "Toggle diff panel"}
             variant="default"
             size="xs"
-            disabled={!isGitRepo || (diffDisabledReason !== null && !diffOpen)}
+            disabled={
+              togglesRightDock ? false : !isGitRepo || (diffDisabledReason !== null && !diffOpen)
+            }
           >
-            {showDiffTotals ? (
+            {!togglesRightDock && showDiffTotals ? (
               <span className="inline-flex items-center gap-1">
                 <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
                   +{diffAdditions}
@@ -635,13 +644,17 @@ export function ChatHeader({
         }
       />
       <TooltipPopup side="bottom">
-        {!isGitRepo
-          ? "Diff panel is unavailable because this project is not a git repository."
-          : diffDisabledReason && !diffOpen
-            ? diffDisabledReason
-            : diffToggleShortcutLabel
-              ? `Toggle diff panel (${diffToggleShortcutLabel})`
-              : "Toggle diff panel"}
+        {togglesRightDock
+          ? rightDockOpen
+            ? "Close right sidebar"
+            : "Open right sidebar"
+          : !isGitRepo
+            ? "Diff panel is unavailable because this project is not a git repository."
+            : diffDisabledReason && !diffOpen
+              ? diffDisabledReason
+              : diffToggleShortcutLabel
+                ? `Toggle diff panel (${diffToggleShortcutLabel})`
+                : "Toggle diff panel"}
       </TooltipPopup>
     </Tooltip>
   ) : null;
@@ -886,13 +899,13 @@ export function ChatHeader({
         ) : null}
 
         {/* Environment: one button consolidating Open-in-editor and git actions into the
-            Environment panel. The right-side diff toggle stays beside it so the familiar
-            "open the diff on the right" control is preserved. Falls back to the legacy split
-            controls when no environment is resolved. */}
+            Environment panel. The right-side panel control stays beside it, acting as the
+            multi-pane dock toggle on single chats and the legacy diff toggle in split hosts.
+            Falls back to the legacy controls when no environment is resolved. */}
         {environment ? (
           <>
             <EnvironmentToggle environment={environment} />
-            {dockLauncherControl ?? diffToggleControl}
+            {dockLauncherControl ?? rightPanelToggleControl}
           </>
         ) : (
           <>
@@ -914,7 +927,7 @@ export function ChatHeader({
                 onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
               />
             ) : null}
-            {dockLauncherControl ?? diffToggleControl}
+            {dockLauncherControl ?? rightPanelToggleControl}
           </>
         )}
       </div>

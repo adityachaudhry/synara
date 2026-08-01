@@ -32,6 +32,7 @@ import {
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   getShellSnapshot: "orchestration.getShellSnapshot",
+  getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
   importThread: "orchestration.importThread",
   repairState: "orchestration.repairState",
@@ -90,6 +91,7 @@ export const ClaudeModelSelection = Schema.Struct({
   provider: Schema.Literal("claudeAgent"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(ClaudeModelOptions),
+  supportsAutoMode: Schema.optional(Schema.Boolean),
 });
 export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
@@ -212,7 +214,7 @@ export const ProviderStartOptions = Schema.Struct({
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 
-export const RuntimeMode = Schema.Literals(["approval-required", "full-access"]);
+export const RuntimeMode = Schema.Literals(["approval-required", "auto", "full-access"]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
@@ -221,7 +223,12 @@ export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "defau
 const SidechatSourceThreadId = Schema.optional(Schema.NullOr(ThreadId)).pipe(
   Schema.withDecodingDefault(() => null),
 );
-export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
+export const ProviderRequestKind = Schema.Literals([
+  "command",
+  "file-read",
+  "file-change",
+  "permissions",
+]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
 export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
@@ -1497,6 +1504,8 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  expectedSessionStatus: Schema.optional(OrchestrationSessionStatus),
+  expectedSessionUpdatedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
 });
 
@@ -2423,8 +2432,25 @@ export type OrchestrationUnsubscribeShellInput = typeof OrchestrationUnsubscribe
 
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  // Cursor of the last event the client already applied. When present and the
+  // gap fits the server's replay limit, the stream replays only the gap and
+  // skips the full-history snapshot. Optional so older clients keep the
+  // snapshot-first behavior unchanged.
+  afterSequence: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
+
+export const OrchestrationGetThreadDetailSnapshotInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationGetThreadDetailSnapshotInput =
+  typeof OrchestrationGetThreadDetailSnapshotInput.Type;
+
+export const OrchestrationGetThreadDetailSnapshotResult = Schema.NullOr(
+  OrchestrationThreadDetailSnapshot,
+);
+export type OrchestrationGetThreadDetailSnapshotResult =
+  typeof OrchestrationGetThreadDetailSnapshotResult.Type;
 
 export const OrchestrationImportThreadInput = Schema.Struct({
   threadId: ThreadId,
@@ -2450,6 +2476,10 @@ export const OrchestrationRpcSchemas = {
   getShellSnapshot: {
     input: OrchestrationGetShellSnapshotInput,
     output: OrchestrationGetShellSnapshotResult,
+  },
+  getThreadDetailSnapshot: {
+    input: OrchestrationGetThreadDetailSnapshotInput,
+    output: OrchestrationGetThreadDetailSnapshotResult,
   },
   repairState: {
     input: OrchestrationRepairStateInput,

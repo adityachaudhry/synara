@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   MessageId,
+  type OrchestrationCheckpointFile,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationProposedPlanId,
@@ -13,12 +14,14 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThread,
   type OrchestrationThreadShell,
+  type ProviderKind,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@synara/contracts";
 import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
@@ -49,6 +52,7 @@ import {
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
+import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -151,7 +155,7 @@ type ProviderDiffPlaceholder = {
   // (forwarded to dispatch / re-stored), never mutated in place, so this is a
   // ReadonlyArray — which also lets it accept the readonly `checkpoint.files` from
   // an OrchestrationThread without a defensive copy.
-  readonly files: ReadonlyArray<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>[number]>;
+  readonly files: ReadonlyArray<OrchestrationCheckpointFile>;
 };
 type NativeChildSlotState = {
   initialized: boolean;
@@ -210,12 +214,12 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
   );
 }
 
-function parseProviderTurnDiffFiles(unifiedDiff: string) {
-  try {
-    return parseCheckpointFilesFromUnifiedDiff(unifiedDiff);
-  } catch {
-    return null;
-  }
+function parseProviderTurnDiffFiles(
+  unifiedDiff: string,
+): Effect.Effect<OrchestrationCheckpointFile[] | null> {
+  return parseCheckpointFilesFromUnifiedDiff(unifiedDiff).pipe(
+    Effect.catchCause(() => Effect.succeed(null)),
+  );
 }
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
@@ -1919,17 +1923,19 @@ const make = Effect.gen(function* () {
         event.type === "turn.completed" ||
         event.type === "turn.aborted"
       ) {
-        const nextActiveTurnId =
-          event.type === "turn.started"
-            ? (eventTurnId ?? null)
-            : isTerminalTurnEvent ||
-                event.type === "session.exited" ||
-                (event.type === "session.state.changed" &&
-                  (event.payload.state === "ready" ||
-                    event.payload.state === "stopped" ||
-                    event.payload.state === "error"))
-              ? null
-              : activeTurnId;
+        let nextActiveTurnId = activeTurnId;
+        if (event.type === "turn.started") {
+          nextActiveTurnId = eventTurnId ?? null;
+        } else if (
+          isTerminalTurnEvent ||
+          event.type === "session.exited" ||
+          (event.type === "session.state.changed" &&
+            (event.payload.state === "ready" ||
+              event.payload.state === "stopped" ||
+              event.payload.state === "error"))
+        ) {
+          nextActiveTurnId = null;
+        }
         const status = (() => {
           switch (event.type) {
             case "session.state.changed":
@@ -1938,8 +1944,14 @@ const make = Effect.gen(function* () {
               return "running";
             case "session.exited":
               return "stopped";
-            case "turn.completed":
-              return runtimeTurnState(event) === "failed" ? "error" : "ready";
+            case "turn.completed": {
+              const turnState = runtimeTurnState(event);
+              if (turnState === "failed") return "error";
+              if (turnState === "interrupted" || turnState === "cancelled") {
+                return "interrupted";
+              }
+              return "ready";
+            }
             case "turn.aborted":
               return "interrupted";
             case "session.started":
@@ -1949,16 +1961,15 @@ const make = Effect.gen(function* () {
               return activeTurnId !== null ? "running" : "ready";
           }
         })();
-        const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : status === "error"
-              ? (asString(runtimePayloadRecord(event)?.errorMessage) ??
-                thread.session?.lastError ??
-                "Turn failed")
-              : status === "ready" || status === "interrupted"
-                ? null
-                : (thread.session?.lastError ?? null);
+        let lastError = thread.session?.lastError ?? null;
+        if (event.type === "session.state.changed" && event.payload.state === "error") {
+          lastError = event.payload.reason ?? lastError ?? "Provider session error";
+        } else if (status === "error") {
+          lastError =
+            asString(runtimePayloadRecord(event)?.errorMessage) ?? lastError ?? "Turn failed";
+        } else if (status === "ready" || status === "interrupted") {
+          lastError = null;
+        }
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -2350,7 +2361,7 @@ const make = Effect.gen(function* () {
             );
             const files =
               (canParseLiveDiffPatch
-                ? parseProviderTurnDiffFiles(event.payload.unifiedDiff)
+                ? yield* parseProviderTurnDiffFiles(event.payload.unifiedDiff)
                 : null) ??
               trackedPlaceholder?.files ??
               existingCheckpoint?.files ??
@@ -2445,11 +2456,16 @@ const make = Effect.gen(function* () {
       const thread = Option.getOrUndefined(
         yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId),
       );
-      const isCodexSteer =
+      // A native steer rides the live turn, so no later turn.started will
+      // arrive to match a pending delivery-mode request — bind to the live
+      // turn immediately instead.
+      const steerProvider = thread?.session?.providerName ?? thread?.modelSelection.provider;
+      const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
-        (thread?.session?.providerName ?? thread?.modelSelection.provider) === "codex";
+        steerProvider !== undefined &&
+        providerSupportsNativeTurnSteering(steerProvider);
       let deliveryTurnId: TurnId | undefined;
-      if (isCodexSteer) {
+      if (isNativeSteer) {
         let activeTurnId = thread?.session?.activeTurnId ?? undefined;
         if (!activeTurnId) {
           const runtimeSession = (yield* providerService.listSessions()).find(
@@ -2479,8 +2495,7 @@ const make = Effect.gen(function* () {
       const flushEvent: ProviderRuntimeEvent = {
         type: "turn.started",
         eventId: event.eventId,
-        provider:
-          isCodexSteer || thread?.session?.providerName !== "claudeAgent" ? "codex" : "claudeAgent",
+        provider: (steerProvider ?? "codex") as ProviderKind,
         createdAt: event.payload.createdAt,
         threadId: event.payload.threadId,
         turnId: deliveryTurnId,
@@ -2546,6 +2561,41 @@ const make = Effect.gen(function* () {
   });
   const runtimeJournalDrainLock = yield* Semaphore.make(1);
 
+  // A deterministically failing row would otherwise pin the single global
+  // cursor forever: the drain never advances, the durable poller re-reads the
+  // same head row, and projection freezes for every thread and every provider
+  // — durably, across restarts. Once the poison gate trips (see the module for
+  // why it needs both an attempt and a wall-clock gate), the head row is
+  // dead-lettered: skipped with an error log so the journal flows again.
+  const poisonGate = makeRuntimeJournalPoisonGate();
+
+  const deadLetterPoisonHeadRow = Effect.gen(function* () {
+    const cursor = yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
+    if (!poisonGate.noteBlockedDrain(cursor, Date.now())) return false;
+    const highWater = yield* runtimeEvents.getHighWaterSequence;
+    const page = yield* runtimeEvents.readAfter({
+      sequenceExclusive: cursor,
+      throughSequenceInclusive: highWater,
+      limit: 1,
+    });
+    const poison = page[0];
+    if (poison === undefined) return false;
+    yield* Effect.logError("provider runtime journal dead-lettered a poison event", {
+      sequence: poison.sequence,
+      eventId: poison.event.eventId,
+      eventType: poison.event.type,
+      threadId: poison.event.threadId,
+      provider: poison.event.provider,
+    });
+    const advanced = yield* runtimeEvents.advanceConsumerCursor({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      eventSequence: poison.sequence,
+      updatedAt: new Date().toISOString(),
+    });
+    poisonGate.reset();
+    return advanced;
+  });
+
   const drainRuntimeJournalThrough = (throughSequenceInclusive?: number) =>
     runtimeJournalDrainLock.withPermits(1)(
       Effect.gen(function* () {
@@ -2576,7 +2626,13 @@ const make = Effect.gen(function* () {
             }),
           );
           yield* worker.drain;
-          if (runtimeJournalPageBlocked) return;
+          if (runtimeJournalPageBlocked) {
+            // Either the poison threshold was reached and the head row was
+            // skipped (loop again from the fresh cursor), or the drain yields
+            // to the durable poller, which retries from the exact cursor.
+            if (yield* deadLetterPoisonHeadRow) continue;
+            return;
+          }
 
           const advancedCursor = yield* runtimeEvents.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,

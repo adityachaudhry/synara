@@ -1,10 +1,21 @@
-import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  ThreadId,
+  TurnId,
+  type ModelSlug,
+  type RuntimeMode,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
+  commitAfterRuntimeModePersistence,
+  createRuntimeModePersistenceQueue,
+  persistModelSelectionBeforeRuntimeMode,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
@@ -88,7 +99,7 @@ describe("transcript auto-follow signal", () => {
 describe("file undo completion", () => {
   const pending = {
     threadId: ThreadId.makeUnsafe("thread-file-undo"),
-    turnCount: 2,
+    turnCounts: [2],
     existingFailureActivityIds: [],
   };
   const summary = {
@@ -115,6 +126,38 @@ describe("file undo completion", () => {
         thread: {
           ...baseThread,
           turnDiffSummaries: [{ ...summary, files: [] }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("stays pending until every merged turn in the card has been reverted", () => {
+    const olderSummary = {
+      ...summary,
+      turnId: TurnId.makeUnsafe("turn-1"),
+      checkpointTurnCount: 1,
+      checkpointTurnCounts: [1],
+      files: [],
+    };
+    const multiTurnPending = { ...pending, turnCounts: [2, 1] };
+
+    expect(
+      hasFileUndoSettled({
+        pending: multiTurnPending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [olderSummary, summary],
+          activities: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasFileUndoSettled({
+        pending: multiTurnPending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [olderSummary, { ...summary, files: [] }],
+          activities: [],
         },
       }),
     ).toBe(true);
@@ -225,26 +268,31 @@ describe("prompt history navigation", () => {
   it("derives newest-first native user prompts and skips imported or internal-only entries", () => {
     const messages = [
       {
+        id: MessageId.makeUnsafe("message-imported"),
         role: "user",
         text: "Imported prompt",
         source: "fork-import",
       },
       {
+        id: MessageId.makeUnsafe("message-assistant"),
         role: "assistant",
         text: "Assistant response",
         source: "native",
       },
       {
+        id: MessageId.makeUnsafe("message-first"),
         role: "user",
         text: "First prompt\n\n<terminal_context>\n# Terminal\noutput\n</terminal_context>",
         source: "native",
       },
       {
+        id: MessageId.makeUnsafe("message-images"),
         role: "user",
         text: "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]",
         source: "native",
       },
       {
+        id: MessageId.makeUnsafe("message-second"),
         role: "user",
         text: "Second prompt",
         source: "native",
@@ -256,9 +304,24 @@ describe("prompt history navigation", () => {
 
   it("limits prompt history without deduping repeated prompts", () => {
     const messages = [
-      { role: "user", text: "one", source: "native" },
-      { role: "user", text: "repeat", source: "native" },
-      { role: "user", text: "repeat", source: "native" },
+      {
+        id: MessageId.makeUnsafe("message-one"),
+        role: "user",
+        text: "one",
+        source: "native",
+      },
+      {
+        id: MessageId.makeUnsafe("message-repeat-one"),
+        role: "user",
+        text: "repeat",
+        source: "native",
+      },
+      {
+        id: MessageId.makeUnsafe("message-repeat-two"),
+        role: "user",
+        text: "repeat",
+        source: "native",
+      },
     ] as const;
 
     expect(derivePromptHistoryFromMessages(messages, 2)).toEqual(["repeat", "repeat"]);
@@ -1293,6 +1356,7 @@ describe("deriveComposerSendState", () => {
       imageCount: 0,
       fileCount: 0,
       assistantSelectionCount: 0,
+      browserAnnotationCount: 0,
       fileCommentCount: 0,
       terminalContexts: [
         {
@@ -1321,6 +1385,7 @@ describe("deriveComposerSendState", () => {
       imageCount: 0,
       fileCount: 0,
       assistantSelectionCount: 0,
+      browserAnnotationCount: 0,
       fileCommentCount: 0,
       terminalContexts: [
         {
@@ -1348,6 +1413,7 @@ describe("deriveComposerSendState", () => {
       imageCount: 0,
       fileCount: 0,
       assistantSelectionCount: 1,
+      browserAnnotationCount: 0,
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
@@ -1362,6 +1428,7 @@ describe("deriveComposerSendState", () => {
       imageCount: 0,
       fileCount: 0,
       assistantSelectionCount: 0,
+      browserAnnotationCount: 0,
       fileCommentCount: 1,
       terminalContexts: [],
       pastedTexts: [],
@@ -1376,6 +1443,22 @@ describe("deriveComposerSendState", () => {
       imageCount: 0,
       fileCount: 1,
       assistantSelectionCount: 0,
+      browserAnnotationCount: 0,
+      fileCommentCount: 0,
+      terminalContexts: [],
+      pastedTexts: [],
+    });
+
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats browser annotations as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      fileCount: 0,
+      assistantSelectionCount: 0,
+      browserAnnotationCount: 1,
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
@@ -1637,6 +1720,7 @@ describe("worktree setup snapshots", () => {
     const current: LocalDispatchSnapshot = {
       startedAt: "2026-04-13T00:00:00.000Z",
       worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      expectedUserMessageId: null,
       latestTurnTurnId: null,
       latestTurnRequestedAt: null,
       latestTurnStartedAt: null,
@@ -1658,6 +1742,7 @@ describe("worktree setup snapshots", () => {
     const current: LocalDispatchSnapshot = {
       startedAt: "2026-04-13T00:00:00.000Z",
       worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      expectedUserMessageId: null,
       latestTurnTurnId: null,
       latestTurnRequestedAt: null,
       latestTurnStartedAt: null,
@@ -1685,6 +1770,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
     worktreeSetup: null,
+    expectedUserMessageId: "message-for-dispatch" as never,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -1695,6 +1781,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   const firstTurnLocalDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
     worktreeSetup: null,
+    expectedUserMessageId: "message-first-send" as never,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -1709,6 +1796,15 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "ready",
         latestTurn: null,
+        messages: [
+          {
+            id: "message-before-dispatch" as never,
+            role: "user",
+            text: "an unrelated message",
+            createdAt: "2026-04-13T00:00:00.000Z",
+            streaming: false,
+          },
+        ],
         session: {
           provider: "codex",
           status: "ready",
@@ -1737,6 +1833,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
           assistantMessageId: null,
           sourceProposedPlan: undefined,
         },
+        messages: [],
         session: {
           provider: "codex",
           status: "ready",
@@ -1757,6 +1854,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch: firstTurnLocalDispatch,
         phase: "ready",
         latestTurn: null,
+        messages: [],
         session: {
           provider: "claudeAgent",
           status: "ready",
@@ -1771,12 +1869,42 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(false);
   });
 
+  it("acknowledges a first send when its user message becomes durable", () => {
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch: firstTurnLocalDispatch,
+        phase: "ready",
+        latestTurn: null,
+        messages: [
+          {
+            id: "message-first-send" as never,
+            role: "user",
+            text: "the submitted message",
+            createdAt: "2026-04-13T00:00:01.000Z",
+            streaming: false,
+          },
+        ],
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
   it("still acknowledges non-ready session transitions without a latest turn snapshot", () => {
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch: firstTurnLocalDispatch,
         phase: "disconnected",
         latestTurn: null,
+        messages: [],
         session: null,
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -1859,9 +1987,172 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("full-access", "acceptForSession")).toBeNull();
   });
 
+  it("keeps Auto as the durable policy after a session-scoped approval", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession")).toBeNull();
+  });
+
   it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
+  });
+
+  it("does not widen a permission-profile grant to full access", () => {
+    expect(
+      resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession", "permissions"),
+    ).toBeNull();
+  });
+});
+
+describe("commitAfterRuntimeModePersistence", () => {
+  it("does not commit an incompatible model when the canonical downgrade fails", async () => {
+    const calls: Array<string> = [];
+
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return false;
+      },
+      commit: () => calls.push("commit"),
+    });
+
+    expect(committed).toBe(false);
+    expect(calls).toEqual(["persist"]);
+  });
+
+  it("commits the model only after the canonical downgrade succeeds", async () => {
+    const calls: Array<string> = [];
+
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return true;
+      },
+      commit: () => calls.push("commit"),
+    });
+
+    expect(committed).toBe(true);
+    expect(calls).toEqual(["persist", "commit"]);
+  });
+});
+
+describe("createRuntimeModePersistenceQueue", () => {
+  it("persists the final rapid selection after an opposite update is already in flight", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const calls: Array<[RuntimeMode, RuntimeMode]> = [];
+    const queue = createRuntimeModePersistenceQueue("auto");
+    const persist = async (currentMode: RuntimeMode, nextMode: RuntimeMode) => {
+      calls.push([currentMode, nextMode]);
+      if (calls.length === 1) {
+        await firstBlocked;
+      }
+      return true;
+    };
+
+    const fullAccess = queue.persist("full-access", persist);
+    await Promise.resolve();
+    const auto = queue.persist("auto", persist);
+    expect(calls).toEqual([["auto", "full-access"]]);
+
+    releaseFirst?.();
+    await expect(Promise.all([fullAccess, auto])).resolves.toEqual([true, true]);
+    expect(calls).toEqual([
+      ["auto", "full-access"],
+      ["full-access", "auto"],
+    ]);
+  });
+
+  it("keeps the acknowledged mode when an earlier queued write fails", async () => {
+    const calls: Array<[RuntimeMode, RuntimeMode]> = [];
+    const queue = createRuntimeModePersistenceQueue("auto");
+    const failed = queue.persist("full-access", async (currentMode, nextMode) => {
+      calls.push([currentMode, nextMode]);
+      return false;
+    });
+    const finalAuto = queue.persist("auto", async (currentMode, nextMode) => {
+      calls.push([currentMode, nextMode]);
+      return true;
+    });
+
+    await expect(Promise.all([failed, finalAuto])).resolves.toEqual([false, true]);
+    expect(calls).toEqual([["auto", "full-access"]]);
+  });
+});
+
+describe("persistModelSelectionBeforeRuntimeMode", () => {
+  const previousModel = {
+    provider: "droid",
+    model: "claude-opus-4-8",
+  } as const;
+  const autoCapableModel = {
+    provider: "codex",
+    model: "gpt-5.6-sol",
+  } as const;
+
+  it("persists a newly selected model before enabling Auto", async () => {
+    const calls: Array<string> = [];
+
+    await persistModelSelectionBeforeRuntimeMode({
+      currentModelSelection: previousModel,
+      nextModelSelection: autoCapableModel,
+      currentRuntimeMode: "approval-required",
+      nextRuntimeMode: "auto",
+      persistModelSelection: async () => {
+        calls.push("model");
+      },
+      persistRuntimeMode: async () => {
+        calls.push("runtime");
+      },
+    });
+
+    expect(calls).toEqual(["model", "runtime"]);
+  });
+
+  it("does not enable Auto when persisting the selected model fails", async () => {
+    const calls: Array<string> = [];
+
+    await expect(
+      persistModelSelectionBeforeRuntimeMode({
+        currentModelSelection: previousModel,
+        nextModelSelection: autoCapableModel,
+        currentRuntimeMode: "approval-required",
+        nextRuntimeMode: "auto",
+        persistModelSelection: async () => {
+          calls.push("model");
+          throw new Error("model persistence failed");
+        },
+        persistRuntimeMode: async () => {
+          calls.push("runtime");
+        },
+      }),
+    ).rejects.toThrow("model persistence failed");
+
+    expect(calls).toEqual(["model"]);
+  });
+
+  it("downgrades from Auto before persisting an incompatible model", async () => {
+    const calls: Array<string> = [];
+
+    await persistModelSelectionBeforeRuntimeMode({
+      currentModelSelection: autoCapableModel,
+      nextModelSelection: previousModel,
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistModelSelection: async () => {
+        calls.push("model");
+      },
+      persistRuntimeMode: async () => {
+        calls.push("runtime");
+      },
+    });
+
+    expect(calls).toEqual(["runtime", "model"]);
   });
 });
 
