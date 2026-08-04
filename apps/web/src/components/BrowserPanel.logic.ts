@@ -273,7 +273,15 @@ export function browserAnnotationTheme(
   return {
     mode,
     accent: resolvedBrowserAnnotationColor(root, "--color-text-accent", fallback.accent),
-    surface: resolvedBrowserAnnotationColor(root, "--composer-surface", fallback.surface),
+    // The overlay renders inside the guest page without the backdrop blur the
+    // composer sits on, so a translucent surface (--composer-surface is ~14%
+    // transparent in light mode) would let page content show through the cards.
+    // The opaque control token is the same fill without the glass assumption.
+    surface: resolvedBrowserAnnotationColor(
+      root,
+      "--color-background-control-opaque",
+      fallback.surface,
+    ),
     text: resolvedBrowserAnnotationColor(root, "--color-text-foreground", fallback.text),
     mutedText: resolvedBrowserAnnotationColor(
       root,
@@ -331,6 +339,16 @@ export function browserAddressDisplayValue(
 
 // Component-facing alias for the shared desktop/web browser URL normalizer.
 export const normalizeBrowserAddressInput = normalizeBrowserUrlInput;
+
+// A raw file:// URL must never reach Electron's renderer-owned <webview>. Main translates it
+// to Synara's directory-scoped preview protocol after adopting the guest.
+export function browserWebviewInitialUrl(url: string): string {
+  try {
+    return new URL(url).protocol === "file:" ? BROWSER_BLANK_URL : url;
+  } catch {
+    return url;
+  }
+}
 
 function normalizeQuery(value: string): string {
   return value.trim().toLowerCase();

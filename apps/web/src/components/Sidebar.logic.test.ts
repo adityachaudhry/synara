@@ -33,16 +33,20 @@ import {
   isDuplicateProjectCreateError,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  runExclusiveProjectAddition,
+  runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
-  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  resolveThreadStatusTrailingIndicator,
+  isUrgentThreadStatusPill,
+  type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
@@ -71,16 +75,6 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
-
-describe("resolvePendingSidebarViewSelection", () => {
-  it("optimistically follows a destination segment", () => {
-    expect(resolvePendingSidebarViewSelection("threads", "studio")).toBe("studio");
-  });
-
-  it("clears the optimistic segment when the user returns to the active view", () => {
-    expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
-  });
-});
 
 describe("isProjectsSidebarSurface", () => {
   it("enables Space shortcuts only where the Space switcher is visible", () => {
@@ -219,6 +213,7 @@ describe("resolveThreadHoverCardMetadata", () => {
         associatedWorktreeBranch: "codex/synara-mobile",
       }),
       project: {
+        kind: "project",
         name: "synara-mobile",
         folderName: "Remodex",
         cwd: "/Users/me/Developer/Remodex",
@@ -240,6 +235,7 @@ describe("resolveThreadHoverCardMetadata", () => {
         branch: "main",
       }),
       project: {
+        kind: "project",
         name: "synara",
         folderName: "synara",
         cwd: "/Users/me/Developer/synara",
@@ -253,6 +249,20 @@ describe("resolveThreadHoverCardMetadata", () => {
       branch: "main",
       worktreeName: null,
     });
+  });
+
+  it("labels project-less chat containers as Synara instead of the slug folder", () => {
+    const metadata = resolveThreadHoverCardMetadata({
+      thread: makeSidebarThreadSummary({ branch: null }),
+      project: {
+        kind: "chat",
+        name: "open-the-browser-search-house-music",
+        folderName: "open-the-browser-search-house-music",
+        cwd: "/Users/me/Documents/Synara/2026-08-01/open-the-browser-search-house-music",
+      },
+    });
+
+    expect(metadata.projectName).toBe("Synara");
   });
 });
 
@@ -531,6 +541,64 @@ describe("add-project error helpers", () => {
     expect(decision).toBe("recovered");
   });
 
+  it("serializes project additions and releases the lock after completion", async () => {
+    const lock = { current: false };
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const first = runExclusiveProjectAddition(lock, async () => {
+      markFirstStarted();
+      await firstBlocked;
+      return "first";
+    });
+
+    await firstStarted;
+    await expect(runExclusiveProjectAddition(lock, async () => "second")).rejects.toThrow(
+      "Another project is already being added.",
+    );
+
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
+    await expect(runExclusiveProjectAddition(lock, async () => "third")).resolves.toBe("third");
+  });
+
+  it("recovers a project whose server commit won a cancellation race", async () => {
+    const controller = new AbortController();
+    const interruption = new Error("cancelled");
+    controller.abort(interruption);
+
+    await expect(
+      runProjectProvisionWithCancellationRecovery({
+        signal: controller.signal,
+        provision: async () => {
+          throw interruption;
+        },
+        recoverCommittedProject: async () => true,
+      }),
+    ).resolves.toEqual({ status: "recovered" });
+  });
+
+  it("preserves cancellation when no project commit can be recovered", async () => {
+    const controller = new AbortController();
+    const interruption = new Error("cancelled");
+    controller.abort(interruption);
+
+    await expect(
+      runProjectProvisionWithCancellationRecovery({
+        signal: controller.signal,
+        provision: async () => {
+          throw interruption;
+        },
+        recoverCommittedProject: async () => false,
+      }),
+    ).rejects.toBe(interruption);
+  });
+
   it("detects duplicate project.create errors", () => {
     expect(
       isDuplicateProjectCreateError(
@@ -778,6 +846,51 @@ describe("pin helpers", () => {
         threadsHydrated: false,
       }),
     ).toBeNull();
+  });
+});
+
+function statusPill(label: ThreadStatusPill["label"]): ThreadStatusPill {
+  return { label, colorClass: "", dotClass: "", pulse: false };
+}
+
+describe("isUrgentThreadStatusPill", () => {
+  it("treats every status but a finished turn as urgent", () => {
+    expect(isUrgentThreadStatusPill(statusPill("Pending Approval"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Awaiting Input"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Plan Ready"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
+  });
+});
+
+describe("resolveThreadStatusTrailingIndicator", () => {
+  it("shows nothing when there is no status", () => {
+    expect(resolveThreadStatusTrailingIndicator({ status: null })).toBeNull();
+  });
+
+  it("yields the slot when another affordance owns it", () => {
+    expect(
+      resolveThreadStatusTrailingIndicator({
+        status: statusPill("Working"),
+        slotOccupied: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("hides an unread completion on the open thread but keeps it elsewhere", () => {
+    const completed = statusPill("Completed");
+    expect(resolveThreadStatusTrailingIndicator({ status: completed, isActive: true })).toBeNull();
+    expect(resolveThreadStatusTrailingIndicator({ status: completed, isActive: false })).toBe(
+      completed,
+    );
+  });
+
+  it("keeps live and actionable statuses on the open row", () => {
+    for (const label of ["Working", "Connecting", "Pending Approval", "Awaiting Input"] as const) {
+      const pill = statusPill(label);
+      expect(resolveThreadStatusTrailingIndicator({ status: pill, isActive: true })).toBe(pill);
+    }
   });
 });
 

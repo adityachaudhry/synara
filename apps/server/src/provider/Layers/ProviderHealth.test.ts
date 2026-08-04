@@ -247,6 +247,46 @@ function withTempCodexHome(configContent?: string) {
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   describe("provider update commands", () => {
+    it("delegates native Claude release-channel truth to Claude", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.claudeAgent;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "claude",
+        realCommandPath: "/Users/test/.local/share/claude/versions/2.1.100/claude",
+      });
+
+      assert.strictEqual(capabilities.latestVersionSource, null);
+      assert.deepStrictEqual(capabilities.update, {
+        command: "claude update",
+        executable: "claude",
+        args: ["update"],
+        lockKey: "claude-native",
+      });
+    });
+
+    it("keeps Claude's latest Homebrew cask source and command aligned", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.claudeAgent;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "/opt/homebrew/bin/claude",
+        realCommandPath: "/opt/homebrew/Caskroom/claude-code@latest/2.1.100/claude",
+      });
+
+      assert.deepStrictEqual(capabilities.latestVersionSource, {
+        kind: "homebrew",
+        name: "claude-code@latest",
+        homebrewKind: "cask",
+      });
+      assert.deepStrictEqual(capabilities.update, {
+        command: "brew upgrade --cask claude-code@latest",
+        executable: "brew",
+        args: ["upgrade", "--cask", "claude-code@latest"],
+        lockKey: "homebrew",
+      });
+    });
+
     it("registers Antigravity's native updater", () => {
       const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.antigravity;
       assert.ok(definition);
@@ -473,7 +513,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               if (joined === "--version") {
                 return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
               }
-              if (joined === "login status" || joined === "login status --json") {
+              if (joined === "-c mcp_servers={} login status") {
                 return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
               }
               throw new Error(`Unexpected args: ${joined}`);
@@ -600,6 +640,48 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           checkedAt: "2026-06-04T17:01:00.000Z",
         },
       ]);
+    });
+
+    it("drops a cached update advisory when a transient timeout prevents verification", () => {
+      const previousWithUpdate = {
+        ...previousReadyOpenCode,
+        versionAdvisory: {
+          status: "behind_latest",
+          currentVersion: "1.15.13",
+          latestVersion: "1.16.0",
+          updateCommand: "npm install -g opencode-ai@latest",
+          canUpdate: true,
+          checkedAt: "2026-06-04T17:00:00.000Z",
+          message: "Update available.",
+        },
+      } satisfies ServerProviderStatus;
+
+      const [result] = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousWithUpdate],
+        [
+          {
+            provider: "opencode",
+            status: "error",
+            available: false,
+            authStatus: "unknown",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message:
+              "OpenCode CLI is installed but failed to run. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.strictEqual(result?.status, "ready");
+      assert.strictEqual(result?.available, true);
+      assert.deepStrictEqual(result?.versionAdvisory, {
+        status: "unknown",
+        currentVersion: "1.15.13",
+        latestVersion: null,
+        updateCommand: null,
+        canUpdate: false,
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: null,
+      });
     });
 
     it("does not hide non-timeout provider failures", () => {
@@ -788,7 +870,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -806,7 +889,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             assert.strictEqual(command, "/custom/bin/codex");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -828,7 +912,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (commandLine.includes('"--version"')) {
               return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             }
-            if (commandLine.includes('"login" "status"')) {
+            if (commandLine.includes('"-c" "mcp_servers={}" "login" "status"')) {
               return { stdout: "Logged in\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${args.join(" ")}`);
@@ -869,7 +953,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             assert.strictEqual(env?.CODEX_HOME, expectedCodexHome);
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status") {
+            if (joined === "-c mcp_servers={} login status") {
               sawLoginStatusProbe = true;
               return { stdout: "Logged in\n", stderr: "", code: 0 };
             }
@@ -926,7 +1010,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 0.123.0\n", stderr: "", code: 0 };
-            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -950,7 +1035,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status") {
+            if (joined === "-c mcp_servers={} login status") {
               return { stdout: "", stderr: "Not logged in. Run codex login.", code: 1 };
             }
             throw new Error(`Unexpected args: ${joined}`);
@@ -976,7 +1061,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status")
+            if (joined === "-c mcp_servers={} login status")
               return { stdout: "Not logged in\n", stderr: "", code: 1 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
@@ -1001,7 +1086,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status") {
+            if (joined === "-c mcp_servers={} login status") {
               return { stdout: "", stderr: "error: unknown command 'login'", code: 2 };
             }
             throw new Error(`Unexpected args: ${joined}`);
@@ -1078,7 +1163,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status")
+            if (joined === "-c mcp_servers={} login status")
               return { stdout: "Not logged in\n", stderr: "", code: 1 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
