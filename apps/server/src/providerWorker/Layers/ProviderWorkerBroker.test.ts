@@ -15,11 +15,15 @@ const fence = {
   lifecycleGeneration: "generation-1",
 } as const;
 
-function makeConnection() {
+function makeConnection(onSend?: (frame: ProviderWorkerServerFrame) => void) {
   const sent: ProviderWorkerServerFrame[] = [];
   let closeCount = 0;
   const connection: ProviderWorkerConnection = {
-    send: (frame) => Effect.sync(() => sent.push(frame)),
+    send: (frame) =>
+      Effect.sync(() => {
+        sent.push(frame);
+        onSend?.(frame);
+      }),
     close: () =>
       Effect.sync(() => {
         closeCount += 1;
@@ -146,6 +150,37 @@ describe("ProviderWorkerBroker", () => {
       }).pipe(Effect.result),
     );
     expect(gap._tag).toBe("Failure");
+  });
+
+  it("persists a worker event before acknowledging its sequence", async () => {
+    const order: string[] = [];
+    const broker = await Effect.runPromise(
+      makeProviderWorkerBroker({
+        persistEvent: () => Effect.sync(() => order.push("persist")),
+      }),
+    );
+    const fake = makeConnection((frame) => order.push(`send:${frame.type}`));
+    await Effect.runPromise(broker.expectWorker(fence));
+    await Effect.runPromise(broker.register(fence, fake.connection));
+
+    await Effect.runPromise(
+      broker.accept({
+        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+        ...fence,
+        type: "event",
+        sequence: 1,
+        event: {
+          eventId: "event-durable-1",
+          provider: "pi",
+          type: "session.state.changed",
+          threadId: "thread-1" as never,
+          createdAt: "2026-08-05T01:00:00.000Z",
+          payload: { state: "ready" },
+        },
+      }),
+    );
+
+    expect(order).toEqual(["persist", "send:heartbeat"]);
   });
 
   it("preserves the acknowledged event sequence across worker reconnects", async () => {

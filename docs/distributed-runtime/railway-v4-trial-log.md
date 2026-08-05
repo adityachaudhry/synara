@@ -295,3 +295,27 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Test-first correction:** Add a regression asserting that a persisted `railway-sandbox` target auto-opens Pi and leaves Codex closed. After exporting the existing disclosure-state derivation for direct testing, the new assertion failed with `pi: false`. Move the unchanged execution-target descriptor from Codex to Pi; the focused panel and app-settings suite then passed 66 tests.
 
 **Architectural consequence:** The execution placement remains a Pi provider setting, not a global or Codex setting. Browser acceptance is necessary for settings whose correctness depends on visual ownership even when the underlying persistence contract is already covered.
+
+## 2026-08-04 — Live distributed Pi canary, attempt 1
+
+**Revision deployed:** `bb0437b7`
+
+**Experiment:** In the authenticated browser, save Pi execution as `Railway Sandbox`, select Pi with Claude Fable 5, and send one bounded prompt requesting an exact short reply. Baseline sandbox inventory was empty.
+
+**Observation:** The normal browser command path created thread `735962b2-4be7-4e4e-bc90-f21eaa3c1c70` and Railway created private sandbox `c315b0c7-dee0-4907-bd91-425ee556fd67` in `us-west2`. Session startup then failed closed. The causal chain ended at Railway SDK 3.7.0: `Server did not return a durable session for this exec.` No provider model call occurred, and Synara did not fall back to local Pi.
+
+**Cleanup verification:** The provisioning transaction destroyed the exact failed sandbox. A subsequent inventory read returned an empty list.
+
+**Root cause:** The provisioner asked Railway to start the worker process with the requested workspace (`/workspace` for this standalone chat) as the exec working directory. The stock sandbox has not created that path yet. Railway validates `cwd` before Node starts, while `workerMain` is responsible for creating the configured workspace and worker home after Node starts. The command therefore exited before Railway could assign a durable session, and `detach()` surfaced the generic missing-session error.
+
+**Test-first correction:** Preserve the configured workspace in the mode-`0600` worker config and persisted binding, but launch the bootstrap process from Railway's guaranteed default directory by omitting exec `cwd`. `workerMain` then creates the workspace before initializing the existing Pi adapter. A new assertion failed on the old `{ cwd: "/workspace/repo" }` launch and passed after the one-line correction; the focused provisioner/client suite passed nine tests.
+
+**Architectural consequence:** Bootstrap working directory and agent working directory are distinct concepts. A remote runtime must start its supervisor from an image-guaranteed location, then prepare and hand the requested workspace to the provider adapter.
+
+### Durability review before retry
+
+**Observation:** Reviewing the complete answer path exposed a crash window independent of the failed launch. The broker advanced the worker event acknowledgement after a bounded in-memory queue accepted the event, while `ProviderRuntimeIngestion` appended it to `provider_runtime_events` asynchronously downstream. A control-plane crash between those operations could lose an event the worker had already discarded.
+
+**Test-first correction:** Make durable append an injected broker acceptance step. A regression recorded `send:heartbeat` without `persist` on the old behavior. Production `ProviderWorkerBrokerLive` now uses the existing `ProviderRuntimeEventRepository`; it idempotently appends the canonical event before queue publication and acknowledgement. The normal ingestion append remains idempotent, preserving one local/remote projection path. Broker, authenticated connection, and provisioner tests passed fourteen cases.
+
+**Architectural consequence:** Worker acknowledgements represent durable control-plane acceptance, not socket receipt or memory-queue admission. SQLite/Postgres remains the event authority without becoming the request transport.

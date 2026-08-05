@@ -93,6 +93,9 @@ describe("ProviderWorkerProvisioner", () => {
     const configWrite = harness.workspace.writeFile.mock.calls[1]?.[1];
     expect(configWrite?.mode).toBe(0o600);
     expect(String(configWrite?.data)).toContain("bootstrap-secret");
+    expect(harness.workspace.startDurableProcess).toHaveBeenCalledWith(workspaceBinding, {
+      command: "node /opt/synara/provider-worker.mjs",
+    });
   });
 
   it("retires credentials and destroys the exact sandbox when startup cannot connect", async () => {

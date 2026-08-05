@@ -238,7 +238,7 @@ export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
   const providerWorkerTransportLayer = Layer.merge(
     ProviderWorkerBootstrapAuthorityLive,
-    ProviderWorkerBrokerLive,
+    ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
   );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled

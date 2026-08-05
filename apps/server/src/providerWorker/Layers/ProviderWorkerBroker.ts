@@ -1,5 +1,6 @@
 import {
   PROVIDER_WORKER_PROTOCOL_VERSION,
+  type ProviderRuntimeEvent,
   type ProviderWorkerClientFrame,
   type ProviderWorkerServerFrame,
 } from "@synara/contracts";
@@ -7,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Deferred, Duration, Effect, Layer, Option, Queue, Stream } from "effect";
 
 import { ProviderWorkerBrokerError } from "../Errors";
+import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents";
 import { providerWorkerFenceKey, sameProviderWorkerFence } from "../fence";
 import type {
   ProviderWorkerBrokerShape,
@@ -38,6 +40,7 @@ interface PendingRequest {
 export interface ProviderWorkerBrokerOptions {
   readonly requestTimeoutMs?: number;
   readonly connectionTimeoutMs?: number;
+  readonly persistEvent?: (event: ProviderRuntimeEvent) => Effect.Effect<void, unknown>;
 }
 
 const registrationError = (operation: string, fence: ProviderWorkerFence, detail: string) =>
@@ -237,7 +240,15 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                       ),
                     );
                   }
-                  return Queue.offer(events, frame).pipe(
+                  return (options?.persistEvent?.(frame.event) ?? Effect.void).pipe(
+                    Effect.mapError((cause) =>
+                      registrationError(
+                        "event.persist",
+                        frame,
+                        `Failed to persist worker event '${frame.event.eventId}' before acknowledgement: ${String(cause)}`,
+                      ),
+                    ),
+                    Effect.andThen(Queue.offer(events, frame)),
                     Effect.tap(() =>
                       Effect.sync(() => {
                         worker.lastSequence = frame.sequence;
@@ -306,5 +317,10 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
 
 export const ProviderWorkerBrokerLive = Layer.effect(
   ProviderWorkerBroker,
-  makeProviderWorkerBroker(),
+  Effect.gen(function* () {
+    const runtimeEvents = yield* ProviderRuntimeEventRepository;
+    return yield* makeProviderWorkerBroker({
+      persistEvent: (event) => runtimeEvents.append(event).pipe(Effect.asVoid),
+    });
+  }),
 );

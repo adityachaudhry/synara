@@ -74,7 +74,6 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
           command: `node ${WORKER_ARTIFACT_PATH}`,
-          cwd: input.cwd,
         });
         durableSessionName = durable.sessionName;
         yield* broker.waitForConnection(fence);
