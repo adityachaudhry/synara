@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   Sandbox,
   SandboxNotFoundError,
@@ -78,6 +80,18 @@ export interface RailwaySdkFacade {
   readonly isNotFoundError: (cause: unknown) => boolean;
 }
 
+export interface RailwaySandboxClientOptions {
+  readonly durableSessionWaitMs?: number;
+  readonly createProcessId?: () => string;
+}
+
+interface AttachedProcess {
+  readonly runtimeId: string;
+  readonly handle: RailwaySdkExecHandle;
+}
+
+const DEFAULT_DURABLE_SESSION_WAIT_MS = 1_500;
+
 const liveRailwaySdk: RailwaySdkFacade = {
   create: (input) => Sandbox.create(input),
   connect: (runtimeId, input) => Sandbox.connect(runtimeId, input),
@@ -113,8 +127,13 @@ function clientFailure(
 export function makeRailwaySandboxClient(
   config: Extract<RailwaySandboxRuntimeConfig, { readonly enabled: true }>,
   sdk: RailwaySdkFacade = liveRailwaySdk,
+  options: RailwaySandboxClientOptions = {},
 ): RailwaySandboxClientShape {
   const handles = new Map<string, RailwaySdkSandbox>();
+  const attachedProcesses = new Map<string, AttachedProcess>();
+  const durableSessionWaitMs =
+    options.durableSessionWaitMs ?? DEFAULT_DURABLE_SESSION_WAIT_MS;
+  const createProcessId = options.createProcessId ?? randomUUID;
   const connectionInput: RailwaySdkConnectionInput = {
     token: config.token,
     environmentId: config.environmentId,
@@ -183,7 +202,22 @@ export function makeRailwaySandboxClient(
     load(runtimeId).pipe(
       Effect.flatMap((sandbox) =>
         Effect.tryPromise({
-          try: () => sandbox.destroy(),
+          try: async () => {
+            const processes = Array.from(attachedProcesses.entries()).filter(
+              ([, process]) => process.runtimeId === runtimeId,
+            );
+            for (const [sessionName, process] of processes) {
+              try {
+                await process.handle.kill("TERM");
+                await process.handle;
+              } catch {
+                // Destroying the sandbox is the authoritative cleanup path.
+              } finally {
+                attachedProcesses.delete(sessionName);
+              }
+            }
+            await sandbox.destroy();
+          },
           catch: (cause) => clientFailure(sdk, "destroy", runtimeId, cause),
         }),
       ),
@@ -214,7 +248,47 @@ export function makeRailwaySandboxClient(
             const handle = sandbox.exec(input.command, {
               ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             });
-            return { sessionName: await handle.detach() };
+            const sessionName = await new Promise<string | undefined>((resolve, reject) => {
+              let settled = false;
+              const timer = setTimeout(() => {
+                settled = true;
+                resolve(undefined);
+              }, durableSessionWaitMs);
+              void handle.sessionName.then(
+                (name) => {
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(timer);
+                  resolve(name);
+                },
+                (cause) => {
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(timer);
+                  reject(cause);
+                },
+              );
+            });
+
+            if (sessionName !== undefined) {
+              await handle.detach();
+              return { sessionName, supervision: "durable" };
+            }
+
+            const attachedSessionName = `attached:${createProcessId()}`;
+            attachedProcesses.set(attachedSessionName, { runtimeId, handle });
+            void Promise.resolve(handle)
+              .catch(() => undefined)
+              .finally(() => {
+                const current = attachedProcesses.get(attachedSessionName);
+                if (current?.handle === handle) {
+                  attachedProcesses.delete(attachedSessionName);
+                }
+              });
+            return {
+              sessionName: attachedSessionName,
+              supervision: "attached",
+            };
           },
           catch: (cause) => clientFailure(sdk, "startDurableProcess", runtimeId, cause),
         }),
@@ -229,6 +303,17 @@ export function makeRailwaySandboxClient(
       Effect.flatMap((sandbox) =>
         Effect.tryPromise({
           try: async () => {
+            const attached = attachedProcesses.get(sessionName);
+            if (attached !== undefined) {
+              if (attached.runtimeId !== runtimeId) {
+                throw new Error("Attached process belongs to a different sandbox.");
+              }
+              const terminated = await attached.handle.kill("TERM");
+              if (!terminated) throw new Error("Railway attached process was not running.");
+              await attached.handle;
+              attachedProcesses.delete(sessionName);
+              return;
+            }
             const handle = sandbox.exec(
               { sessionName },
               { resumeFromLastRead: true },

@@ -209,13 +209,74 @@ describe("RailwaySandboxClient", () => {
       }),
     );
 
-    expect(process).toEqual({ sessionName: "durable-worker-1" });
+    expect(process).toEqual({
+      sessionName: "durable-worker-1",
+      supervision: "durable",
+    });
     expect(calls).toEqual([
       {
         target: "node /opt/synara/pi-worker.mjs",
         options: { cwd: "/workspace" },
       },
     ]);
+  });
+
+  it("keeps a live exec attached when Railway does not assign a durable session", async () => {
+    let settleResult: ((result: {
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+      truncated: boolean;
+    }) => void) | undefined;
+    const result = new Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+      truncated: boolean;
+    }>((resolve) => {
+      settleResult = resolve;
+    });
+    const handle = Object.assign(result, {
+      sessionName: new Promise<string>(() => undefined),
+      detach: async () => {
+        throw new Error("attached fallback must not detach");
+      },
+      kill: async () => {
+        settleResult?.({
+          exitCode: -1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          truncated: false,
+        });
+        return true;
+      },
+    });
+    const sandbox = makeSdkSandbox({ exec: () => handle as never });
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk, {
+      durableSessionWaitMs: 1,
+      createProcessId: () => "worker-1",
+    });
+
+    const process = await Effect.runPromise(
+      client.startDurableProcess("sandbox-1", {
+        command: "node /opt/synara/pi-worker.mjs",
+      }),
+    );
+
+    expect(process).toEqual({
+      sessionName: "attached:worker-1",
+      supervision: "attached",
+    });
+    await Effect.runPromise(client.stopDurableProcess("sandbox-1", process.sessionName));
   });
 
   it("reattaches and terminates an exact durable session", async () => {

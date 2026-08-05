@@ -55,6 +55,7 @@ export interface WorkspaceRuntimeDurableProcessInput {
 
 export interface WorkspaceRuntimeDurableProcess {
   readonly sessionName: string;
+  readonly supervision: "durable" | "attached";
 }
 
 export interface WorkspaceRuntimeShape {

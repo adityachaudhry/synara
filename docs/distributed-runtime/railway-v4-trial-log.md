@@ -319,3 +319,47 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Test-first correction:** Make durable append an injected broker acceptance step. A regression recorded `send:heartbeat` without `persist` on the old behavior. Production `ProviderWorkerBrokerLive` now uses the existing `ProviderRuntimeEventRepository`; it idempotently appends the canonical event before queue publication and acknowledgement. The normal ingestion append remains idempotent, preserving one local/remote projection path. Broker, authenticated connection, and provisioner tests passed fourteen cases.
 
 **Architectural consequence:** Worker acknowledgements represent durable control-plane acceptance, not socket receipt or memory-queue admission. SQLite/Postgres remains the event authority without becoming the request transport.
+
+### Corrected preview deployment, attempt 1
+
+**Revision:** `bfa2ee97`
+
+**Observation:** Railway deployment `5e7c2802-e20f-4037-8649-31509edc8368` moved from `BUILDING` to `FAILED` without emitting build or runtime log lines through either CLI log stream. The previous healthy deployment remained active. The same exact archive passed the local production build immediately before upload.
+
+**Current explanation:** With no build output, there is no evidence of a source, Docker, or runtime failure to repair. Treat this as a Railway build/control-plane transient unless a repeat produces diagnostic evidence.
+
+**Correction:** Re-upload the same `git archive` without code changes as deployment `250ec0f2-03c0-4a50-a5f8-d036b285cdd8`. Do not modify application code to respond to an empty external log stream.
+
+**Retry result:** The byte-identical source revision built and deployed successfully. This supports the transient-control-plane explanation; there was no application correction between the failed and successful uploads.
+
+## 2026-08-04 — Live distributed Pi canary, attempt 2
+
+**Revision deployed:** `bfa2ee97`
+
+**Experiment:** Repeat the same browser-only Pi canary after separating the bootstrap working directory from the requested agent workspace. Baseline sandbox inventory was empty.
+
+**Observation:** The normal browser path created thread `2a4f1b37-c4b8-478c-bc46-1220c53a5cbd` and private sandbox `dae85401-12e8-4591-b31f-91bd57d7a336`, but startup failed with the same SDK error: `Server did not return a durable session for this exec.` The exact sandbox entered destruction and inventory returned to empty. No local fallback or provider model call occurred.
+
+**Hypothesis falsified:** A missing `/workspace` bootstrap directory may still cause an early process exit in other images, but it was not the cause of this Railway v4 failure. Omitting `cwd` changed neither the error nor the lifecycle outcome. The earlier entry is retained because it records a reasonable test and a useful separation of bootstrap cwd from provider cwd; this retry corrects its causal conclusion.
+
+### Disposable Railway primitive experiment 1 — detach a live process
+
+**Why tried:** Isolate the Railway SDK process primitive from Synara, the worker artifact, WebSockets, Pi, and provider credentials.
+
+**Experiment:** Create a disposable private sandbox, start a trivial Node process whose only behavior is a repeating timer, and immediately call the SDK handle's `detach()` method.
+
+**Observation:** The trivial process reproduced the exact error: `Server did not return a durable session for this exec.` The sandbox was destroyed in a `finally` cleanup and inventory returned to empty.
+
+**Conclusion:** In the tested Railway v4 environment with SDK 3.7.0, a successful long-running exec is not assigned the detachable durable-session handle the SDK method expects. This is a platform-capability mismatch, not evidence that Synara's worker exits during bootstrap.
+
+### Disposable Railway primitive experiment 2 — retain the attached exec
+
+**Why tried:** Test the lower-level capability that Synara actually needs: keep one process alive while the control plane remains connected, without requiring reattachment.
+
+**Experiment:** Run the same repeating Node process as an attached exec with a five-second client timeout and do not call `detach()`.
+
+**Observation:** The process started, emitted its marker, remained alive for the observation window, and returned the expected timed-out attached result. Safe result: `{created:true, ran:true, timedOut:true, exitCode:null, destroyIssued:true, stdoutMatched:true}`.
+
+**Course correction:** Treat durable process identity as a capability, not an assumption. `RailwaySandboxClient` now waits briefly for a real session name. When Railway supplies one, Synara detaches and can reattach as before. When it does not, Synara keeps the SDK exec handle attached under an opaque `attached:<id>` handle, supervises it in the control plane, and terminates that exact handle through the existing `WorkspaceRuntime` process seam. The persisted provider binding records `processSupervision` as `durable` or `attached`; older bindings remain decodable.
+
+**Current durability boundary:** Attached supervision enables the end-to-end v4 canary, but the process handle exists only in the current control-plane process. A Synara restart cannot reattach that worker. Restart-safe remote execution still requires Railway to expose durable sessions in this environment, a sandbox image-level process supervisor with a reconnectable control surface, or explicit workspace snapshot-and-rehydrate behavior. The fallback is additive and fails closed; it is not represented as durable when it is not.

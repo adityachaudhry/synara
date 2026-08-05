@@ -83,6 +83,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           workspace: input.workspace,
           fence,
           durableSessionName: durable.sessionName,
+          processSupervision: durable.supervision,
           cwd: input.cwd,
           homeDir: input.homeDir,
         } satisfies ProviderWorkerRuntimeBinding;

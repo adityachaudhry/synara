@@ -26,7 +26,7 @@ function makeHarness(options?: { readonly failConnection?: boolean }) {
     startDurableProcess: vi.fn(() =>
       Effect.sync(() => {
         calls.push("start");
-        return { sessionName: "provider-worker-1" };
+        return { sessionName: "provider-worker-1", supervision: "durable" };
       }),
     ),
     stopDurableProcess: vi.fn(() => Effect.sync(() => calls.push("stop-process"))),
@@ -80,6 +80,7 @@ describe("ProviderWorkerProvisioner", () => {
       runtimeKind: "railway-sandbox-pi",
       workspace: workspaceBinding,
       durableSessionName: "provider-worker-1",
+      processSupervision: "durable",
       cwd: "/workspace/repo",
     });
     expect(binding.fence.sandboxId).toBe(workspaceBinding.runtimeId);

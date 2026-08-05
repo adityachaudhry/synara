@@ -23,6 +23,7 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
     lifecycleGeneration: Schema.String,
   }),
   durableSessionName: Schema.String,
+  processSupervision: Schema.optional(Schema.Literals(["durable", "attached"])),
   cwd: Schema.String,
   homeDir: Schema.String,
 });

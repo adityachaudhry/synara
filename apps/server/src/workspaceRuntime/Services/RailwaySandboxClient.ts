@@ -53,6 +53,7 @@ export interface RailwaySandboxDurableProcessInput {
 
 export interface RailwaySandboxDurableProcess {
   readonly sessionName: string;
+  readonly supervision: "durable" | "attached";
 }
 
 export type RailwaySandboxClientFailure =

@@ -123,10 +123,10 @@ With `executionTarget=railway-sandbox`, `ProviderWorkerProvisioner` performs a b
 5. Upload the already-built atomic `workerMain.mjs` artifact.
 6. Write a mode-`0600` worker config and mode-`0500` executable artifact.
 7. Forward only explicitly allowlisted provider API environment variables. Synara owner, database, and Railway administration credentials are rejected from the forwarding list.
-8. Start Node directly as a named durable process, without shell glue.
+8. Start Node directly, without shell glue. Use a named durable session when Railway supplies one; otherwise keep the live exec attached to and supervised by the current Synara control-plane process.
 9. Wait for the worker to connect outward to the private `/internal/provider-worker` WebSocket and prove its full fence.
 
-Any failure revokes the credential, retires the broker reservation, stops the exact durable process, and destroys the exact sandbox.
+Any failure revokes the credential, retires the broker reservation, stops the exact process handle, and destroys the exact sandbox.
 
 ### 7. Persist the non-secret runtime binding
 
@@ -135,7 +135,7 @@ After the remote worker accepts `session.start`, Synara upserts `provider_sessio
 - `provider_name = pi`;
 - `adapter_key = pi:railway-sandbox`;
 - status, runtime mode, last-seen time, resume cursor, and lifecycle generation;
-- `runtime_payload_json.distributedPiRuntime` containing schema version, sandbox ID/status/region, worker ID, generation, durable session name, cwd, and worker home.
+- `runtime_payload_json.distributedPiRuntime` containing schema version, sandbox ID/status/region, worker ID, generation, opaque process/session handle, supervision mode (`durable` or `attached`), cwd, and worker home.
 
 The bootstrap credential and provider API key are never placed in this row.
 
@@ -220,7 +220,7 @@ Loss of these objects must be handled through the journals, persisted provider b
 | Pi execution target | atomic `settings.json` | Server-authoritative, revisioned; local is default |
 | Attachments and managed local artifacts | Existing Synara managed-attachment storage | Metadata travels in orchestration/provider inputs |
 | Live Pi session and workspace | Local process/filesystem or sandbox filesystem | Ephemeral runtime state |
-| Railway sandbox inventory/process | Railway control plane | Reconnectable by sandbox ID and durable session name |
+| Railway sandbox inventory/process | Railway control plane plus current Synara process for attached handles | Sandbox ID is reconnectable; process reattachment exists only when Railway supplies a durable session |
 | Browser session | Secure Synara session cookie + server auth records | Separate from provider-worker authentication |
 
 ## Microservice recommendation
@@ -246,6 +246,7 @@ For a durable production topology:
 - The additive preview service currently has ephemeral `/data`; redeploying it loses its SQLite and settings files.
 - Sandbox disk and Pi session files are not yet exported to object storage, so deliberate sandbox destruction cannot yet rehydrate a completed thread.
 - The in-memory broker is single-control-plane; restart reconciliation is designed but not yet a horizontally replicated broker.
+- Railway v4 did not assign durable sessions to live execs in this trial. The attached-process fallback survives normal requests and explicit teardown, but not a Synara control-plane restart.
 - Remote model/skill/command/composer discovery currently delegates to local discovery; session lifecycle and turns are the remote canary scope.
 - A bounded Railway user-session token is being used for the trial and must be replaced by a durable least-privilege project token.
 

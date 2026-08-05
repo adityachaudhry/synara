@@ -71,7 +71,7 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
     startDurableProcess: (runtimeId, input) =>
       Effect.sync(() => {
         durableProcesses.push({ operation: "start", runtimeId, input });
-        return { sessionName: "worker-session-1" };
+        return { sessionName: "worker-session-1", supervision: "durable" };
       }),
     stopDurableProcess: (runtimeId, sessionName) =>
       Effect.sync(() => {
