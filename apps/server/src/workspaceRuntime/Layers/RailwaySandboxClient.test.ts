@@ -257,6 +257,47 @@ describe("RailwaySandboxClient", () => {
     });
   });
 
+  it("starts the worker from a freshly connected sandbox instead of the create handle", async () => {
+    const createdSandbox = makeSdkSandbox({
+      exec: () => {
+        throw new Error("create handle cannot establish exec");
+      },
+    });
+    const connectedSandbox = makeSdkSandbox({
+      exec: () => makeExecHandle("durable-worker-reconnected"),
+    });
+    let connectCount = 0;
+    const sdk: RailwaySdkFacade = {
+      create: async () => createdSandbox,
+      connect: async () => {
+        connectCount += 1;
+        return connectedSandbox;
+      },
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+    await Effect.runPromise(
+      client.create({
+        networkIsolation: "PRIVATE",
+        idleTimeoutMinutes: 30,
+        environment: {},
+      }),
+    );
+
+    const process = await Effect.runPromise(
+      client.startDurableProcess("sandbox-1", {
+        command: "node /opt/synara/pi-worker.mjs",
+      }),
+    );
+
+    expect(connectCount).toBe(1);
+    expect(process).toEqual({
+      sessionName: "durable-worker-reconnected",
+      supervision: "durable",
+    });
+  });
+
   it("keeps a live exec attached when Railway does not assign a durable session", async () => {
     let settleResult: ((result: {
       exitCode: number;

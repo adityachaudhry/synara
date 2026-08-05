@@ -154,6 +154,16 @@ export function makeRailwaySandboxClient(
       catch: (cause) => clientFailure(sdk, "connect", runtimeId, cause),
     });
 
+  const loadFresh = (runtimeId: string) =>
+    Effect.tryPromise({
+      try: async () => {
+        const connected = await sdk.connect(runtimeId, connectionInput);
+        handles.set(runtimeId, connected);
+        return connected;
+      },
+      catch: (cause) => clientFailure(sdk, "connect", runtimeId, cause),
+    });
+
   const create: RailwaySandboxClientShape["create"] = (input: RailwaySandboxCreateInput) =>
     Effect.tryPromise({
       try: async () => {
@@ -243,7 +253,7 @@ export function makeRailwaySandboxClient(
     runtimeId,
     input,
   ) =>
-    load(runtimeId).pipe(
+    loadFresh(runtimeId).pipe(
       Effect.flatMap((sandbox) =>
         Effect.tryPromise({
           try: async () => {

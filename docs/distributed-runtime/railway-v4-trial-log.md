@@ -411,3 +411,62 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Observation:** The broker's 30-second registration timeout fired, but failure cleanup did not reach the browser because `stopDurableProcess` waited indefinitely for the reattached SDK handle's final exit frame after `kill("TERM")` returned success. An isolated project-token probe also received a real durable session in about 4.3 seconds, accepted the terminate signal, and then reproduced the missing exit-frame hang.
 
 **Correction:** Treat a successful SDK `kill` as delivery of the process-group termination signal and keep sandbox destruction as the authoritative cleanup barrier. Do not wait unboundedly for a transport exit frame after signal acceptance. Apply the same rule to attached handles and direct sandbox destruction. A regression with a never-settling handle failed before the change and now completes immediately. The exact failed canary sandbox and the disposable diagnostic sandbox were explicitly destroyed.
+
+## 2026-08-04 — Live distributed Pi canary after dual-stack correction
+
+**Revision deployed:** `41c25efc`
+
+**Experiment:** Repeat the browser-only Pi canary with the dual-stack private listener and bounded post-signal cleanup. The normal UI path created private sandbox `fdf27257-4070-41d4-a3f1-b246df290c3a` and uploaded the worker artifact and private configuration.
+
+**Observation:** A public health probe, an HTTP health probe from inside the exact sandbox, and a manually opened WebSocket from that sandbox to `ws://synara-distributed-preview.railway.internal:3773/internal/provider-worker` all succeeded. The real provider worker nevertheless exited before registering, and the UI stayed at `Connecting`.
+
+### Hypothesis 1 — split in-memory broker instances
+
+**Why tried:** The worker provisioner receives the broker/credential layer inside its own composition while the HTTP route receives the same transport layer at the application root. If Effect constructed those twice, the provisioner would reserve a worker in one broker while the route rejected it in another.
+
+**Result:** A direct Effect layer-identity experiment reproduced the same nested/root composition and returned the same object identity for both consumers. The hypothesis was falsified; no layer rewrite was made.
+
+### Hypothesis 2 — immediate durable-session detach stops the command
+
+**Why tried:** The sandbox contained the uploaded artifact/config but no worker home directory after the failed launch, suggesting the command might not have begun.
+
+**Result:** A disposable private sandbox used the exact SDK sequence: start a marker loop, await its durable session name, detach, wait, and inspect the marker. The process remained alive and the marker advanced. Immediate detach was not the cause, so Synara retained the SDK's documented detach behavior.
+
+### Observability defect — protocol failures were mislabeled as socket reads
+
+**Observation:** Every server-side worker failure was logged only as `Provider worker WebSocket read failed`, even when the handler itself rejected authentication or broker registration.
+
+**Cause:** The HTTP socket adapter mapped every `runRaw` error into a new generic read error, including already-structured `ProviderWorkerTransportError` values raised by the protocol handler.
+
+**Test-first correction:** Add one regression for preserving a structured `register.auth` failure and one for wrapping a raw socket failure. The new test first failed because the mapper did not exist. The route now preserves protocol errors and wraps only raw socket errors; the route and connection suites pass six cases. This does not relax authentication or registration rules—it restores the causal operation in safe logs.
+
+### Process-handshake defect — project-token exec used the attached fallback
+
+**Observation:** A second clean canary created sandbox `481b5291-b466-4fce-bbe8-ab21bd30b1e4`, uploaded both files, but again produced no worker process or home directory. A separate wrapper probe with the same scoped token could create, supervise, verify, and destroy a marker process successfully.
+
+**Cause:** `startDurableProcess` waited only 1.5 seconds for `sessionName` for every auth mode. A project-token exec that was still establishing its shell connection could therefore be reported as `attached` before Railway either assigned its durable identity or surfaced its startup failure. Any later rejection was consumed by the background handle while the provisioner waited only for a broker connection.
+
+**Test-first correction:** Project-token mode now awaits Railway's real durable session and detaches only after it exists. The attached fallback remains available only for legacy bearer mode, where the earlier v4 experiment proved that no durable session may be assigned. A delayed project-token session regression failed on the old `attached:must-not-fallback` result and passes as `durable` after the correction; all eighteen focused lifecycle, provisioner, route, and connection tests pass.
+
+**Operational correction:** Both failed canary sandboxes were explicitly destroyed. A fresh exact-archive deployment is used between canaries because this preview intentionally has ephemeral SQLite state and a prior rolling restart exposed the PID-reuse lifecycle-lock defect.
+
+### Command-line mistakes retained for reproducibility
+
+- `railway logs --build` accepts the deployment ID positionally and rejects combining `--build` with `--deployment`. The first inspection used the wrong form; the corrected form was `railway logs --build ... <deployment-id>`.
+- zsh reserves `status` as a read-only parameter. A polling loop that assigned it failed locally; subsequent loops use `deploy_state`. Neither mistake changed Railway state.
+
+### Exact-archive deployment retry after prepare-script failure
+
+**Observation:** The first deployment of revision `73486e9e` failed during `bun install --frozen-lockfile` when `@effect/language-service` reported `UnableToFindPositionToPatchError` while patching `clearSourceFileEffectMetadata`. This happened before application compilation and left the previous healthy deployment active.
+
+**Correction:** Re-upload the byte-identical `git archive HEAD` before changing source. The retry completed the same frozen install, proving the failure was not caused by the distributed-runtime change. Retain the error in the log because the workspace prepare patch is a clean-build reliability risk even when a retry succeeds.
+
+### In-container exec diagnosis — create handle versus connected handle
+
+**Hypothesis tried:** The preview service could call Railway's GraphQL/files APIs but might be unable to reach the SDK exec WebSocket at `wss://ssh.railway.com:2226/ws/exec` from Railway's own network.
+
+**Result:** A read-only probe over a short-lived Railway SSH key resolved `ssh.railway.com`, connected to TCP port 2226, and confirmed Node's global WebSocket implementation was available in the exact preview container. An actual SDK exec launched a marker command in the canary sandbox and received a durable session. The egress hypothesis was falsified.
+
+**Differential experiment:** The working in-container probe used `Sandbox.connect(id)` before `exec`; Synara reused the object returned by `Sandbox.create()`. Starting the exact uploaded worker through a freshly connected object assigned a durable session, booted the Pi adapter, and repeatedly reached the control-plane route. Those late registration attempts were correctly rejected because the canary's 30-second broker reservation had already been retired.
+
+**Test-first correction:** Require `startDurableProcess` to obtain a fresh connected sandbox handle even when the create handle is cached. A regression used a deliberately unusable create object and a healthy connected object; it failed on the old `create handle cannot establish exec` path and passes after the client reconnects before process start. The existing cached handle remains useful for file uploads and destruction, while the process-control seam starts from current Railway connection state. Nineteen focused lifecycle/provisioner/transport tests pass.
