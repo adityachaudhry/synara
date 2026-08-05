@@ -534,3 +534,13 @@ This is the first complete acceptance of the intended path: browser → Synara W
 **Test-first correction:** A regression writes a valid lock owned by the current PID but an older replica ID. It failed as `owner pid ... is live` before the change. Lock owner metadata now optionally carries a bounded `runtimeId`; on Railway it defaults to `RAILWAY_REPLICA_ID`. A different recorded/current replica ID enters the existing token-guarded stale-lock recovery, while the same PID and same replica ID still fails closed. Legacy owner files without the field retain the prior PID behavior. Nine focused lifecycle-lock tests pass.
 
 **Rehydration coverage:** Add a routed-Pi regression proving that a persisted `provider_session_runtime.runtime_payload_json.distributedPiRuntime` binding selects the existing provisioner `restart` seam instead of provisioning through the new-session seam. The replacement binding is persisted through the same directory abstraction. This reuses Synara's session/runtime primitives; it does not add a second recovery model.
+
+### Volume-backed restart — replica ID is stable within a deployment
+
+**Experiment:** Mount additive volume `synara-distributed-preview-volume` at `/data`, set `RAILWAY_RUN_UID=0` for Railway's root-owned volume mount, create a browser Pi thread, and receive `volume backed pi ok`. Then use `railway restart`, which restarts deployment `b664e416-efa1-41b5-88cb-67525bc47e13` without rebuilding.
+
+**Observation:** The restarted process reused PID 4 and the same `RAILWAY_REPLICA_ID`. It correctly failed closed on the old lock, so the volume data was protected, but the service could not start. Replica identity distinguishes deployments, not process incarnations inside one deployment.
+
+**Test-first correction:** Extend owner metadata with a per-process UUID `incarnationId`. When both owner and current process are in the same Railway replica, a different (or legacy missing) incarnation is stale under Railway's single-mounted-deployment volume contract; the existing token-checked reaper performs the takeover. The same replica, same incarnation, same PID path remains locked. The new same-replica restart regression failed against the replica-only implementation and passes after the correction; all ten lifecycle-lock tests pass.
+
+**Recovery rule:** Owner files without `runtimeId` retain PID-only behavior. This avoids broadening stale takeover on arbitrary local/network filesystems. Railway-specific recovery is enabled only when the platform-provided replica identity exists.

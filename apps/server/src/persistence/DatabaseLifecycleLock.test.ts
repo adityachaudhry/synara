@@ -28,6 +28,7 @@ async function writeOwnedDirectory(
   directoryPath: string,
   pid: number,
   runtimeId?: string,
+  incarnationId?: string,
 ): Promise<void> {
   await fs.mkdir(directoryPath, { mode: 0o700 });
   await fs.writeFile(
@@ -37,6 +38,7 @@ async function writeOwnedDirectory(
       token: randomUUID(),
       createdAt: new Date().toISOString(),
       ...(runtimeId === undefined ? {} : { runtimeId }),
+      ...(incarnationId === undefined ? {} : { incarnationId }),
     })}\n`,
     { mode: 0o600 },
   );
@@ -110,13 +112,44 @@ describe("database lifecycle lock", () => {
   it("does not take over a same-pid lock from the current Railway replica", async () => {
     const dbPath = await makeDbPath();
     const lockPath = `${dbPath}.lifecycle-lock`;
-    await writeOwnedDirectory(lockPath, process.pid, "railway-replica-current");
+    const incarnationId = randomUUID();
+    await writeOwnedDirectory(
+      lockPath,
+      process.pid,
+      "railway-replica-current",
+      incarnationId,
+    );
 
     await expect(
       Effect.runPromise(
-        acquireDatabaseLifecycleLock(dbPath, { runtimeId: "railway-replica-current" }),
+        acquireDatabaseLifecycleLock(dbPath, {
+          runtimeId: "railway-replica-current",
+          incarnationId,
+        }),
       ),
     ).rejects.toBeInstanceOf(DatabaseLifecycleLockedError);
+  });
+
+  it("recovers a lock left by an earlier process incarnation in the same Railway replica", async () => {
+    const dbPath = await makeDbPath();
+    const lockPath = `${dbPath}.lifecycle-lock`;
+    await writeOwnedDirectory(
+      lockPath,
+      process.pid,
+      "railway-replica-current",
+      randomUUID(),
+    );
+    const incarnationId = randomUUID();
+
+    const acquired = await Effect.runPromise(
+      acquireDatabaseLifecycleLock(dbPath, {
+        runtimeId: "railway-replica-current",
+        incarnationId,
+      }),
+    );
+
+    expect(acquired.owner.incarnationId).toBe(incarnationId);
+    await Effect.runPromise(releaseDatabaseLifecycleLock(acquired));
   });
 
   it("recovers a reaper guard whose owner process died", async () => {

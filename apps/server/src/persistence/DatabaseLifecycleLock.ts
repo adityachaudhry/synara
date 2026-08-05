@@ -8,17 +8,26 @@ import { Effect } from "effect";
 import { PRIVATE_DIRECTORY_MODE, PRIVATE_FILE_MODE } from "../privatePathPermissions.ts";
 
 const OWNER_FILE_NAME = "owner.json";
+const PROCESS_INCARNATION_ID = randomUUID();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 type DatabaseLifecycleLockOwner = {
   readonly pid: number;
   readonly token: string;
   readonly createdAt: string;
   readonly runtimeId?: string;
+  readonly incarnationId?: string;
 };
 
 export interface DatabaseLifecycleLockOptions {
   readonly runtimeId?: string;
+  readonly incarnationId?: string;
 }
+
+type DatabaseLifecycleLockIdentity = {
+  readonly runtimeId?: string;
+  readonly incarnationId: string;
+};
 
 export type DatabaseLifecycleLock = {
   readonly dbPath: string;
@@ -106,13 +115,16 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
     !Number.isSafeInteger(owner.pid) ||
     owner.pid! <= 0 ||
     typeof owner.token !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(owner.token) ||
+    !UUID_PATTERN.test(owner.token) ||
     typeof owner.createdAt !== "string" ||
     (owner.runtimeId !== undefined &&
       (typeof owner.runtimeId !== "string" ||
         owner.runtimeId.trim() !== owner.runtimeId ||
         owner.runtimeId.length === 0 ||
-        owner.runtimeId.length > 256))
+        owner.runtimeId.length > 256)) ||
+    (owner.incarnationId !== undefined &&
+      (typeof owner.incarnationId !== "string" ||
+        !UUID_PATTERN.test(owner.incarnationId)))
   ) {
     throw new Error("lock owner metadata is invalid");
   }
@@ -121,12 +133,22 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
 
 function ownerProcessState(
   owner: DatabaseLifecycleLockOwner,
-  runtimeId: string | undefined,
+  identity: DatabaseLifecycleLockIdentity,
 ): "live" | "dead" | "unknown" {
   // Railway mounts a volume to only one deployment at a time. A different
   // replica id therefore identifies a stopped container even when the new
   // container reused the same PID in its own namespace.
-  if (runtimeId && owner.runtimeId && runtimeId !== owner.runtimeId) return "dead";
+  if (identity.runtimeId && owner.runtimeId) {
+    if (identity.runtimeId !== owner.runtimeId) return "dead";
+    if (identity.incarnationId !== owner.incarnationId) return "dead";
+  }
+  if (
+    owner.pid === process.pid &&
+    owner.incarnationId &&
+    identity.incarnationId !== owner.incarnationId
+  ) {
+    return "dead";
+  }
   try {
     process.kill(owner.pid, 0);
     return "live";
@@ -142,12 +164,26 @@ function normalizeRuntimeId(value: string | undefined): string | undefined {
   return normalized && normalized.length <= 256 ? normalized : undefined;
 }
 
-function lockOwner(runtimeId: string | undefined): DatabaseLifecycleLockOwner {
+function lockIdentity(options?: DatabaseLifecycleLockOptions): DatabaseLifecycleLockIdentity {
+  const runtimeId = normalizeRuntimeId(
+    options?.runtimeId ?? process.env.RAILWAY_REPLICA_ID,
+  );
+  return {
+    ...(runtimeId === undefined ? {} : { runtimeId }),
+    incarnationId:
+      options?.incarnationId && UUID_PATTERN.test(options.incarnationId)
+        ? options.incarnationId
+        : PROCESS_INCARNATION_ID,
+  };
+}
+
+function lockOwner(identity: DatabaseLifecycleLockIdentity): DatabaseLifecycleLockOwner {
   return {
     pid: process.pid,
     token: randomUUID(),
     createdAt: new Date().toISOString(),
-    ...(runtimeId === undefined ? {} : { runtimeId }),
+    ...(identity.runtimeId === undefined ? {} : { runtimeId: identity.runtimeId }),
+    incarnationId: identity.incarnationId,
   };
 }
 
@@ -227,13 +263,13 @@ type ReaperGuard = {
 async function acquireReaperGuard(
   dbPath: string,
   lockPath: string,
-  runtimeId: string | undefined,
+  identity: DatabaseLifecycleLockIdentity,
 ): Promise<ReaperGuard> {
   const reaperPath = `${lockPath}.reaper`;
   const retiredPaths: string[] = [];
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const owner = lockOwner(runtimeId);
+    const owner = lockOwner(identity);
     if (await tryPublishOwnedDirectory(reaperPath, owner)) {
       return { path: reaperPath, owner, retiredPaths };
     }
@@ -249,7 +285,7 @@ async function acquireReaperGuard(
         `stale-lock recovery owner is unknown: ${detail}`,
       );
     }
-    const state = ownerProcessState(existingOwner, runtimeId);
+    const state = ownerProcessState(existingOwner, identity);
     if (state !== "dead") {
       throw new DatabaseLifecycleLockedError(
         dbPath,
@@ -270,7 +306,7 @@ async function acquireReaperGuard(
       const currentOwner = await readOwner(reaperPath);
       if (
         currentOwner.token !== existingOwner.token ||
-        ownerProcessState(currentOwner, runtimeId) !== "dead"
+        ownerProcessState(currentOwner, identity) !== "dead"
       ) {
         throw new DatabaseLifecycleLockedError(
           dbPath,
@@ -317,15 +353,15 @@ async function reapDeadOwner(
   dbPath: string,
   lockPath: string,
   observedOwner: DatabaseLifecycleLockOwner,
-  runtimeId: string | undefined,
+  identity: DatabaseLifecycleLockIdentity,
 ): Promise<void> {
-  const guard = await acquireReaperGuard(dbPath, lockPath, runtimeId);
+  const guard = await acquireReaperGuard(dbPath, lockPath, identity);
 
   try {
     const currentOwner = await readOwner(lockPath);
     if (
       currentOwner.token !== observedOwner.token ||
-      ownerProcessState(currentOwner, runtimeId) !== "dead"
+      ownerProcessState(currentOwner, identity) !== "dead"
     ) {
       throw new DatabaseLifecycleLockedError(
         dbPath,
@@ -349,10 +385,10 @@ async function acquire(
 ): Promise<DatabaseLifecycleLock> {
   const canonicalDbPath = await canonicalDatabasePath(dbPath);
   const lockPath = `${canonicalDbPath}.lifecycle-lock`;
-  const runtimeId = normalizeRuntimeId(options?.runtimeId ?? process.env.RAILWAY_REPLICA_ID);
+  const identity = lockIdentity(options);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const owner = lockOwner(runtimeId);
+    const owner = lockOwner(identity);
     const published = await tryPublishOwnedDirectory(lockPath, owner);
 
     if (!published) {
@@ -367,7 +403,7 @@ async function acquire(
           `owner is live or unknown: ${detail}`,
         );
       }
-      const state = ownerProcessState(existingOwner, runtimeId);
+      const state = ownerProcessState(existingOwner, identity);
       if (state !== "dead") {
         throw new DatabaseLifecycleLockedError(
           canonicalDbPath,
@@ -382,7 +418,7 @@ async function acquire(
           "dead owner could not be recovered safely",
         );
       }
-      await reapDeadOwner(canonicalDbPath, lockPath, existingOwner, runtimeId);
+      await reapDeadOwner(canonicalDbPath, lockPath, existingOwner, identity);
       continue;
     }
 
