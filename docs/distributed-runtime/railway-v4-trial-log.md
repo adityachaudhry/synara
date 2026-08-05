@@ -563,6 +563,14 @@ This is the first complete acceptance of the intended path: browser → Synara W
 
 **Conclusion:** Synara's durable conversation/control-plane state and the Pi execution workspace now have deliberately different lifecycles. A controller replacement rehydrates the existing thread from volume-backed SQLite, fences and removes the stale execution plane, then routes the next turn through a fresh Railway Sandbox using Synara's existing provider/session/event primitives. The remaining durability gap is sandbox workspace snapshot/restore, not browser, orchestration, transcript, or controller-state recovery.
 
+### Idle-timeout recovery accepted end to end
+
+**Experiment:** Wait until Railway's ten-minute idle policy removed the replacement sandbox and inventory was empty, then send another exact-response turn on the same persisted browser thread.
+
+**Course correction during review:** An initial reading suggested that destroying an already-expired sandbox could block restart. Inspecting the full `WorkspaceRuntime` layer before changing code showed that its existing destroy seam already treats Railway `not found` as successful idempotent cleanup. No speculative code change was made.
+
+**Result:** The same thread created fresh sandbox `5b254ea5-dccf-4f80-8378-5d842aee7afb` and rendered the exact assistant response `idle timeout replacement pi ok`. This proves that controller persistence, stale binding recovery, idempotent cleanup, sandbox recreation, provider execution, and transcript projection also work after Railway itself removes the execution plane for idleness.
+
 ## Railway platform references used
 
 - [Volumes reference](https://docs.railway.com/volumes/reference) for mounted-service persistence and deployment constraints.
