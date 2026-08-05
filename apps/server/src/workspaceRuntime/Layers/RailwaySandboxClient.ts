@@ -250,6 +250,11 @@ export function makeRailwaySandboxClient(
             const handle = sandbox.exec(input.command, {
               ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             });
+            if (config.authType === "project-token") {
+              const sessionName = await handle.sessionName;
+              await handle.detach();
+              return { sessionName, supervision: "durable" };
+            }
             const sessionName = await new Promise<string | undefined>((resolve, reject) => {
               let settled = false;
               const timer = setTimeout(() => {

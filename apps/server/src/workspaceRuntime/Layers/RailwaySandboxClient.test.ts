@@ -223,6 +223,40 @@ describe("RailwaySandboxClient", () => {
     ]);
   });
 
+  it("waits for a project-token durable session instead of falling back while exec connects", async () => {
+    const durableSession = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("durable-worker-delayed"), 10);
+    });
+    const result = new Promise<never>(() => undefined);
+    const handle = Object.assign(result, {
+      sessionName: durableSession,
+      detach: async () => durableSession,
+      kill: async () => true,
+    });
+    const sandbox = makeSdkSandbox({ exec: () => handle as never });
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk, {
+      durableSessionWaitMs: 1,
+      createProcessId: () => "must-not-fallback",
+    });
+
+    const process = await Effect.runPromise(
+      client.startDurableProcess("sandbox-1", {
+        command: "node /opt/synara/pi-worker.mjs",
+      }),
+    );
+
+    expect(process).toEqual({
+      sessionName: "durable-worker-delayed",
+      supervision: "durable",
+    });
+  });
+
   it("keeps a live exec attached when Railway does not assign a durable session", async () => {
     let settleResult: ((result: {
       exitCode: number;
@@ -263,7 +297,7 @@ describe("RailwaySandboxClient", () => {
       list: async () => [],
       isNotFoundError: () => false,
     };
-    const client = makeRailwaySandboxClient(config, sdk, {
+    const client = makeRailwaySandboxClient({ ...config, authType: "bearer" }, sdk, {
       durableSessionWaitMs: 1,
       createProcessId: () => "worker-1",
     });
