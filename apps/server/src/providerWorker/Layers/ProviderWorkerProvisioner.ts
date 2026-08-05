@@ -17,6 +17,14 @@ const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
 const DEFAULT_CWD = "/workspace";
 const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+function workerLaunchCommand(homeDir: string) {
+  const logsDir = `${homeDir}/state/logs`;
+  const workerLogPath = `${logsDir}/worker.log`;
+  return `mkdir -p ${shellQuote(logsDir)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
+}
+
 export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
   readonly controlUrl: string;
@@ -88,7 +96,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: `node ${WORKER_ARTIFACT_PATH}`,
+          command: workerLaunchCommand(input.homeDir),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {

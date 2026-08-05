@@ -58,30 +58,50 @@ export function makeProviderWorkerClientSession<TError>(input: {
     );
 
   const handleRequest = (frame: Extract<typeof ProviderWorkerServerFrame.Type, { type: "request" }>) =>
-    dispatchProviderWorkerRequest(input.adapter, frame).pipe(
+    Effect.logInfo("provider worker request received", {
+      method: frame.method,
+      requestId: frame.requestId,
+    }).pipe(
+      Effect.andThen(dispatchProviderWorkerRequest(input.adapter, frame)),
       Effect.matchEffect({
         onSuccess: (result) =>
-          send({
-            protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
-            ...input.fence,
-            type: "response",
+          Effect.logInfo("provider worker request completed", {
+            method: frame.method,
             requestId: frame.requestId,
             ok: true,
-            result: result ?? null,
-          } satisfies ProviderWorkerResponse),
+          }).pipe(
+            Effect.andThen(
+              send({
+                protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+                ...input.fence,
+                type: "response",
+                requestId: frame.requestId,
+                ok: true,
+                result: result ?? null,
+              } satisfies ProviderWorkerResponse),
+            ),
+          ),
         onFailure: () =>
-          send({
-            protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
-            ...input.fence,
-            type: "response",
+          Effect.logWarning("provider worker request completed", {
+            method: frame.method,
             requestId: frame.requestId,
             ok: false,
-            error: {
-              code: "provider_request_failed",
-              message: `Provider worker request '${frame.method}' failed.`,
-              retryable: false,
-            },
-          } satisfies ProviderWorkerResponse),
+          }).pipe(
+            Effect.andThen(
+              send({
+                protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+                ...input.fence,
+                type: "response",
+                requestId: frame.requestId,
+                ok: false,
+                error: {
+                  code: "provider_request_failed",
+                  message: `Provider worker request '${frame.method}' failed.`,
+                  retryable: false,
+                },
+              } satisfies ProviderWorkerResponse),
+            ),
+          ),
       }),
     );
 

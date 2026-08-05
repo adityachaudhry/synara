@@ -95,7 +95,8 @@ describe("ProviderWorkerProvisioner", () => {
     expect(configWrite?.mode).toBe(0o600);
     expect(String(configWrite?.data)).toContain("bootstrap-secret");
     expect(harness.workspace.startDurableProcess).toHaveBeenCalledWith(workspaceBinding, {
-      command: "node /opt/synara/provider-worker.mjs",
+      command:
+        "mkdir -p '/workspace/.synara-provider-worker/state/logs' && exec node '/opt/synara/provider-worker.mjs' >> '/workspace/.synara-provider-worker/state/logs/worker.log' 2>&1",
     });
   });
 

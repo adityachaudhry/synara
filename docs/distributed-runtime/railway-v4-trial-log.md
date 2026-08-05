@@ -482,3 +482,11 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Live correction to the conclusion:** The next canary still stalled after both files appeared. Direct in-container experiments then proved that a fresh connected `files.write()` resolved for both a small marker and the complete 14,076,840-byte worker artifact (about 3.7 seconds for the large transfer). Fresh connections remain a useful stale-handle safeguard covered by regression tests, but an unsettled upload was not established as the live root cause.
 
 **Course correction:** Stop inferring the active phase from filesystem side effects. Add secret-free phase logs at worker reservation, artifact upload start/completion, config upload completion, process identity assignment, and broker connection. The next canary will use those events as the authority for where startup stops.
+
+### Phase-traced canary result
+
+**Observation:** The next normal browser canary crossed every instrumented startup phase: reservation, 14 MB artifact upload, config upload, durable process assignment, and authenticated broker connection. The UI remained at `Connecting` after the worker connected, so the remaining wait is inside the first remote `session.start` request rather than Railway provisioning.
+
+**Diagnostic correction:** Earlier `/proc` scans from `railway sandbox exec` did not show the worker even while the broker had an authenticated live socket. Railway exec workloads run through the sandbox's nested runtime, so that outer process namespace is not an authoritative worker liveness check. Retain broker registration and durable-session identity as the process authorities.
+
+**Next observation seam:** Launch the unchanged worker through a small shell wrapper that creates its existing home log directory and redirects stdout/stderr to `state/logs/worker.log`. Add request-ID/method-only logs before and after the existing dispatch function. No prompt, credential, provider response, or environment value is logged. This separates broker delivery from Pi adapter initialization without creating a second protocol.
