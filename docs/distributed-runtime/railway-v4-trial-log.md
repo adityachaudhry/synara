@@ -70,3 +70,78 @@ Secrets, raw tokens, session cookies, credential-bearing URLs, and provider prom
 
 **Architectural consequence:** Verification is scoped to the browser/server product, but the web production build remains a required acceptance check.
 
+## 2026-08-04 — Railway SDK contract inspection
+
+**Revision:** `4eedceb6`
+
+**Hypothesis:** The Railway TypeScript SDK can be hidden behind Synara's own workspace-runtime boundary without leaking experimental SDK types into provider or orchestration code.
+
+**Experiment:** Install the exact `railway@3.7.0` package in `apps/server`, inspect its declarations, and implement a facade-backed client with fake-SDK contract tests.
+
+**Observation:** The SDK supports create, reconnect, list, exec, destroy, file transfer, checkpoints, and durable exec sessions. `Sandbox.create` resolves at `RUNNING`. The observed status union also includes `DESTROYING`, which the initial sketch had omitted.
+
+**Correction:** Preserve `DESTROYING` in Synara's generic runtime status instead of narrowing Railway into an inaccurate lifecycle. Keep the SDK import confined to `Layers/RailwaySandboxClient.ts`.
+
+**Verification:** The SDK mapping tests and generic runtime lifecycle tests pass together, including reconnect refresh, private-network creation, idempotent not-found cleanup, and failed-create cleanup.
+
+**Architectural consequence:** Later orchestration and Pi routing code depends on `WorkspaceRuntime`, not Railway. Durable exec needs a deliberate extension to that generic contract in the worker stage; it should not be improvised inside the Pi adapter.
+
+## 2026-08-04 — Guarded lifecycle smoke and asynchronous teardown
+
+**Revision:** working tree after `4eedceb6`
+
+**Hypothesis:** A bounded smoke can create one sandbox, probe it, reconnect, keep it alive, destroy it, and immediately assert that it disappeared from inventory.
+
+**Experiment:** Add a server-only smoke entry point guarded by `SYNARA_RAILWAY_SANDBOX_SMOKE=1`, with a fake runtime test that returns `DESTROYING` once after destroy.
+
+**Observation:** Immediate absence was an incorrect assumption. Railway destroy is asynchronous and inventory may legitimately retain a `DESTROYING` record.
+
+**Correction:** Poll bounded inventory for disappearance after destroy. The release path still runs on intermediate command failure. Smoke output contains only IDs, region, counts, command exit metadata, and verification flags; it does not copy stdout, stderr, tokens, or provider content.
+
+**Verification:** Four smoke-policy tests pass, including guard refusal, sanitized success output, cleanup after a command failure, and asynchronous teardown.
+
+## 2026-08-04 — Live `v4` sandbox trial
+
+**Revision:** working tree after `4eedceb6`
+
+**Scope:** One sandbox in project `v4`, production environment `bd3494bb-73e4-450b-bd44-1579a5b60e7d`, private networking enabled, five-minute idle timeout. No service deployment or database mutation.
+
+**Sandbox:** `ef1b4542-d435-4aae-b8bb-e531685e3cc6`, region `us-west2`.
+
+**Baseline:** `railway sandbox list --json` returned no sandboxes.
+
+### Attempt 1 — Assume the stock sandbox contains the Pi CLI
+
+**Why tried:** The first smoke draft used `pi --version` as a proxy for worker readiness.
+
+**Observation:** `uname -a` succeeded and Node reported `v24.18.0`. `pi --version` failed with `No such file or directory` and exit code 1.
+
+**Cause:** Railway's stock sandbox is a Node-capable workspace, not a Synara/Pi worker image. Synara's current Pi adapter uses bundled Pi SDK packages; a globally installed Pi CLI is neither provided by Railway nor the correct lifecycle-layer acceptance criterion.
+
+**Correction:** Remove the Pi CLI probe from the generic sandbox smoke. Build a reproducible Synara worker artifact/template in the next stage and test that artifact's own readiness protocol. Keep provider-readiness checks above the generic workspace lifecycle.
+
+### Attempt 2 — Start a detached worker through shell glue
+
+**Why tried:** Validate whether a detached command can be reattached after the initiating client exits.
+
+**Experiment:** Launch a short command via `sh -lc`, detach it, then reattach by the returned durable session name.
+
+**Observation:** Reattachment failed with `/bin/sh` errors including `[[: not found` and an unexpected `(` syntax error.
+
+**Cause:** The shell wrapper introduced dialect and quoting behavior that is not part of the durable-session primitive. It is unsafe to make worker correctness depend on interactive shell initialization or Bash-compatible syntax.
+
+**Correction:** Launch the worker executable directly as argv. A detached direct Node process stayed alive for 30 seconds; reattachment replayed `worker-ready` and continued through `worker-done`, exiting successfully.
+
+**Architectural consequence:** The remote worker supervisor should start a compiled Node entry point directly. Durable session name is a recoverable binding to persist alongside sandbox ID and lifecycle generation.
+
+### Teardown
+
+Destroy was issued for the exact sandbox ID. The first inventory read returned the sandbox as `DESTROYING`, confirming the asynchronous-teardown behavior already captured in tests. A later inventory read returned an empty list. No broad cleanup command was used.
+
+## 2026-08-04 — Browser/server bundle recheck
+
+**Revision:** working tree after `4eedceb6`
+
+**Observation:** A focused `apps/server` production build completed and bundled the React web client into `dist/client`. The earlier unresolved Inter font error did not reproduce after dependency bootstrap completed.
+
+**Conclusion:** The browser-only product build is healthy at this stage. Electron remains outside distributed-runtime scope.
