@@ -47,6 +47,9 @@ describe("ServerSettingsService", () => {
               binaryPath: "/usr/local/bin/codex",
               customModels: ["gpt-custom"],
             },
+            pi: {
+              executionTarget: "railway-sandbox",
+            },
           },
         });
         const raw = yield* fs.readFileString(settingsPath);
@@ -57,6 +60,7 @@ describe("ServerSettingsService", () => {
     expect(result.updated.enableAssistantStreaming).toBe(true);
     expect(result.updated.enableProviderUpdateChecks).toBe(false);
     expect(result.updated.providers.codex.binaryPath).toBe("/usr/local/bin/codex");
+    expect(result.updated.providers.pi.executionTarget).toBe("railway-sandbox");
     expect(result.parsed).toMatchObject({
       revision: 1,
       migrationVersion: 1,
@@ -67,6 +71,9 @@ describe("ServerSettingsService", () => {
           codex: {
             binaryPath: "/usr/local/bin/codex",
             customModels: ["gpt-custom"],
+          },
+          pi: {
+            executionTarget: "railway-sandbox",
           },
         },
       },

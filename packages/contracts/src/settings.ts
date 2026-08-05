@@ -14,6 +14,9 @@ const ProviderSettingsBase = {
   customModels: CustomModels,
 };
 
+export const ProviderExecutionTarget = Schema.Literals(["local", "railway-sandbox"]);
+export type ProviderExecutionTarget = typeof ProviderExecutionTarget.Type;
+
 export const CodexServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "codex")),
@@ -76,6 +79,7 @@ export const PiServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "pi")),
   agentDir: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  executionTarget: ProviderExecutionTarget.pipe(Schema.withDecodingDefault(() => "local")),
 });
 export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
 
@@ -188,6 +192,7 @@ export const ServerSettingsPatch = Schema.Struct({
           ...ProviderSettingsBasePatch,
           binaryPath: Schema.optionalKey(StringSetting),
           agentDir: Schema.optionalKey(StringSetting),
+          executionTarget: Schema.optionalKey(ProviderExecutionTarget),
         }),
       ),
     }),
