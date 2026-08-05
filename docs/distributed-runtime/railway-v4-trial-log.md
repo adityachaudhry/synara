@@ -500,3 +500,15 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Cause:** The protocol used RFC status code `1008` when application code rejected a peer frame. The WHATWG `WebSocket.close()` client API only permits code `1000` or application codes in the `3000-4999` range; Node's Undici implementation enforces that restriction. The intended diagnostic close therefore raised a defect and masked the original protocol failure.
 
 **Test-first correction:** Change both control-plane rejection paths to private application close code `4400`, defined once in `closeCodes.ts`. Four existing failure-path assertions were changed first and failed against the old `1008` behavior; the corrected client rejection, server rejection, malformed-frame, and registration-timeout paths now pass with the API-safe code. Code `1000` remains the normal retirement close.
+
+### Corrected-close canary — registration acknowledgement race
+
+**Revision deployed:** `6a73f30d`
+
+**Observation:** Sandbox `0ff290fb-6f0c-4944-8075-ebee0b7f8a43` booted and reconnected cleanly instead of crashing. On its first accepted registration, the server logged `provider worker connected`; about 130 ms later the socket closed, and later reconnects were rejected as `register.broker`. No `session.start` request reached dispatch.
+
+**Cause 1 — readiness preceded acknowledgement:** `ProviderWorkerBroker.register` inserted the active worker and completed the provisioner's connection deferred before `runProviderWorkerConnection` sent the `registered` frame. The awakened orchestration path could therefore send `session.start` first. The worker intentionally requires `registered` to be its first server frame, rejected the out-of-order request, and closed with the now-valid `4400` code.
+
+**Cause 2 — disconnect cleanup captured the pre-registration value:** The route built `Effect.ensuring(registeredFence ? disconnect : void)` while `registeredFence` was still undefined. The conditional was evaluated eagerly, so a later socket close never removed the active broker entry. Correct reconnects were then rejected as duplicates.
+
+**Test-first correction:** Add a broker regression requiring the `registered` acknowledgement to be sent before `waitForConnection` can succeed, plus a route regression requiring the same fenced worker to reconnect after its socket closes. Both failed on the live behavior. The broker now owns the acknowledgement send and resolves readiness only after it succeeds; a failed send rolls back the active entry. The route's finalizer now suspends the fence lookup until cleanup time. Sixteen focused broker, route, and worker-session tests pass.

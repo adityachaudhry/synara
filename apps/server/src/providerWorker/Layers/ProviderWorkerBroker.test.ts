@@ -39,11 +39,27 @@ function makeConnection(onSend?: (frame: ProviderWorkerServerFrame) => void) {
 }
 
 describe("ProviderWorkerBroker", () => {
+  it("sends the registration acknowledgement before reporting the worker ready", async () => {
+    const broker = await Effect.runPromise(makeProviderWorkerBroker());
+    const fake = makeConnection();
+    await Effect.runPromise(broker.expectWorker(fence));
+
+    await Effect.runPromise(broker.register(fence, fake.connection));
+    await Effect.runPromise(broker.waitForConnection(fence));
+
+    expect(fake.sent[0]).toMatchObject({
+      type: "registered",
+      acknowledgedSequence: 0,
+      ...fence,
+    });
+  });
+
   it("correlates a worker response with one in-flight request", async () => {
     const broker = await Effect.runPromise(makeProviderWorkerBroker({ requestTimeoutMs: 1_000 }));
     const fake = makeConnection();
     await Effect.runPromise(broker.expectWorker(fence));
     await Effect.runPromise(broker.register(fence, fake.connection));
+    fake.sent.length = 0;
 
     const request = Effect.runPromise(
       broker.request(fence, "session.has", { threadId: "thread-1" }),
@@ -95,6 +111,7 @@ describe("ProviderWorkerBroker", () => {
     const fake = makeConnection();
     await Effect.runPromise(broker.expectWorker(fence));
     await Effect.runPromise(broker.register(fence, fake.connection));
+    fake.sent.length = 0;
 
     const pending = Effect.runPromise(
       broker.request(fence, "session.has", { threadId: "thread-1" }).pipe(Effect.result),
@@ -162,6 +179,7 @@ describe("ProviderWorkerBroker", () => {
     const fake = makeConnection((frame) => order.push(`send:${frame.type}`));
     await Effect.runPromise(broker.expectWorker(fence));
     await Effect.runPromise(broker.register(fence, fake.connection));
+    order.length = 0;
 
     await Effect.runPromise(
       broker.accept({

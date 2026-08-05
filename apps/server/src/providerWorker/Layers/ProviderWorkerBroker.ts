@@ -100,6 +100,20 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           lastSequence: reservation.lastSequence,
           lastSeenAt: Date.now(),
         });
+        yield* connection
+          .send({
+            protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+            ...fence,
+            type: "registered",
+            acknowledgedSequence: reservation.lastSequence,
+          })
+          .pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                active.delete(key);
+              }),
+            ),
+          );
         yield* Deferred.succeed(reservation.ready, undefined);
         return reservation.lastSequence;
       });

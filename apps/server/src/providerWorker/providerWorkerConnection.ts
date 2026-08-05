@@ -1,7 +1,5 @@
 import {
-  PROVIDER_WORKER_PROTOCOL_VERSION,
   ProviderWorkerClientFrame,
-  type ProviderWorkerRegistered,
   type ProviderWorkerServerFrame,
 } from "@synara/contracts";
 import { Duration, Effect, Schema } from "effect";
@@ -99,7 +97,7 @@ export function runProviderWorkerConnection(input: {
                   transportError("register.auth", "Worker authentication failed.", cause),
                 ),
               );
-              const acknowledgedSequence = yield* input.broker
+              yield* input.broker
                 .register(fence, brokerConnection)
                 .pipe(
                   Effect.mapError((cause) =>
@@ -107,13 +105,6 @@ export function runProviderWorkerConnection(input: {
                   ),
                 );
               registeredFence = fence;
-              const acknowledgement: ProviderWorkerRegistered = {
-                protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
-                ...fence,
-                type: "registered",
-                acknowledgedSequence,
-              };
-              yield* input.socket.sendRaw(JSON.stringify(acknowledgement));
               return;
             }
             if (frame.type === "register") {
@@ -153,7 +144,9 @@ export function runProviderWorkerConnection(input: {
 
     yield* input.socket.run(handleFrame).pipe(
       Effect.ensuring(
-        registeredFence ? input.broker.disconnect(registeredFence) : Effect.void,
+        Effect.suspend(() =>
+          registeredFence ? input.broker.disconnect(registeredFence) : Effect.void,
+        ),
       ),
     );
     if (!registeredFence) {

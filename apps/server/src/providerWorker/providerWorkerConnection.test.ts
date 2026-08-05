@@ -71,6 +71,39 @@ describe("runProviderWorkerConnection", () => {
     });
   });
 
+  it("disconnects a registered fence when its socket closes so it can reconnect", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const authority = yield* makeProviderWorkerBootstrapAuthority();
+        const broker = yield* makeProviderWorkerBroker();
+        const credential = yield* authority.issue(fence);
+        yield* broker.expectWorker(fence);
+        const first = yield* makeSocket([registerFrame(credential)]);
+        const second = yield* makeSocket([registerFrame(credential)]);
+
+        yield* runProviderWorkerConnection({
+          socket: first.socket,
+          authority,
+          broker,
+          registrationTimeoutMs: 100,
+        });
+        const secondExit = yield* runProviderWorkerConnection({
+          socket: second.socket,
+          authority,
+          broker,
+          registrationTimeoutMs: 100,
+        }).pipe(Effect.result);
+        return { second, secondExit };
+      }).pipe(Effect.scoped),
+    );
+
+    expect(result.secondExit._tag).toBe("Success");
+    expect(JSON.parse(result.second.sent[0] ?? "{}")).toMatchObject({
+      type: "registered",
+      ...fence,
+    });
+  });
+
   it("closes a worker that presents the wrong bootstrap credential", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
