@@ -552,3 +552,31 @@ This is the first complete acceptance of the intended path: browser → Synara W
 **Observation:** The replacement worker used a new worker/generation but the same sandbox ID. Its requests succeeded; however, the pre-restart worker process kept attempting to reconnect with its now-invalid in-memory bootstrap credential. `stopDurableProcess` had failed for the persisted session handle, and `ProviderWorkerProvisioner.restart` intentionally swallowed that failure before starting the replacement in place.
 
 **Test-first correction:** Add a provisioner regression requiring restart to retire/revoke the old fence, attempt graceful process termination, cross an authoritative sandbox-destruction barrier, create a replacement sandbox, and only then launch the new generation. It failed because the old implementation reused the connected sandbox. Restart now destroys the old Railway workspace even if its durable-session handle is stale. This intentionally trades ephemeral workspace continuity for single-worker correctness until the documented S3 snapshot/restore seam exists. Startup failure also destroys the replacement sandbox. Six focused routed-adapter/provisioner tests pass.
+
+### Authoritative replacement accepted end to end
+
+**Revision deployed:** `996f6f07` (deployment `03513f81-d493-46b9-a1e0-ce4f0dbbf91b`)
+
+**Experiment:** Deploy the authoritative-replacement correction without clearing the `/data` volume, reopen the same durable browser thread, and send one exact-response follow-up. Compare Railway sandbox inventory before and after the recovered session starts.
+
+**Result:** The controller loaded the existing cookie, settings, orchestration journals, projections, and persisted distributed binding from the volume. Recovery destroyed the previously bound sandbox `d1fbec2d-9f5a-4435-957f-47b7e3bed020` and created replacement sandbox `8f4ddc7c-d02d-471e-8eb0-e5f7301839d6`. Final inventory contained exactly that one `RUNNING` sandbox. Its retained worker log showed successful `session.start`, `session.has`, `session.list`, and `turn.send` requests. The existing browser transcript rendered the requested exact assistant response: `replacement sandbox pi ok`.
+
+**Conclusion:** Synara's durable conversation/control-plane state and the Pi execution workspace now have deliberately different lifecycles. A controller replacement rehydrates the existing thread from volume-backed SQLite, fences and removes the stale execution plane, then routes the next turn through a fresh Railway Sandbox using Synara's existing provider/session/event primitives. The remaining durability gap is sandbox workspace snapshot/restore, not browser, orchestration, transcript, or controller-state recovery.
+
+## Railway platform references used
+
+- [Volumes reference](https://docs.railway.com/volumes/reference) for mounted-service persistence and deployment constraints.
+- [Variables reference](https://docs.railway.com/variables/reference) for Railway-provided runtime identity variables such as `RAILWAY_REPLICA_ID`.
+
+## Final browser/server verification
+
+Fresh browser-only verification passed after the final live trial:
+
+- contracts: 19 files, 200 tests passed;
+- web: 288 files, 3,533 tests passed;
+- server: 315 files and 3,356 tests passed, with two files and seven tests skipped by their existing guards;
+- contracts, web, server, and the atomic provider-worker artifact built successfully;
+- `docker-entrypoint.sh` passed Bash syntax validation;
+- the compiled worker artifact registered over the fenced protocol, accepted retirement, and exited zero.
+
+The first artifact-smoke invocation omitted its deliberate `SYNARA_PROVIDER_WORKER_ARTIFACT_SMOKE=1` opt-in and exited before launching the worker. Rerunning the same command with the guard produced `{registered:true, retired:true, exitCode:0, protocolVersion:1}`. Repository-wide `bun fmt`, `bun lint`, and `bun typecheck` were not run because this checkout's agent instructions prohibit those heavyweight checks unless the user explicitly requests them.

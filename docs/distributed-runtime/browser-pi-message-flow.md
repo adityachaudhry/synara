@@ -16,9 +16,9 @@ flowchart LR
   X["Authenticated worker WebSocket broker"]
   S["Private Railway Sandbox\nprovider-worker + existing Pi adapter"]
   I["Provider runtime ingestion\njournal then project"]
-  DB[("Synara SQLite\nauthoritative control-plane state")]
+  DB[("Synara SQLite on /data volume\nauthoritative control-plane state")]
   F[("settings.json\nserver-authoritative settings")]
-  SD[("Sandbox filesystem\nephemeral working state")]
+  SD[("Sandbox filesystem\ndisposable working state")]
 
   B -->|"thread.create / thread.turn.start"| W
   W --> O
@@ -128,6 +128,8 @@ With `executionTarget=railway-sandbox`, `ProviderWorkerProvisioner` performs a b
 
 Any failure revokes the credential, retires the broker reservation, stops the exact process handle, and destroys the exact sandbox.
 
+When a persisted binding is recovered after a Synara controller replacement, the provisioner first retires the old fence and attempts graceful process termination. It then treats destruction of the previously bound sandbox as the authoritative single-worker barrier and provisions a new sandbox/generation. This deliberately sacrifices unsnapshotted sandbox workspace state instead of allowing an old worker with a stale credential to keep running alongside its replacement.
+
 ### 7. Persist the non-secret runtime binding
 
 After the remote worker accepts `session.start`, Synara upserts `provider_session_runtime` for the thread:
@@ -212,7 +214,7 @@ Loss of these objects must be handled through the journals, persisted provider b
 
 | Data | Current authority | Notes |
 |---|---|---|
-| Projects, threads, messages, turn intent, approvals, lifecycle facts | `orchestration_events` in Synara SQLite | Authoritative append-only domain history |
+| Projects, threads, messages, turn intent, approvals, lifecycle facts | `orchestration_events` in Synara SQLite | Authoritative append-only domain history; the additive Railway preview stores the database on its `/data` volume |
 | UI query/read state | `projection_*` SQLite tables | Rebuildable from orchestration events |
 | Provider output before projection | `provider_runtime_events` | Durable ingestion journal |
 | Provider command retry/uncertainty | `orchestration_event_deliveries` + consumer state | Keeps dispatch durable across process failure |
@@ -220,7 +222,7 @@ Loss of these objects must be handled through the journals, persisted provider b
 | Pi execution target | atomic `settings.json` | Server-authoritative, revisioned; local is default |
 | Attachments and managed local artifacts | Existing Synara managed-attachment storage | Metadata travels in orchestration/provider inputs |
 | Live Pi session and workspace | Local process/filesystem or sandbox filesystem | Ephemeral runtime state |
-| Railway sandbox inventory/process | Railway control plane plus current Synara process for attached handles | Sandbox ID is reconnectable; process reattachment exists only when Railway supplies a durable session |
+| Railway sandbox inventory/process | Railway control plane plus the active broker/process connection | Project-token execs supplied durable session names in the successful trials, but recovery does not trust a persisted process handle as a single-worker barrier; it destroys and replaces the bound sandbox |
 | Browser session | Secure Synara session cookie + server auth records | Separate from provider-worker authentication |
 
 ## Microservice recommendation
@@ -236,17 +238,17 @@ Keep orchestration, event ingestion, projection, and provider-command delivery t
 
 For a durable production topology:
 
-- replace preview SQLite with an attached Railway volume for one control-plane replica, or Postgres when multiple replicas/query workloads justify it;
+- keep SQLite on the attached Railway volume for one control-plane replica, or move the same repositories to Postgres when multiple replicas/query workloads justify it;
 - use S3-compatible storage for immutable workspace snapshots, diffs, untracked-file archives, and generated artifacts;
 - add a real queue/stream only if command consumers or control-plane replicas must scale independently;
 - never use S3 polling or a shared SQLite file as the worker command transport.
 
 ## Deliberate current limitations
 
-- The additive preview service currently has ephemeral `/data`; redeploying it loses its SQLite and settings files.
-- Sandbox disk and Pi session files are not yet exported to object storage, so deliberate sandbox destruction cannot yet rehydrate a completed thread.
-- The in-memory broker is single-control-plane; restart reconciliation is designed but not yet a horizontally replicated broker.
-- Railway v4 did not assign durable sessions to live execs in this trial. The attached-process fallback survives normal requests and explicit teardown, but not a Synara control-plane restart.
+- The additive preview's controller state is durable on a Railway volume mounted at `/data`, which constrains the service to one mounted control-plane deployment. The repository layer is still SQLite rather than a horizontally shared database.
+- Sandbox disk and Pi session files are not yet exported to object storage. Recovery therefore preserves the Synara thread and journals but replaces the old sandbox and loses its unsnapshotted workspace state.
+- The in-memory broker is single-control-plane. Persisted bindings drive restart reconciliation, but the broker itself is not horizontally replicated.
+- Project-token execs supplied durable Railway session names during the successful trials, but those handles were not reliable enough across controller replacement to prove that an old worker had stopped. Sandbox destruction is therefore the authoritative recovery barrier.
 - Remote model/skill/command/composer discovery currently delegates to local discovery; session lifecycle and turns are the remote canary scope.
 - Railway project-token authentication is configured for the preview, but production secret rotation and revocation still need an operating procedure.
 
