@@ -16,6 +16,12 @@ const toTransportError = (operation: string) => (cause: unknown) =>
     cause,
   });
 
+export function mapProviderWorkerSocketRunError(cause: unknown) {
+  return cause instanceof ProviderWorkerTransportError
+    ? cause
+    : toTransportError("read")(cause);
+}
+
 export const makeProviderWorkerSocket = Effect.fn(function* (
   socket: Socket.Socket,
 ): Effect.fn.Return<ProviderWorkerSocket, never, never> {
@@ -24,7 +30,7 @@ export const makeProviderWorkerSocket = Effect.fn(function* (
     run: (handler, onOpen) =>
       socket
         .runRaw(handler, { ...(onOpen === undefined ? {} : { onOpen }) })
-        .pipe(Effect.mapError(toTransportError("read"))),
+        .pipe(Effect.mapError(mapProviderWorkerSocketRunError)),
     sendRaw: (frame) => write(frame).pipe(Effect.mapError(toTransportError("write"))),
     close: (code, reason) => write(new Socket.CloseEvent(code, reason)).pipe(Effect.ignore),
   };
