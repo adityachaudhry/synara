@@ -225,3 +225,19 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Verification:** The guarded artifact smoke rebuilt `dist/provider-worker/workerMain.mjs`, launched it as a separate process with a private temporary config, verified the full fenced registration without printing its credential, sent `retire`, and observed exit code 0. Safe result: `{registered:true, retired:true, exitCode:0, protocolVersion:1}`.
 
 **Architectural consequence:** Connection establishment and registration are now one ordered operation. A sandbox worker cannot wait forever on its own pre-open write, and the same smoke can be run without Railway or a model API call before live sandbox trials.
+
+## 2026-08-04 — Additive Railway preview deployment, attempt 1
+
+**Revision:** `6ae170f7`
+
+**Scope:** Create a new `synara-distributed-preview` service in v4 production. The existing `synara` service, databases, and volumes are unchanged. The preview has its own ephemeral SQLite state, Railway-provided HTTPS domain, private service hostname, and a ten-minute sandbox idle timeout.
+
+**Credential scope for trial:** The preview references the existing Synara auth and Anthropic provider variables. Its Sandbox SDK token was copied through stdin from the currently authenticated Railway CLI session without printing the value. That user-session token is suitable only for this bounded trial and must be replaced with a durable, least-privilege project token before the preview is treated as persistent infrastructure.
+
+**Polling mistake:** The first deployment polling command used zsh's reserved read-only parameter name `status` and failed locally before polling. Renaming it to `deployment_state` corrected the command; the deployment itself was unaffected.
+
+**Observation:** Docker reached the Vite production build, generated the application chunks and compression sidecars, then failed resolving `@fontsource-variable/inter` from `apps/web/src/superTokensAuth/render.tsx`.
+
+**Cause:** The source imports Inter, but `apps/web/package.json` and `bun.lock` declared only `@fontsource-variable/jetbrains-mono`. The local worktree contained residual Inter package material, so local builds passed while Railway's clean `bun install --frozen-lockfile` correctly exposed the undeclared dependency. This also explains the earlier Vite dev dependency-scan warning.
+
+**Correction:** Declare `@fontsource-variable/inter` in the web workspace and update the lockfile through the pinned Bun version. Do not externalize the font or weaken the clean Docker build.
