@@ -1,0 +1,224 @@
+import { Effect, Layer } from "effect";
+import { describe, expect, it } from "vitest";
+
+import {
+  RailwaySandboxClientError,
+  RailwaySandboxNotFoundError,
+  WorkspaceRuntimeError,
+} from "../Errors";
+import {
+  RailwaySandboxClient,
+  type RailwaySandboxClientShape,
+  type RailwaySandboxRecord,
+} from "../Services/RailwaySandboxClient";
+import { WorkspaceRuntime } from "../Services/WorkspaceRuntime";
+import { makeWorkspaceRuntimeLive } from "./WorkspaceRuntime";
+
+function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandboxRecord["status"] }) {
+  const sandboxes = new Map<string, RailwaySandboxRecord>();
+  let creates = 0;
+
+  const client: RailwaySandboxClientShape = {
+    create: (input) =>
+      Effect.gen(function* () {
+        if (
+          input.networkIsolation !== "PRIVATE" ||
+          input.idleTimeoutMinutes !== 30 ||
+          input.region !== "us-east4-eqdc4a"
+        ) {
+          return yield* new RailwaySandboxClientError({
+            operation: "create",
+            detail: "unexpected create policy",
+          });
+        }
+        creates += 1;
+        const record: RailwaySandboxRecord = {
+          id: `sandbox-${creates}`,
+          status: options?.createdStatus ?? "RUNNING",
+          region: input.region,
+        };
+        sandboxes.set(record.id, record);
+        return record;
+      }),
+    connect: (runtimeId) => {
+      const record = sandboxes.get(runtimeId);
+      return record
+        ? Effect.succeed(record)
+        : Effect.fail(
+            new RailwaySandboxNotFoundError({ operation: "connect", runtimeId }),
+          );
+    },
+    exec: (runtimeId, input) => {
+      if (!sandboxes.has(runtimeId)) {
+        return Effect.fail(
+          new RailwaySandboxNotFoundError({ operation: "exec", runtimeId }),
+        );
+      }
+      return Effect.succeed({
+        exitCode: input.command === "true" ? 0 : 2,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+      });
+    },
+    destroy: (runtimeId) => {
+      if (!sandboxes.delete(runtimeId)) {
+        return Effect.fail(
+          new RailwaySandboxNotFoundError({ operation: "destroy", runtimeId }),
+        );
+      }
+      return Effect.void;
+    },
+    list: Effect.sync(() => Array.from(sandboxes.values())),
+  };
+
+  return { client, sandboxes, get creates() { return creates; } };
+}
+
+const enabledConfig = {
+  enabled: true as const,
+  token: "not-observable-by-runtime",
+  environmentId: "environment-1",
+  region: "us-east4-eqdc4a",
+  idleTimeoutMinutes: 30,
+};
+
+function runWorkspace<A>(
+  client: RailwaySandboxClientShape,
+  effect: Effect.Effect<A, WorkspaceRuntimeError, WorkspaceRuntime>,
+  config = enabledConfig,
+) {
+  const layer = makeWorkspaceRuntimeLive(config).pipe(
+    Layer.provide(Layer.succeed(RailwaySandboxClient, client)),
+  );
+  return Effect.runPromise(effect.pipe(Effect.provide(layer)));
+}
+
+describe("WorkspaceRuntime", () => {
+  it("creates a private sandbox with the configured idle timeout", async () => {
+    const fake = makeFakeRailwayClient();
+
+    const binding = await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        return yield* runtime.create({
+          lifecycleGeneration: "generation-1",
+          environment: { WORKER_TOKEN: "scoped" },
+        });
+      }),
+    );
+
+    expect(binding).toEqual({
+      runtimeKind: "railway-sandbox",
+      runtimeId: "sandbox-1",
+      lifecycleGeneration: "generation-1",
+      status: "running",
+      region: "us-east4-eqdc4a",
+    });
+  });
+
+  it("connects only to a running sandbox", async () => {
+    const fake = makeFakeRailwayClient();
+    fake.sandboxes.set("sandbox-stopped", {
+      id: "sandbox-stopped",
+      status: "STOPPED",
+      region: "us-east4-eqdc4a",
+    });
+
+    const result = await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        return yield* runtime
+          .connect({
+            runtimeKind: "railway-sandbox",
+            runtimeId: "sandbox-stopped",
+            lifecycleGeneration: "generation-1",
+            status: "running",
+            region: "us-east4-eqdc4a",
+          })
+          .pipe(Effect.result);
+      }),
+    );
+
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("keeps a sandbox alive with a side-effect-free command", async () => {
+    const fake = makeFakeRailwayClient();
+    fake.sandboxes.set("sandbox-1", {
+      id: "sandbox-1",
+      status: "RUNNING",
+      region: "us-east4-eqdc4a",
+    });
+
+    await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        yield* runtime.keepAlive({
+          runtimeKind: "railway-sandbox",
+          runtimeId: "sandbox-1",
+          lifecycleGeneration: "generation-1",
+          status: "running",
+          region: "us-east4-eqdc4a",
+        });
+      }),
+    );
+  });
+
+  it("treats destroy of an absent sandbox as success", async () => {
+    const fake = makeFakeRailwayClient();
+
+    await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        yield* runtime.destroy({
+          runtimeKind: "railway-sandbox",
+          runtimeId: "missing",
+          lifecycleGeneration: "generation-1",
+          status: "running",
+          region: "us-east4-eqdc4a",
+        });
+      }),
+    );
+  });
+
+  it("destroys a created sandbox when initialization is not running", async () => {
+    const fake = makeFakeRailwayClient({ createdStatus: "FAILED" });
+
+    const result = await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        return yield* runtime
+          .create({ lifecycleGeneration: "generation-1", environment: {} })
+          .pipe(Effect.result);
+      }),
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(fake.sandboxes.size).toBe(0);
+  });
+
+  it("refuses lifecycle calls when Railway configuration is disabled", async () => {
+    const fake = makeFakeRailwayClient();
+
+    const result = await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        return yield* runtime
+          .create({ lifecycleGeneration: "generation-1", environment: {} })
+          .pipe(Effect.result);
+      }),
+      { enabled: false },
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(fake.creates).toBe(0);
+  });
+});
