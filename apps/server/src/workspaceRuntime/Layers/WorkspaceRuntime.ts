@@ -133,6 +133,30 @@ export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
           ),
         );
 
+      const writeFile: WorkspaceRuntimeShape["writeFile"] = (binding, input) =>
+        requireEnabled(config, "writeFile").pipe(
+          Effect.flatMap(() => client.writeFile(binding.runtimeId, input)),
+          Effect.mapError(toRuntimeError("writeFile", binding.runtimeId)),
+        );
+
+      const startDurableProcess: WorkspaceRuntimeShape["startDurableProcess"] = (
+        binding,
+        input,
+      ) =>
+        requireEnabled(config, "startDurableProcess").pipe(
+          Effect.flatMap(() => client.startDurableProcess(binding.runtimeId, input)),
+          Effect.mapError(toRuntimeError("startDurableProcess", binding.runtimeId)),
+        );
+
+      const stopDurableProcess: WorkspaceRuntimeShape["stopDurableProcess"] = (
+        binding,
+        sessionName,
+      ) =>
+        requireEnabled(config, "stopDurableProcess").pipe(
+          Effect.flatMap(() => client.stopDurableProcess(binding.runtimeId, sessionName)),
+          Effect.mapError(toRuntimeError("stopDurableProcess", binding.runtimeId)),
+        );
+
       const destroy: WorkspaceRuntimeShape["destroy"] = (binding) =>
         requireEnabled(config, "destroy").pipe(
           Effect.flatMap(() => client.destroy(binding.runtimeId)),
@@ -155,7 +179,17 @@ export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
         Effect.mapError(toRuntimeError("list")),
       );
 
-      return { create, connect, exec, keepAlive, destroy, list } satisfies WorkspaceRuntimeShape;
+      return {
+        create,
+        connect,
+        exec,
+        writeFile,
+        startDurableProcess,
+        stopDurableProcess,
+        keepAlive,
+        destroy,
+        list,
+      } satisfies WorkspaceRuntimeShape;
     }),
   );
 }

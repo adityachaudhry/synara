@@ -42,6 +42,21 @@ export interface WorkspaceExecResult {
   readonly truncated: boolean;
 }
 
+export interface WorkspaceRuntimeWriteFileInput {
+  readonly path: string;
+  readonly data: string | Uint8Array;
+  readonly mode?: number;
+}
+
+export interface WorkspaceRuntimeDurableProcessInput {
+  readonly command: string;
+  readonly cwd?: string;
+}
+
+export interface WorkspaceRuntimeDurableProcess {
+  readonly sessionName: string;
+}
+
 export interface WorkspaceRuntimeShape {
   readonly create: (
     input: WorkspaceRuntimeCreateInput,
@@ -53,6 +68,18 @@ export interface WorkspaceRuntimeShape {
     binding: WorkspaceRuntimeBinding,
     input: WorkspaceExecInput,
   ) => Effect.Effect<WorkspaceExecResult, WorkspaceRuntimeError>;
+  readonly writeFile: (
+    binding: WorkspaceRuntimeBinding,
+    input: WorkspaceRuntimeWriteFileInput,
+  ) => Effect.Effect<void, WorkspaceRuntimeError>;
+  readonly startDurableProcess: (
+    binding: WorkspaceRuntimeBinding,
+    input: WorkspaceRuntimeDurableProcessInput,
+  ) => Effect.Effect<WorkspaceRuntimeDurableProcess, WorkspaceRuntimeError>;
+  readonly stopDurableProcess: (
+    binding: WorkspaceRuntimeBinding,
+    sessionName: string,
+  ) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly keepAlive: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<void, WorkspaceRuntimeError>;

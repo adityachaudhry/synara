@@ -38,6 +38,21 @@ export interface RailwaySdkConnectionInput {
 export interface RailwaySdkExecInput {
   readonly cwd?: string;
   readonly timeoutSec?: number;
+  readonly resumeFromLastRead?: boolean;
+}
+
+export interface RailwaySdkExecHandle extends PromiseLike<ExecResult> {
+  readonly sessionName: Promise<string>;
+  readonly detach: () => Promise<string>;
+  readonly kill: (signal?: "TERM" | "KILL") => Promise<boolean>;
+}
+
+export interface RailwaySdkSandboxFiles {
+  readonly write: (
+    path: string,
+    data: string | Uint8Array,
+    options?: { readonly mode?: number },
+  ) => PromiseLike<void>;
 }
 
 export interface RailwaySdkSandbox {
@@ -45,7 +60,11 @@ export interface RailwaySdkSandbox {
   readonly status: SandboxStatus;
   readonly region: string;
   readonly refresh: () => PromiseLike<RailwaySdkSandbox>;
-  readonly exec: (command: string, input?: RailwaySdkExecInput) => PromiseLike<ExecResult>;
+  readonly exec: (
+    target: string | { readonly sessionName: string },
+    input?: RailwaySdkExecInput,
+  ) => RailwaySdkExecHandle;
+  readonly files: RailwaySdkSandboxFiles;
   readonly destroy: () => PromiseLike<void>;
 }
 
@@ -171,13 +190,74 @@ export function makeRailwaySandboxClient(
       Effect.tap(() => Effect.sync(() => handles.delete(runtimeId))),
     );
 
+  const writeFile: RailwaySandboxClientShape["writeFile"] = (runtimeId, input) =>
+    load(runtimeId).pipe(
+      Effect.flatMap((sandbox) =>
+        Effect.tryPromise({
+          try: () =>
+            sandbox.files.write(input.path, input.data, {
+              ...(input.mode === undefined ? {} : { mode: input.mode }),
+            }),
+          catch: (cause) => clientFailure(sdk, "writeFile", runtimeId, cause),
+        }),
+      ),
+    );
+
+  const startDurableProcess: RailwaySandboxClientShape["startDurableProcess"] = (
+    runtimeId,
+    input,
+  ) =>
+    load(runtimeId).pipe(
+      Effect.flatMap((sandbox) =>
+        Effect.tryPromise({
+          try: async () => {
+            const handle = sandbox.exec(input.command, {
+              ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+            });
+            return { sessionName: await handle.detach() };
+          },
+          catch: (cause) => clientFailure(sdk, "startDurableProcess", runtimeId, cause),
+        }),
+      ),
+    );
+
+  const stopDurableProcess: RailwaySandboxClientShape["stopDurableProcess"] = (
+    runtimeId,
+    sessionName,
+  ) =>
+    load(runtimeId).pipe(
+      Effect.flatMap((sandbox) =>
+        Effect.tryPromise({
+          try: async () => {
+            const handle = sandbox.exec(
+              { sessionName },
+              { resumeFromLastRead: true },
+            );
+            const terminated = await handle.kill("TERM");
+            if (!terminated) throw new Error("Railway durable process was not running.");
+            await handle;
+          },
+          catch: (cause) => clientFailure(sdk, "stopDurableProcess", runtimeId, cause),
+        }),
+      ),
+    );
+
   const list: RailwaySandboxClientShape["list"] = Effect.tryPromise({
     try: async () => (await sdk.list(connectionInput)).map(toRecord),
     catch: (cause) =>
       clientFailure(sdk, "list", undefined, cause) as RailwaySandboxClientError,
   });
 
-  return { create, connect, exec, destroy, list };
+  return {
+    create,
+    connect,
+    exec,
+    writeFile,
+    startDurableProcess,
+    stopDurableProcess,
+    destroy,
+    list,
+  };
 }
 
 export function makeRailwaySandboxClientLive(

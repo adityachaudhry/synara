@@ -33,7 +33,8 @@ function makeSdkSandbox(
       stderr: "",
       timedOut: false,
       truncated: false,
-    }),
+    }) as never,
+    files: { write: async () => undefined },
     destroy: async () => undefined,
     ...overrides,
   };
@@ -150,4 +151,123 @@ describe("RailwaySandboxClient", () => {
       expect(result.failure).toBeInstanceOf(RailwaySandboxNotFoundError);
     }
   });
+
+  it("uploads a worker artifact through the sandbox files API", async () => {
+    const writes: Array<{ path: string; data: string; mode: number | undefined }> = [];
+    const sandbox = makeSdkSandbox({
+      files: {
+        write: async (path, data, options) => {
+          writes.push({ path, data: String(data), mode: options?.mode });
+        },
+      },
+    });
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    await Effect.runPromise(
+      client.writeFile("sandbox-1", {
+        path: "/opt/synara/pi-worker.mjs",
+        data: "console.log('worker')",
+        mode: 0o644,
+      }),
+    );
+
+    expect(writes).toEqual([
+      {
+        path: "/opt/synara/pi-worker.mjs",
+        data: "console.log('worker')",
+        mode: 0o644,
+      },
+    ]);
+  });
+
+  it("starts a direct durable command and detaches by session name", async () => {
+    const calls: unknown[] = [];
+    const sandbox = makeSdkSandbox({
+      exec: (target, options) => {
+        calls.push({ target, options });
+        return makeExecHandle("durable-worker-1");
+      },
+    });
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    const process = await Effect.runPromise(
+      client.startDurableProcess("sandbox-1", {
+        command: "node /opt/synara/pi-worker.mjs",
+        cwd: "/workspace",
+      }),
+    );
+
+    expect(process).toEqual({ sessionName: "durable-worker-1" });
+    expect(calls).toEqual([
+      {
+        target: "node /opt/synara/pi-worker.mjs",
+        options: { cwd: "/workspace" },
+      },
+    ]);
+  });
+
+  it("reattaches and terminates an exact durable session", async () => {
+    const calls: unknown[] = [];
+    const handle = makeExecHandle("durable-worker-1", {
+      kill: async (signal) => {
+        calls.push({ signal });
+        return true;
+      },
+    });
+    const sandbox = makeSdkSandbox({
+      exec: (target, options) => {
+        calls.push({ target, options });
+        return handle;
+      },
+    });
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    await Effect.runPromise(client.stopDurableProcess("sandbox-1", "durable-worker-1"));
+
+    expect(calls).toEqual([
+      {
+        target: { sessionName: "durable-worker-1" },
+        options: { resumeFromLastRead: true },
+      },
+      { signal: "TERM" },
+    ]);
+  });
 });
+
+function makeExecHandle(
+  sessionName: string,
+  overrides: {
+    readonly kill?: (signal?: "TERM" | "KILL") => Promise<boolean>;
+  } = {},
+) {
+  const result = Promise.resolve({
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    truncated: false,
+  });
+  return Object.assign(result, {
+    sessionName: Promise.resolve(sessionName),
+    detach: async () => sessionName,
+    kill: overrides.kill ?? (async () => true),
+  });
+}

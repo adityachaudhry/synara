@@ -40,6 +40,21 @@ export interface RailwaySandboxExecResult {
   readonly truncated: boolean;
 }
 
+export interface RailwaySandboxWriteFileInput {
+  readonly path: string;
+  readonly data: string | Uint8Array;
+  readonly mode?: number;
+}
+
+export interface RailwaySandboxDurableProcessInput {
+  readonly command: string;
+  readonly cwd?: string;
+}
+
+export interface RailwaySandboxDurableProcess {
+  readonly sessionName: string;
+}
+
 export type RailwaySandboxClientFailure =
   | RailwaySandboxClientError
   | RailwaySandboxNotFoundError;
@@ -55,6 +70,18 @@ export interface RailwaySandboxClientShape {
     runtimeId: string,
     input: RailwaySandboxExecInput,
   ) => Effect.Effect<RailwaySandboxExecResult, RailwaySandboxClientFailure>;
+  readonly writeFile: (
+    runtimeId: string,
+    input: RailwaySandboxWriteFileInput,
+  ) => Effect.Effect<void, RailwaySandboxClientFailure>;
+  readonly startDurableProcess: (
+    runtimeId: string,
+    input: RailwaySandboxDurableProcessInput,
+  ) => Effect.Effect<RailwaySandboxDurableProcess, RailwaySandboxClientFailure>;
+  readonly stopDurableProcess: (
+    runtimeId: string,
+    sessionName: string,
+  ) => Effect.Effect<void, RailwaySandboxClientFailure>;
   readonly destroy: (
     runtimeId: string,
   ) => Effect.Effect<void, RailwaySandboxClientFailure>;

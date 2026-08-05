@@ -17,6 +17,8 @@ import { makeWorkspaceRuntimeLive } from "./WorkspaceRuntime";
 function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandboxRecord["status"] }) {
   const sandboxes = new Map<string, RailwaySandboxRecord>();
   let creates = 0;
+  const writes: unknown[] = [];
+  const durableProcesses: unknown[] = [];
 
   const client: RailwaySandboxClientShape = {
     create: (input) =>
@@ -62,6 +64,19 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
         truncated: false,
       });
     },
+    writeFile: (runtimeId, input) =>
+      Effect.sync(() => {
+        writes.push({ runtimeId, input });
+      }),
+    startDurableProcess: (runtimeId, input) =>
+      Effect.sync(() => {
+        durableProcesses.push({ operation: "start", runtimeId, input });
+        return { sessionName: "worker-session-1" };
+      }),
+    stopDurableProcess: (runtimeId, sessionName) =>
+      Effect.sync(() => {
+        durableProcesses.push({ operation: "stop", runtimeId, sessionName });
+      }),
     destroy: (runtimeId) => {
       if (!sandboxes.delete(runtimeId)) {
         return Effect.fail(
@@ -73,7 +88,7 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
     list: Effect.sync(() => Array.from(sandboxes.values())),
   };
 
-  return { client, sandboxes, get creates() { return creates; } };
+  return { client, sandboxes, writes, durableProcesses, get creates() { return creates; } };
 }
 
 const enabledConfig = {
@@ -167,6 +182,37 @@ describe("WorkspaceRuntime", () => {
         });
       }),
     );
+  });
+
+  it("uploads artifacts and controls durable processes through the generic boundary", async () => {
+    const fake = makeFakeRailwayClient();
+    const binding = {
+      runtimeKind: "railway-sandbox" as const,
+      runtimeId: "sandbox-1",
+      lifecycleGeneration: "generation-1",
+      status: "running" as const,
+      region: "us-east4-eqdc4a",
+    };
+
+    const process = await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        yield* runtime.writeFile(binding, {
+          path: "/opt/synara/pi-worker.mjs",
+          data: "worker",
+        });
+        const started = yield* runtime.startDurableProcess(binding, {
+          command: "node /opt/synara/pi-worker.mjs",
+        });
+        yield* runtime.stopDurableProcess(binding, started.sessionName);
+        return started;
+      }),
+    );
+
+    expect(process.sessionName).toBe("worker-session-1");
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.durableProcesses).toHaveLength(2);
   });
 
   it("treats destroy of an absent sandbox as success", async () => {
