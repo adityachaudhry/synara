@@ -41,7 +41,10 @@ function startInput(): ProviderSessionStartInput {
   };
 }
 
-function makeHarness(target: "local" | "railway-sandbox") {
+function makeHarness(
+  target: "local" | "railway-sandbox",
+  persistedBinding: ProviderWorkerRuntimeBinding | undefined = undefined,
+) {
   const localStart = vi.fn(() =>
     Effect.succeed({
       provider: "pi" as const,
@@ -73,7 +76,13 @@ function makeHarness(target: "local" | "railway-sandbox") {
   };
   const upsert = vi.fn(() => Effect.void);
   const directory = {
-    getBinding: vi.fn(() => Effect.succeed(Option.none())),
+    getBinding: vi.fn(() =>
+      Effect.succeed(
+        persistedBinding === undefined
+          ? Option.none()
+          : Option.some({ runtimePayload: { distributedPiRuntime: persistedBinding } } as never),
+      ),
+    ),
     upsert,
   };
   const settings = {
@@ -119,6 +128,26 @@ describe("RoutedPiAdapter", () => {
       expect.objectContaining({
         threadId,
         provider: "pi",
+        adapterKey: "pi:railway-sandbox",
+        runtimePayload: { distributedPiRuntime: runtimeBinding },
+      }),
+    );
+  });
+
+  it("rehydrates a persisted remote binding through the existing restart seam", async () => {
+    const harness = makeHarness("railway-sandbox", runtimeBinding);
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await Effect.runPromise(adapter.startSession(startInput()));
+
+    expect(harness.provisioner.start).not.toHaveBeenCalled();
+    expect(harness.provisioner.restart).toHaveBeenCalledWith(runtimeBinding, {
+      lifecycleGeneration: "generation-1",
+      cwd: "/workspace",
+    });
+    expect(harness.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId,
         adapterKey: "pi:railway-sandbox",
         runtimePayload: { distributedPiRuntime: runtimeBinding },
       }),

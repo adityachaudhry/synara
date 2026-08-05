@@ -512,3 +512,25 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Cause 2 — disconnect cleanup captured the pre-registration value:** The route built `Effect.ensuring(registeredFence ? disconnect : void)` while `registeredFence` was still undefined. The conditional was evaluated eagerly, so a later socket close never removed the active broker entry. Correct reconnects were then rejected as duplicates.
 
 **Test-first correction:** Add a broker regression requiring the `registered` acknowledgement to be sent before `waitForConnection` can succeed, plus a route regression requiring the same fenced worker to reconnect after its socket closes. Both failed on the live behavior. The broker now owns the acknowledgement send and resolves readiness only after it succeeds; a failed send rolls back the active entry. The route's finalizer now suspends the fence lookup until cleanup time. Sixteen focused broker, route, and worker-session tests pass.
+
+### End-to-end browser result
+
+**Revision deployed:** `1beb4cf5`
+
+**Build retry:** The first exact-archive deployment compiled the web and server bundles, then Railway's build daemon ended with `Canceled: context canceled` while the deployment remained stuck at `BUILDING`. No source was changed. A byte-identical `git archive HEAD` retry completed and became deployment `2e4784a0-34c3-4669-aae8-d82558655398`.
+
+**Result:** The normal browser UI created sandbox `40992fb1-17e5-44e4-a27c-0bc0c9f80e6d`. The worker authenticated, received `session.start`, `session.has`, `session.list`, and `turn.send`, and completed each request successfully. The canonical provider events returned through the existing ingestion/projection channel. The browser transcript rendered the requested exact assistant response: `railway sandbox pi canary ok`.
+
+This is the first complete acceptance of the intended path: browser → Synara WebSocket/orchestration → additive routed Pi adapter → private Railway Sandbox worker → unchanged Pi adapter → durable provider/orchestration journals → existing browser transcript. No Electron path participated.
+
+## 2026-08-04 — Durable controller-state preparation
+
+### Same-PID lifecycle locks across Railway replacements
+
+**Why addressed before mounting storage:** The preview used ephemeral `/data` during protocol bring-up. A prior container replacement reused PID 4 and treated the previous container's lock as live. Attaching a volume without correcting that identity check would make ordinary redeploys unsafe.
+
+**Current Railway constraint used:** Railway exposes `RAILWAY_REPLICA_ID`, and its volume contract prevents more than one deployment from being active and mounted to the same service. That makes a different replica ID a safe stale-owner discriminator even when container PID namespaces reuse the same PID.
+
+**Test-first correction:** A regression writes a valid lock owned by the current PID but an older replica ID. It failed as `owner pid ... is live` before the change. Lock owner metadata now optionally carries a bounded `runtimeId`; on Railway it defaults to `RAILWAY_REPLICA_ID`. A different recorded/current replica ID enters the existing token-guarded stale-lock recovery, while the same PID and same replica ID still fails closed. Legacy owner files without the field retain the prior PID behavior. Nine focused lifecycle-lock tests pass.
+
+**Rehydration coverage:** Add a routed-Pi regression proving that a persisted `provider_session_runtime.runtime_payload_json.distributedPiRuntime` binding selects the existing provisioner `restart` seam instead of provisioning through the new-session seam. The replacement binding is persisted through the same directory abstraction. This reuses Synara's session/runtime primitives; it does not add a second recovery model.
