@@ -6,6 +6,7 @@ import {
 } from "@synara/contracts";
 import { Duration, Effect, Schema } from "effect";
 
+import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
 import { ProviderWorkerBrokerError, ProviderWorkerTransportError } from "./Errors";
 import type { ProviderWorkerFence } from "./fence";
 import type { ProviderWorkerBootstrapAuthorityShape } from "./Services/ProviderWorkerBootstrapAuthority";
@@ -129,7 +130,10 @@ export function runProviderWorkerConnection(input: {
           }),
         ),
         Effect.tapError(() =>
-          input.socket.close(1008, "Provider worker protocol rejected"),
+          input.socket.close(
+            PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE,
+            "Provider worker protocol rejected",
+          ),
         ),
       );
 
@@ -139,7 +143,10 @@ export function runProviderWorkerConnection(input: {
       Effect.flatMap(() => {
         if (registeredFence) return Effect.void;
         registrationTimedOut = true;
-        return input.socket.close(1008, "Provider worker registration timed out");
+        return input.socket.close(
+          PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE,
+          "Provider worker registration timed out",
+        );
       }),
       Effect.forkScoped,
     );

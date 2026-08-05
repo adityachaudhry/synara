@@ -91,7 +91,7 @@ describe("runProviderWorkerConnection", () => {
 
     expect(result.exit._tag).toBe("Failure");
     expect(result.fake.closeEvents).toEqual([
-      { code: 1008, reason: "Provider worker protocol rejected" },
+      { code: 4400, reason: "Provider worker protocol rejected" },
     ]);
   });
 
@@ -113,7 +113,7 @@ describe("runProviderWorkerConnection", () => {
 
     expect(result.exit._tag).toBe("Failure");
     expect(result.fake.sent).toEqual([]);
-    expect(result.fake.closeEvents[0]?.code).toBe(1008);
+    expect(result.fake.closeEvents[0]?.code).toBe(4400);
   });
 
   it("closes idle sockets that do not register before the deadline", async () => {
@@ -134,7 +134,7 @@ describe("runProviderWorkerConnection", () => {
 
     expect(result.exit._tag).toBe("Failure");
     expect(result.fake.closeEvents[0]).toEqual({
-      code: 1008,
+      code: 4400,
       reason: "Provider worker registration timed out",
     });
   });

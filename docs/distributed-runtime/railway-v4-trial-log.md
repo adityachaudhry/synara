@@ -490,3 +490,13 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Diagnostic correction:** Earlier `/proc` scans from `railway sandbox exec` did not show the worker even while the broker had an authenticated live socket. Railway exec workloads run through the sandbox's nested runtime, so that outer process namespace is not an authoritative worker liveness check. Retain broker registration and durable-session identity as the process authorities.
 
 **Next observation seam:** Launch the unchanged worker through a small shell wrapper that creates its existing home log directory and redirects stdout/stderr to `state/logs/worker.log`. Add request-ID/method-only logs before and after the existing dispatch function. No prompt, credential, provider response, or environment value is logged. This separates broker delivery from Pi adapter initialization without creating a second protocol.
+
+### Request-traced canary — invalid application close code
+
+**Revision deployed:** `5e3e66e8`
+
+**Observation:** A fresh browser-only Pi turn created sandbox `f23f26ee-5b15-4680-920f-057c7e5827f4`. The remote worker booted, constructed the Pi adapter, and opened its control socket. Before any request log appeared, Node's global WebSocket threw `InvalidAccessError: invalid code` from `WebSocket.close()` and the process exited. This was the first worker-side exception made visible by the retained log.
+
+**Cause:** The protocol used RFC status code `1008` when application code rejected a peer frame. The WHATWG `WebSocket.close()` client API only permits code `1000` or application codes in the `3000-4999` range; Node's Undici implementation enforces that restriction. The intended diagnostic close therefore raised a defect and masked the original protocol failure.
+
+**Test-first correction:** Change both control-plane rejection paths to private application close code `4400`, defined once in `closeCodes.ts`. Four existing failure-path assertions were changed first and failed against the old `1008` behavior; the corrected client rejection, server rejection, malformed-frame, and registration-timeout paths now pass with the API-safe code. Code `1000` remains the normal retirement close.

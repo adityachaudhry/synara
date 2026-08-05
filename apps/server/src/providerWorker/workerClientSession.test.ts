@@ -129,7 +129,7 @@ describe("ProviderWorkerClientSession", () => {
 
     expect(result._tag).toBe("Failure");
     expect(fake.closes).toEqual([
-      { code: 1008, reason: "Provider worker server frame rejected" },
+      { code: 4400, reason: "Provider worker server frame rejected" },
     ]);
   });
 });

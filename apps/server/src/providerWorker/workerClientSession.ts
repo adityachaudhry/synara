@@ -8,6 +8,7 @@ import {
 import { Effect, Schema } from "effect";
 
 import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter";
+import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
 import { ProviderWorkerTransportError } from "./Errors";
 import { sameProviderWorkerFence, type ProviderWorkerFence } from "./fence";
 import type { ProviderWorkerSocket } from "./providerWorkerConnection";
@@ -154,7 +155,12 @@ export function makeProviderWorkerClientSession<TError>(input: {
           }
         }),
       ),
-      Effect.tapError(() => input.socket.close(1008, "Provider worker server frame rejected")),
+      Effect.tapError(() =>
+        input.socket.close(
+          PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE,
+          "Provider worker server frame rejected",
+        ),
+      ),
     );
 
   const registration: ProviderWorkerRegister = {
