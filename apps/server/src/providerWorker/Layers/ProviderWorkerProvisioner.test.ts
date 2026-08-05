@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WorkspaceRuntime, type WorkspaceRuntimeBinding } from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
+import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import { makeProviderWorkerProvisioner } from "./ProviderWorkerProvisioner";
 
 const workspaceBinding: WorkspaceRuntimeBinding = {
@@ -121,6 +122,69 @@ describe("ProviderWorkerProvisioner", () => {
       "stop-process",
       "revoke",
       "destroy",
+    ]);
+  });
+
+  it("replaces the sandbox on restart so a stale worker cannot survive recovery", async () => {
+    const harness = makeHarness();
+    const replacementWorkspace = {
+      ...workspaceBinding,
+      runtimeId: "f02b6838-4614-4988-93b0-ab3253c589b7",
+      lifecycleGeneration: "generation-2",
+    } as const;
+    harness.workspace.connect.mockImplementation(() =>
+      Effect.sync(() => {
+        harness.calls.push("connect-old");
+        return workspaceBinding;
+      }),
+    );
+    harness.workspace.create.mockImplementation(() =>
+      Effect.sync(() => {
+        harness.calls.push("create-replacement");
+        return replacementWorkspace;
+      }),
+    );
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    const previous: ProviderWorkerRuntimeBinding = {
+      schemaVersion: 1,
+      runtimeKind: "railway-sandbox-pi",
+      workspace: workspaceBinding,
+      fence: {
+        sandboxId: workspaceBinding.runtimeId,
+        workerId: "b15c8b3e-50f7-474f-aef6-becf83ecae31",
+        lifecycleGeneration: "generation-1",
+      },
+      durableSessionName: "provider-worker-old",
+      processSupervision: "durable",
+      cwd: "/workspace/repo",
+      homeDir: "/workspace/.synara-provider-worker",
+    };
+
+    const binding = await Effect.runPromise(
+      provisioner.restart(previous, {
+        lifecycleGeneration: "generation-2",
+        cwd: "/workspace/repo",
+      }),
+    );
+
+    expect(binding.workspace).toEqual(replacementWorkspace);
+    expect(harness.calls).toEqual([
+      "retire",
+      "revoke",
+      "connect-old",
+      "stop-process",
+      "destroy",
+      "create-replacement",
+      "expect",
+      "write:/opt/synara/provider-worker.mjs",
+      "write:/opt/synara/provider-worker.json",
+      "start",
+      "connected",
     ]);
   });
 });

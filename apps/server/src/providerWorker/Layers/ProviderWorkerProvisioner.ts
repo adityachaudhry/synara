@@ -168,24 +168,40 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       );
 
     const restart: ProviderWorkerProvisionerShape["restart"] = (binding, input) =>
-      workspaceRuntime.connect(binding.workspace).pipe(
-        Effect.flatMap((workspace) =>
-          workspaceRuntime
-            .stopDurableProcess(workspace, binding.durableSessionName)
-            .pipe(Effect.catch(() => Effect.void))
-            .pipe(
-              Effect.andThen(authority.revoke(binding.fence)),
-              Effect.andThen(broker.retire(binding.fence, "worker generation replaced").pipe(Effect.catch(() => Effect.void))),
-              Effect.andThen(
-                provisionConnectedWorker({
-                  workspace: { ...workspace, lifecycleGeneration: input.lifecycleGeneration },
-                  lifecycleGeneration: input.lifecycleGeneration,
-                  cwd: input.cwd?.trim() || binding.cwd,
-                  homeDir: binding.homeDir,
-                }),
-              ),
-            ),
-        ),
+      Effect.gen(function* () {
+        yield* broker
+          .retire(binding.fence, "worker generation replaced")
+          .pipe(Effect.catch(() => Effect.void));
+        yield* authority.revoke(binding.fence);
+        const previousWorkspace = yield* workspaceRuntime.connect(binding.workspace).pipe(
+          Effect.catch(() =>
+            Effect.logWarning("provider worker workspace reconnect failed during replacement", {
+              sandboxId: binding.workspace.runtimeId,
+            }).pipe(Effect.as(binding.workspace)),
+          ),
+        );
+        yield* workspaceRuntime
+          .stopDurableProcess(previousWorkspace, binding.durableSessionName)
+          .pipe(Effect.catch(() => Effect.void));
+        // Destruction is the authoritative barrier. A durable-session handle can
+        // be stale after a control-plane restart, and must not leave an older
+        // worker reconnecting alongside the replacement generation.
+        yield* workspaceRuntime.destroy(previousWorkspace);
+        const replacementWorkspace = yield* workspaceRuntime.create({
+          lifecycleGeneration: input.lifecycleGeneration,
+          environment: { ...(options.environment ?? {}) },
+        });
+        return yield* provisionConnectedWorker({
+          workspace: replacementWorkspace,
+          lifecycleGeneration: input.lifecycleGeneration,
+          cwd: input.cwd?.trim() || binding.cwd,
+          homeDir: binding.homeDir,
+        }).pipe(
+          Effect.onError(() =>
+            workspaceRuntime.destroy(replacementWorkspace).pipe(Effect.catch(() => Effect.void)),
+          ),
+        );
+      }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
             ? cause
