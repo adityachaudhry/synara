@@ -142,6 +142,17 @@ const buildCmd = Command.make(
         })`bun tsdown`,
       );
 
+      yield* Effect.log("[cli] Building provider worker artifact...");
+      yield* runCommand(
+        ChildProcess.make({
+          cwd: serverDir,
+          stdout: config.verbose ? "inherit" : "ignore",
+          stderr: "inherit",
+          // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+          shell: process.platform === "win32",
+        })`bun tsdown --config tsdown.worker.config.ts`,
+      );
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 
@@ -153,7 +164,9 @@ const buildCmd = Command.make(
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
       }
     }),
-).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
+).pipe(
+  Command.withDescription("Build the server package, provider worker, and bundled web client."),
+);
 
 // ---------------------------------------------------------------------------
 // publish subcommand

@@ -127,8 +127,17 @@ describe("ProviderWorkerBroker", () => {
     await Effect.runPromise(broker.accept(frame));
     const event = await nextEvent;
     expect(Option.getOrUndefined(event)?.eventId).toBe("event-1");
+    expect(fake.sent.at(-1)).toMatchObject({
+      type: "heartbeat",
+      acknowledgedSequence: 1,
+    });
 
+    fake.sent.length = 0;
     await Effect.runPromise(broker.accept(frame));
+    expect(fake.sent.at(-1)).toMatchObject({
+      type: "heartbeat",
+      acknowledgedSequence: 1,
+    });
     const gap = await Effect.runPromise(
       broker.accept({
         ...frame,

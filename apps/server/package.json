@@ -18,6 +18,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "node scripts/cli.ts build",
+    "build:provider-worker": "tsdown --config tsdown.worker.config.ts",
     "start": "node dist/index.mjs",
     "prepare": "effect-language-service patch",
     "smoke:railway-sandbox": "bun run src/workspaceRuntime/smoke.ts",

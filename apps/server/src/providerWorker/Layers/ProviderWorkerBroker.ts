@@ -182,6 +182,15 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           );
     };
 
+    const acknowledgeSequence = (worker: ActiveWorker, sequence: number) =>
+      worker.connection.send({
+        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+        ...worker.fence,
+        type: "heartbeat",
+        sentAt: new Date().toISOString(),
+        acknowledgedSequence: sequence,
+      });
+
     const accept: ProviderWorkerBrokerShape["accept"] = (frame) =>
       frame.type === "register"
         ? Effect.fail(
@@ -216,7 +225,9 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                       ).pipe(Effect.asVoid);
                 }
                 case "event":
-                  if (frame.sequence <= worker.lastSequence) return Effect.void;
+                  if (frame.sequence <= worker.lastSequence) {
+                    return acknowledgeSequence(worker, worker.lastSequence);
+                  }
                   if (frame.sequence !== worker.lastSequence + 1) {
                     return Effect.fail(
                       registrationError(
@@ -234,7 +245,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                         if (reservation) reservation.lastSequence = frame.sequence;
                       }),
                     ),
-                    Effect.asVoid,
+                    Effect.andThen(acknowledgeSequence(worker, frame.sequence)),
                   );
               }
             }),

@@ -161,3 +161,31 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Verification:** Eight protocol codec tests, thirteen broker/auth/connection tests, and the browser/server production bundle pass. Wrong credentials, malformed frames, idle registration sockets, duplicate workers, stale generations, disconnects, timeouts, response mismatches, and event gaps are rejected.
 
 **Architectural consequence:** SQLite/Postgres and object storage are not worker message buses. The control plane remains the orchestration authority; the worker WebSocket is a replaceable transport under the existing provider adapter seam.
+
+## 2026-08-04 — Reusable Pi worker bundle
+
+**Revision:** working tree after `ad109e53`
+
+**Hypothesis:** Bundling the worker entry point with every runtime dependency inlined would produce one artifact that Synara can upload atomically to a stock Railway sandbox.
+
+### Attempt 1 — Treat `noExternal` as sufficient for one file
+
+**Why tried:** `noExternal: [/.*/]` asks the bundler to inline package dependencies, which appeared to cover the self-contained-worker requirement.
+
+**Observation:** The build succeeded but emitted 36 files totaling about 14.4 MB, including a 7.8 MB shared chunk and provider-specific chunks. A sandbox would need a directory-shaped upload whose partial failure could leave an unusable worker.
+
+**Cause:** Inlining dependencies and disabling code splitting are separate bundler decisions.
+
+### Attempt 2 — Use `inlineOnly: true`
+
+**Why tried:** The option name suggested a single inline output.
+
+**Observation:** The build failed before compilation. `tsdown` passed the boolean to its pattern matcher, which rejected it with `Expected pattern to be a non-empty string`.
+
+**Cause:** In this `tsdown` version, `inlineOnly` is a dependency-selection pattern rather than the output-topology switch.
+
+**Correction:** Keep `noExternal` for dependency inclusion and set Rolldown's `outputOptions.codeSplitting` to `false`.
+
+**Verification:** The corrected build emits one `workerMain.mjs` module, approximately 13 MB. Twenty-four worker protocol, broker, authentication, replay, dispatch, configuration, and client-session tests pass. The normal browser/server production build also passes.
+
+**Packaging correction:** The first successful single-file artifact landed in `apps/server/dist-worker`, outside the CLI package's declared `dist` payload. The worker build now writes `dist/provider-worker/workerMain.mjs`, and the normal server build produces it after the main server bundle. This makes the artifact available to the running browser server without adding a second deployment image.
