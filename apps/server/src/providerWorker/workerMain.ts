@@ -1,5 +1,6 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { existsSync, readFileSync } from "node:fs";
 import { Duration, Effect, FileSystem, Layer, Stream } from "effect";
 import { Socket } from "effect/unstable/socket";
 
@@ -9,11 +10,15 @@ import { PiAdapter } from "../provider/Services/PiAdapter";
 import { ProviderWorkerTransportError } from "./Errors";
 import type { ProviderWorkerSocket } from "./providerWorkerConnection";
 import { makeProviderWorkerClientSession } from "./workerClientSession";
-import { resolveProviderWorkerConfig } from "./workerConfig";
+import {
+  parseProviderWorkerConfigFile,
+  PROVIDER_WORKER_CONFIG_PATH,
+  resolveProviderWorkerConfig,
+} from "./workerConfig";
 import { makeProviderWorkerOutbox } from "./workerOutbox";
 
 function configFromEnvironment() {
-  return resolveProviderWorkerConfig({
+  const environmentConfig = {
     controlUrl: process.env.SYNARA_PROVIDER_WORKER_CONTROL_URL,
     bootstrapCredential: process.env.SYNARA_PROVIDER_WORKER_BOOTSTRAP_CREDENTIAL,
     sandboxId: process.env.SYNARA_PROVIDER_WORKER_SANDBOX_ID,
@@ -21,7 +26,14 @@ function configFromEnvironment() {
     lifecycleGeneration: process.env.SYNARA_PROVIDER_WORKER_LIFECYCLE_GENERATION,
     cwd: process.env.SYNARA_PROVIDER_WORKER_CWD,
     homeDir: process.env.SYNARA_PROVIDER_WORKER_HOME_DIR,
-  });
+  };
+  const configPath =
+    process.env.SYNARA_PROVIDER_WORKER_CONFIG_PATH?.trim() || PROVIDER_WORKER_CONFIG_PATH;
+  return resolveProviderWorkerConfig(
+    existsSync(configPath)
+      ? parseProviderWorkerConfigFile(readFileSync(configPath, "utf8"))
+      : environmentConfig,
+  );
 }
 
 function makeWorkerServerConfig(
@@ -81,17 +93,19 @@ const makeClientSocket = Effect.fn(function* (
   );
   const write = yield* socket.writer;
   return {
-    run: (handler) =>
-      socket.runRaw(handler).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderWorkerTransportError({
-              operation: "read",
-              detail: "Provider worker control socket closed.",
-              cause,
-            }),
+    run: (handler, onOpen) =>
+      socket
+        .runRaw(handler, { ...(onOpen === undefined ? {} : { onOpen }) })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderWorkerTransportError({
+                operation: "read",
+                detail: "Provider worker control socket closed.",
+                cause,
+              }),
+          ),
         ),
-      ),
     sendRaw: (frame) =>
       write(frame).pipe(
         Effect.mapError(
@@ -109,10 +123,12 @@ const makeClientSocket = Effect.fn(function* (
 
 const main = Effect.gen(function* () {
   const config = configFromEnvironment();
+  yield* Effect.logInfo("provider worker booting", config.safeDescription);
   const fileSystem = yield* FileSystem.FileSystem;
   yield* fileSystem.makeDirectory(config.homeDir, { recursive: true });
   yield* fileSystem.makeDirectory(config.cwd, { recursive: true });
   const adapter = yield* PiAdapter;
+  yield* Effect.logInfo("provider worker adapter ready", config.safeDescription);
   const fence = {
     sandboxId: config.sandboxId,
     workerId: config.workerId,
@@ -136,6 +152,7 @@ const main = Effect.gen(function* () {
     let retired = false;
     const result = yield* Effect.scoped(
       Effect.gen(function* () {
+        yield* Effect.logInfo("provider worker connecting", config.safeDescription);
         const socket = yield* makeClientSocket(config.controlUrl);
         const session = makeProviderWorkerClientSession({
           fence,

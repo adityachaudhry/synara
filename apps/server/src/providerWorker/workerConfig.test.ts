@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveProviderWorkerConfig } from "./workerConfig";
+import { parseProviderWorkerConfigFile, resolveProviderWorkerConfig } from "./workerConfig";
 
 const valid = {
   controlUrl: "http://synara.railway.internal:3773/internal/provider-worker",
@@ -34,5 +34,15 @@ describe("resolveProviderWorkerConfig", () => {
     const config = resolveProviderWorkerConfig(valid);
 
     expect(JSON.stringify(config.safeDescription)).not.toContain("bootstrap-secret");
+  });
+
+  it("loads the private JSON bootstrap file without weakening field validation", () => {
+    expect(parseProviderWorkerConfigFile(JSON.stringify(valid))).toMatchObject({
+      bootstrapCredential: "bootstrap-secret",
+      sandboxId: valid.sandboxId,
+    });
+    expect(() => parseProviderWorkerConfigFile('{"controlUrl":7}')).toThrow(
+      /configuration file/,
+    );
   });
 });

@@ -189,3 +189,39 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Verification:** The corrected build emits one `workerMain.mjs` module, approximately 13 MB. Twenty-four worker protocol, broker, authentication, replay, dispatch, configuration, and client-session tests pass. The normal browser/server production build also passes.
 
 **Packaging correction:** The first successful single-file artifact landed in `apps/server/dist-worker`, outside the CLI package's declared `dist` payload. The worker build now writes `dist/provider-worker/workerMain.mjs`, and the normal server build produces it after the main server bundle. This makes the artifact available to the running browser server without adding a second deployment image.
+
+## 2026-08-04 — Provisioning transaction and browser setting
+
+**Revision:** working tree after `2bca3355`
+
+**Implementation:** Add a `ProviderWorkerProvisioner` above the generic `WorkspaceRuntime`. It creates or reconnects one private Railway sandbox, reserves a fenced worker identity, issues an in-memory bootstrap credential, uploads the atomic worker, starts a named durable process, and waits for authenticated broker registration. Failure cleanup retires the reservation, stops the exact durable session, revokes the credential, and destroys the exact sandbox.
+
+**Storage decision:** Reuse `provider_session_runtime.runtime_payload_json` for the non-secret distributed binding: schema version, sandbox ID/status/region, worker ID, lifecycle generation, durable session name, cwd, and worker home. The bootstrap credential is deliberately absent. Existing orchestration tables remain the source of truth for projects, threads, turns, items, events, and resume cursors.
+
+**Course correction — bootstrap configuration:** The initial design assumed every worker identity field could be supplied as sandbox environment at create time. The sandbox ID does not exist until create returns, creating a dependency cycle. The provisioner now writes an exact, mode-`0600` JSON bootstrap file after creation and starts the worker directly by artifact path. Environment variables remain a local-development fallback. Provider API keys are copied only through an explicit allowlist; Synara and Railway control credentials are rejected from that forwarding list.
+
+**Browser UX:** Pi settings now expose `Local server` and `Railway Sandbox`. Local remains the decoded and UI default. Selecting distributed mode persists through the existing server-settings WebSocket method. A missing Railway configuration produces a direct startup error for that Pi session; it never silently falls back to local execution.
+
+## 2026-08-04 — Isolated browser server check
+
+**Experiment:** Start a browser-only development instance with an isolated Synara home, server port `58991`, web port `9924`, no inherited auth token, and no Electron process.
+
+**Observation:** The Synara server listened on `127.0.0.1:58991`, and `/health` returned HTTP 200. Vite repeated the earlier worktree-only dependency-scan warning for `@fontsource-variable/inter`; it still served its port, and the production browser/server build continued to pass.
+
+**Conclusion:** The distributed application-layer additions do not prevent browser-server startup. The font warning is a worktree development dependency-materialization issue already seen at baseline, not evidence of a distributed runtime defect. Production bundle verification remains the reliable browser gate until that unrelated install residue is repaired.
+
+## 2026-08-04 — Compiled worker process smoke
+
+**Hypothesis:** The single-file artifact can boot the real Pi adapter layer, register over WebSocket, accept retirement, and terminate without making a provider model call.
+
+### Attempts 1–3 — Registration timeout
+
+**Observation:** The worker process stayed alive but never reached the smoke server. The first harness version reported only a timeout, so it was corrected to race registration against child exit and retain bounded stdout/stderr. Safe lifecycle logs then proved the worker reached `booting`, `adapter ready`, and `connecting` but did not open the socket.
+
+**Cause:** The Effect WebSocket writer waits on an open latch. `workerClientSession` sent registration first and sequenced `socket.run` second, while `socket.run` is what acquires the WebSocket and opens that latch. The two operations deadlocked before any network connection.
+
+**Correction:** Extend the internal socket facade with an `onOpen` effect and send the registration from that hook while the read loop is running. Server-side accepted sockets keep the same behavior.
+
+**Verification:** The guarded artifact smoke rebuilt `dist/provider-worker/workerMain.mjs`, launched it as a separate process with a private temporary config, verified the full fenced registration without printing its credential, sent `retire`, and observed exit code 0. Safe result: `{registered:true, retired:true, exitCode:0, protocolVersion:1}`.
+
+**Architectural consequence:** Connection establishment and registration are now one ordered operation. A sandbox worker cannot wait forever on its own pre-open write, and the same smoke can be run without Railway or a model API call before live sandbox trials.

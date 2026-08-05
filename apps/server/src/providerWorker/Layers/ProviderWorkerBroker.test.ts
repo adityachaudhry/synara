@@ -212,6 +212,25 @@ describe("ProviderWorkerBroker", () => {
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("request.timeout");
   });
+
+  it("retires the exact worker fence and removes its reconnect reservation", async () => {
+    const broker = await Effect.runPromise(makeProviderWorkerBroker());
+    const fake = makeConnection();
+    await Effect.runPromise(broker.expectWorker(fence));
+    await Effect.runPromise(broker.register(fence, fake.connection));
+
+    await Effect.runPromise(broker.retire(fence, "session stopped"));
+
+    expect(fake.sent.at(-1)).toMatchObject({
+      ...fence,
+      type: "retire",
+      reason: "session stopped",
+    });
+    expect(fake.closeCount).toBe(1);
+    await expect(Effect.runPromise(broker.waitForConnection(fence))).rejects.toMatchObject({
+      operation: "waitForConnection",
+    });
+  });
 });
 
 async function viWaitFor(predicate: () => boolean): Promise<void> {

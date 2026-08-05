@@ -38,6 +38,10 @@ export interface ProviderWorkerBrokerShape {
     frame: ProviderWorkerClientFrame,
   ) => Effect.Effect<void, ProviderWorkerBrokerError>;
   readonly disconnect: (fence: ProviderWorkerFence) => Effect.Effect<void>;
+  readonly retire: (
+    fence: ProviderWorkerFence,
+    reason?: string,
+  ) => Effect.Effect<void, ProviderWorkerBrokerError>;
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
 }
 

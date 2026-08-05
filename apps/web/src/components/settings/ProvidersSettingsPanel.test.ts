@@ -27,6 +27,7 @@ describe("isProviderInstallSettingsDirty", () => {
       { openCodeExperimentalWebSockets: true },
       { piBinaryPath: "/opt/pi" },
       { piAgentDir: "/tmp/pi-agent" },
+      { piExecutionTarget: "railway-sandbox" },
     ] satisfies ReadonlyArray<Partial<AppSettings>>;
 
     expect(isProviderInstallSettingsDirty(defaults, defaults)).toBe(false);
@@ -78,6 +79,7 @@ describe("createProviderInstallResetPatch", () => {
         "openCodeServerUrl",
         "piAgentDir",
         "piBinaryPath",
+        "piExecutionTarget",
       ].sort(),
     );
     expect(patch.kiloServerPassword).toBe("");

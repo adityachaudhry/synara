@@ -275,6 +275,23 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
         );
       });
 
+    const retire: ProviderWorkerBrokerShape["retire"] = (fence, reason) =>
+      Effect.gen(function* () {
+        const key = providerWorkerFenceKey(fence);
+        const worker = active.get(key);
+        if (worker && sameProviderWorkerFence(worker.fence, fence)) {
+          yield* worker.connection.send({
+            protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+            ...fence,
+            type: "retire",
+            ...(reason === undefined ? {} : { reason }),
+          });
+          yield* worker.connection.close();
+          yield* disconnect(fence);
+        }
+        expected.delete(key);
+      });
+
     return {
       expectWorker,
       register,
@@ -282,6 +299,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
       request,
       accept,
       disconnect,
+      retire,
       streamEvents: Stream.fromQueue(events).pipe(Stream.map((frame) => frame.event)),
     } satisfies ProviderWorkerBrokerShape;
   });

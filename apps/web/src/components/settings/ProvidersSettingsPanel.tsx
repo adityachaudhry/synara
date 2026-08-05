@@ -62,10 +62,16 @@ import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { Switch } from "../ui/switch";
+import { Select, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { DebouncedSettingTextInput } from "./DebouncedSettingTextInput";
 import { SettingResetButton, useSettingsRestoreSignal } from "./SettingControls";
-import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import {
+  SettingsListRow,
+  SettingsRow,
+  SettingsSection,
+  SettingsSelectPopup,
+} from "./SettingsPanelPrimitives";
 
 type ProviderInstallTextKey =
   | "claudeBinaryPath"
@@ -87,6 +93,7 @@ type ProviderInstallPasswordConfiguredKey =
   | "kiloServerPasswordConfigured"
   | "openCodeServerPasswordConfigured";
 type ProviderInstallBooleanKey = "openCodeExperimentalWebSockets";
+type ProviderInstallExecutionTargetKey = "piExecutionTarget";
 
 type ProviderInstallTextField = {
   readonly kind: "text";
@@ -109,10 +116,17 @@ type ProviderInstallBooleanField = {
   readonly label: string;
   readonly description: ReactNode;
 };
+type ProviderInstallExecutionTargetField = {
+  readonly kind: "execution-target";
+  readonly settingsKey: ProviderInstallExecutionTargetKey;
+  readonly label: string;
+  readonly description: ReactNode;
+};
 type ProviderInstallField =
   | ProviderInstallTextField
   | ProviderInstallPasswordField
-  | ProviderInstallBooleanField;
+  | ProviderInstallBooleanField
+  | ProviderInstallExecutionTargetField;
 type ProviderInstallSettings = {
   readonly provider: ProviderKind;
   readonly docs: ReadonlyArray<{ readonly label: string; readonly href: string }>;
@@ -134,6 +148,13 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
       { label: "Config", href: "https://github.com/openai/codex/blob/main/docs/config.md" },
     ],
     fields: [
+      {
+        kind: "execution-target",
+        settingsKey: "piExecutionTarget",
+        label: "Execution target",
+        description:
+          "Local runs Pi in this Synara server. Railway Sandbox starts an isolated workspace worker and keeps browser orchestration in Synara.",
+      },
       {
         kind: "text",
         settingsKey: "codexBinaryPath",
@@ -413,6 +434,8 @@ function createProviderInstallDisclosureState(
       config.fields.some((field) =>
         field.kind === "password"
           ? settings[field.configuredKey]
+          : field.kind === "execution-target"
+            ? settings[field.settingsKey] === "railway-sandbox"
           : Boolean(settings[field.settingsKey]),
       ),
     ]),
@@ -580,6 +603,43 @@ function ProviderInstallFieldControl(props: {
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
   const id = `provider-install-${props.field.settingsKey}`;
+  if (props.field.kind === "execution-target") {
+    const value = props.settings[props.field.settingsKey];
+    return (
+      <div className="rounded-md border border-border/70 bg-background/60 px-3 py-2">
+        <div className="flex items-center justify-between gap-3">
+          <label htmlFor={id} className="text-xs font-medium text-foreground">
+            {props.field.label}
+          </label>
+          <Select
+            value={value}
+            onValueChange={(nextValue) => {
+              if (nextValue === "local" || nextValue === "railway-sandbox") {
+                props.updateSettings({ piExecutionTarget: nextValue });
+              }
+            }}
+          >
+            <SelectTrigger id={id} size="sm" className="w-44" aria-label="Pi execution target">
+              <SelectValue>
+                {value === "railway-sandbox" ? "Railway Sandbox" : "Local server"}
+              </SelectValue>
+            </SelectTrigger>
+            <SettingsSelectPopup align="end">
+              <SelectItem hideIndicator value="local">
+                Local server
+              </SelectItem>
+              <SelectItem hideIndicator value="railway-sandbox">
+                Railway Sandbox
+              </SelectItem>
+            </SettingsSelectPopup>
+          </Select>
+        </div>
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {props.field.description}
+        </span>
+      </div>
+    );
+  }
   if (props.field.kind === "boolean") {
     return (
       <label

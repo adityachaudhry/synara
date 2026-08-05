@@ -12,6 +12,37 @@ export interface ProviderWorkerConfigInput {
   readonly homeDir?: string;
 }
 
+export const PROVIDER_WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
+
+export function parseProviderWorkerConfigFile(raw: string): ProviderWorkerConfigInput {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (cause) {
+    throw new Error("Provider worker configuration file is not valid JSON.", { cause });
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Provider worker configuration file must contain an object.");
+  }
+  const result: Record<string, string | undefined> = {};
+  for (const key of [
+    "controlUrl",
+    "bootstrapCredential",
+    "sandboxId",
+    "workerId",
+    "lifecycleGeneration",
+    "cwd",
+    "homeDir",
+  ] as const) {
+    const field = (value as Record<string, unknown>)[key];
+    if (field !== undefined && typeof field !== "string") {
+      throw new Error(`Provider worker configuration file field '${key}' must be a string.`);
+    }
+    result[key] = field;
+  }
+  return result;
+}
+
 function required(input: ProviderWorkerConfigInput, key: keyof ProviderWorkerConfigInput): string {
   const value = input[key]?.trim();
   if (!value) throw new Error(`Provider worker configuration requires ${key}.`);

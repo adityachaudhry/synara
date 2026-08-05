@@ -57,7 +57,10 @@ function makeSocket(frames: ReadonlyArray<string>) {
   const sent: unknown[] = [];
   const closes: unknown[] = [];
   const socket: ProviderWorkerSocket = {
-    run: (handler) => Effect.forEach(frames, handler, { discard: true }),
+    run: (handler, onOpen) =>
+      (onOpen ?? Effect.void).pipe(
+        Effect.andThen(Effect.forEach(frames, handler, { discard: true })),
+      ),
     sendRaw: (raw) => Effect.sync(() => sent.push(JSON.parse(raw))),
     close: (code, reason) => Effect.sync(() => closes.push({ code, reason })),
   };

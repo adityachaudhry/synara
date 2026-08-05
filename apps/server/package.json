@@ -22,6 +22,7 @@
     "start": "node dist/index.mjs",
     "prepare": "effect-language-service patch",
     "smoke:railway-sandbox": "bun run src/workspaceRuntime/smoke.ts",
+    "smoke:provider-worker-artifact": "bun run src/providerWorker/artifactSmoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },

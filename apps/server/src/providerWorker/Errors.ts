@@ -18,3 +18,12 @@ export class ProviderWorkerTransportError extends Data.TaggedError("ProviderWork
   readonly detail: string;
   readonly cause?: unknown;
 }> {}
+
+export class ProviderWorkerProvisioningError extends Data.TaggedError(
+  "ProviderWorkerProvisioningError",
+)<{
+  readonly operation: string;
+  readonly detail: string;
+  readonly sandboxId?: string;
+  readonly cause?: unknown;
+}> {}

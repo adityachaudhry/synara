@@ -21,7 +21,10 @@ export const makeProviderWorkerSocket = Effect.fn(function* (
 ): Effect.fn.Return<ProviderWorkerSocket, never, never> {
   const write = yield* socket.writer;
   return {
-    run: (handler) => socket.runRaw(handler).pipe(Effect.mapError(toTransportError("read"))),
+    run: (handler, onOpen) =>
+      socket
+        .runRaw(handler, { ...(onOpen === undefined ? {} : { onOpen }) })
+        .pipe(Effect.mapError(toTransportError("read"))),
     sendRaw: (frame) => write(frame).pipe(Effect.mapError(toTransportError("write"))),
     close: (code, reason) => write(new Socket.CloseEvent(code, reason)).pipe(Effect.ignore),
   };

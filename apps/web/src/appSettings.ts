@@ -201,6 +201,9 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  piExecutionTarget: Schema.Literals(["local", "railway-sandbox"]).pipe(
+    withDefaults(() => "local" as const),
+  ),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
@@ -578,6 +581,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
     piBinaryPath: settings.providers.pi.binaryPath,
+    piExecutionTarget: settings.providers.pi.executionTarget,
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
@@ -745,11 +749,15 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (
     hasOwn(patch, "piAgentDir") ||
     hasOwn(patch, "piBinaryPath") ||
+    hasOwn(patch, "piExecutionTarget") ||
     hasOwn(patch, "customPiModels")
   ) {
     providers.pi = {
       ...(hasOwn(patch, "piAgentDir") ? { agentDir: patch.piAgentDir ?? "" } : {}),
       ...(hasOwn(patch, "piBinaryPath") ? { binaryPath: patch.piBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "piExecutionTarget")
+        ? { executionTarget: patch.piExecutionTarget ?? "local" }
+        : {}),
       ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
     };
   }
@@ -790,6 +798,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "openCodeServerUrl",
     "piAgentDir",
     "piBinaryPath",
+    "piExecutionTarget",
     "textGenerationModel",
     "textGenerationProvider",
   ] as const) {

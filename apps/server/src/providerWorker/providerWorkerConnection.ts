@@ -17,6 +17,7 @@ import type {
 export interface ProviderWorkerSocket {
   readonly run: (
     handler: (frame: string | Uint8Array) => Effect.Effect<void, ProviderWorkerTransportError>,
+    onOpen?: Effect.Effect<void, ProviderWorkerTransportError>,
   ) => Effect.Effect<void, ProviderWorkerTransportError>;
   readonly sendRaw: (frame: string) => Effect.Effect<void, ProviderWorkerTransportError>;
   readonly close: (code: number, reason: string) => Effect.Effect<void>;

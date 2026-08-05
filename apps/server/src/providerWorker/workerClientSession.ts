@@ -147,8 +147,7 @@ export function makeProviderWorkerClientSession<TError>(input: {
 
   return {
     publishEvent,
-    run: send(registration).pipe(
-      Effect.andThen(input.socket.run(handleFrame)),
+    run: input.socket.run(handleFrame, send(registration)).pipe(
       Effect.mapError((cause) =>
         cause instanceof ProviderWorkerTransportError
           ? cause
