@@ -3,11 +3,24 @@ import { describe, expect, it } from "vitest";
 import { type AppSettings, AppSettingsSchema } from "~/appSettings";
 
 import {
+  createProviderInstallDisclosureState,
   createProviderInstallResetPatch,
   isProviderInstallSettingsDirty,
 } from "./ProvidersSettingsPanel";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
+
+describe("createProviderInstallDisclosureState", () => {
+  it("opens Pi rather than Codex when Railway Sandbox execution is configured", () => {
+    const disclosureState = createProviderInstallDisclosureState({
+      ...defaults,
+      piExecutionTarget: "railway-sandbox",
+    });
+
+    expect(disclosureState.pi).toBe(true);
+    expect(disclosureState.codex).toBe(false);
+  });
+});
 
 describe("isProviderInstallSettingsDirty", () => {
   it("covers every provider install text and boolean field", () => {

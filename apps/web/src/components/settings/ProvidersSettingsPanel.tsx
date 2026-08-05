@@ -149,13 +149,6 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
     ],
     fields: [
       {
-        kind: "execution-target",
-        settingsKey: "piExecutionTarget",
-        label: "Execution target",
-        description:
-          "Local runs Pi in this Synara server. Railway Sandbox starts an isolated workspace worker and keeps browser orchestration in Synara.",
-      },
-      {
         kind: "text",
         settingsKey: "codexBinaryPath",
         label: "Codex binary path",
@@ -377,6 +370,13 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
     ],
     fields: [
       {
+        kind: "execution-target",
+        settingsKey: "piExecutionTarget",
+        label: "Execution target",
+        description:
+          "Local runs Pi in this Synara server. Railway Sandbox starts an isolated workspace worker and keeps browser orchestration in Synara.",
+      },
+      {
         kind: "text",
         settingsKey: "piBinaryPath",
         label: "Pi binary path",
@@ -425,7 +425,7 @@ export function isProviderInstallSettingsDirty(
   );
 }
 
-function createProviderInstallDisclosureState(
+export function createProviderInstallDisclosureState(
   settings: AppSettings,
 ): Record<ProviderKind, boolean> {
   return Object.fromEntries(

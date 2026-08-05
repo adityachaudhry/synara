@@ -253,3 +253,45 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Cause:** The feature worktree is intentionally located at `.worktrees/distributed-runtime-railway` under the primary checkout, and the primary checkout ignores `/.worktrees/`. `railway up` discovered the outer repository context and uploaded the primary checkout rather than the nested worktree contents. The deployment message named the intended revision, but the source archive did not represent it.
 
 **Correction:** Materialize `git archive HEAD` into a fresh temporary directory, verify the archived `apps/web/package.json` contains Inter, and pass that exact directory to `railway up --path-as-root`. This preserves worktree isolation while making the deployment source deterministic. Do not copy or merge the feature changes into the user's primary checkout just to satisfy the deploy CLI.
+
+## 2026-08-04 — Additive Railway preview deployment, attempt 3
+
+**Revision:** `561206c0`
+
+**Experiment:** Deploy an exact `git archive HEAD` snapshot from a fresh temporary directory with `railway up --path-as-root`, then delete the materialized archive after upload.
+
+**Observation:** Deployment `5c7fb10d-0371-40a1-a72f-343b3678ade0` succeeded. Railway's clean build installed the declared Inter dependency, built the browser, server, and atomic provider-worker artifact, and started the preview in browser-only mode. Both `/health` and `/` returned HTTP 200. Startup logs confirmed the browser server on Railway's injected port, the existing WebSocket proxy on the adjacent internal port, auth enforcement, and a preview-owned SQLite database under `/data/userdata/state.sqlite`.
+
+**Conclusion:** The deterministic archive is the correct deployment boundary for a nested, ignored worktree. The distributed adapter does not require an Electron package or a second server image: the browser server contains the UI, orchestration control plane, and reusable worker artifact, while Railway Sandboxes supply only the per-provider execution plane.
+
+**Remaining operational boundary:** The preview's SQLite file is ephemeral because this additive trial service has no volume. That is sufficient to validate routing and sandbox lifecycle, but a durable deployment must attach a volume or move orchestration persistence to a network database. Object storage remains appropriate for large immutable artifacts, not for coordinating turns or worker commands.
+
+## 2026-08-04 — Browser pairing trial
+
+**Experiment:** Open the Railway HTTPS domain in the in-app browser, observe the unauthenticated application shell, and use the startup pairing link to establish an owner cookie before exercising settings and a Pi turn.
+
+**Observation:** The browser bundle rendered correctly, but its WebSocket reconnects were rejected before pairing as designed. The startup pairing link from the successful deployment had expired by the time browser verification began, and the UI rendered the explicit pairing-failed screen without exposing the credential.
+
+**Correction:** Restart only `synara-distributed-preview` to mint a fresh one-time startup link. Transfer that link to the test browser through a mode-`0600` temporary file, unlink it before navigation completes, and never print the credential. The in-app browser clipboard is isolated from the macOS clipboard, so `pbcopy`/`pbpaste` cannot bridge the secret into the controlled tab.
+
+**Polling mistake:** A later zsh poll accidentally reused the reserved read-only parameter name `status`, independently reproducing the earlier local-only failure. Use a task-specific name such as `deploy_state` in every script, including one-off verification commands.
+
+### Attempt 2 — Reuse `/pair` with a new fragment
+
+**Why tried:** The failed pairing page was already open, and the replacement credential is carried only in the URL fragment.
+
+**Observation:** Navigating from `/pair` to `/pair#token=...` changed the fragment but did not reliably remount the browser bootstrap module. The old failure DOM remained. A later forced reload reached the bootstrap path only after the short-lived credential was no longer usable.
+
+**Correction:** Treat authentication setup and UI acceptance as separate deterministic steps. Exchange a fresh startup credential once through `POST /api/auth/bootstrap`, collect the scoped browser-session cookie without printing either value, delete the credential handoff, and install the resulting secure HttpOnly cookie into the same-origin test tab through the browser developer protocol. The endpoint returned HTTP 200, the session cookie was installed, and the browser WebSocket opened with no console errors.
+
+**Security note:** The browser session is narrower than the server auth token and remains subject to Synara's existing session expiry and revocation behavior. Neither the one-time credential nor the session value is stored in source, the engineering journal, or command output. The temporary cookie jar was deleted before application navigation.
+
+## 2026-08-04 — Live settings acceptance caught a provider-row wiring defect
+
+**Observation:** The authenticated browser loaded the empty orchestration snapshot and settings application correctly. Expanding the Pi provider row showed only `Pi binary path` and `Pi agent directory`; the new execution target was absent. Source inspection proved the `piExecutionTarget` field descriptor had been inserted in the Codex provider's field array.
+
+**Cause:** Existing app-settings tests covered schema mapping, persistence, reset, and dirty-state behavior, but did not assert which provider disclosure owns the field. The shared control rendered correctly wherever its descriptor was placed, so build and non-rendering tests could not catch the wrong row.
+
+**Test-first correction:** Add a regression asserting that a persisted `railway-sandbox` target auto-opens Pi and leaves Codex closed. After exporting the existing disclosure-state derivation for direct testing, the new assertion failed with `pi: false`. Move the unchanged execution-target descriptor from Codex to Pi; the focused panel and app-settings suite then passed 66 tests.
+
+**Architectural consequence:** The execution placement remains a Pi provider setting, not a global or Codex setting. Browser acceptance is necessary for settings whose correctness depends on visual ownership even when the underlying persistence contract is already covered.
