@@ -160,6 +160,13 @@ export const ProviderWorkerRetire = Schema.Struct({
 });
 export type ProviderWorkerRetire = typeof ProviderWorkerRetire.Type;
 
+export const ProviderWorkerRegistered = Schema.Struct({
+  ...FenceFields,
+  type: Schema.Literal("registered"),
+  acknowledgedSequence: NonNegativeInt,
+});
+export type ProviderWorkerRegistered = typeof ProviderWorkerRegistered.Type;
+
 export const ProviderWorkerClientFrame = Schema.Union([
   ProviderWorkerRegister,
   ProviderWorkerResponse,
@@ -169,6 +176,7 @@ export const ProviderWorkerClientFrame = Schema.Union([
 export type ProviderWorkerClientFrame = typeof ProviderWorkerClientFrame.Type;
 
 export const ProviderWorkerServerFrame = Schema.Union([
+  ProviderWorkerRegistered,
   ProviderWorkerRequest,
   ProviderWorkerHeartbeat,
   ProviderWorkerRetire,

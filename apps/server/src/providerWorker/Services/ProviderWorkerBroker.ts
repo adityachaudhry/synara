@@ -7,12 +7,9 @@ import type {
 import { ServiceMap, type Effect, type Stream } from "effect";
 
 import type { ProviderWorkerBrokerError } from "../Errors";
+import type { ProviderWorkerFence } from "../fence";
 
-export interface ProviderWorkerFence {
-  readonly sandboxId: string;
-  readonly workerId: string;
-  readonly lifecycleGeneration: string;
-}
+export type { ProviderWorkerFence } from "../fence";
 
 export interface ProviderWorkerConnection {
   readonly send: (
@@ -28,7 +25,7 @@ export interface ProviderWorkerBrokerShape {
   readonly register: (
     fence: ProviderWorkerFence,
     connection: ProviderWorkerConnection,
-  ) => Effect.Effect<void, ProviderWorkerBrokerError>;
+  ) => Effect.Effect<number, ProviderWorkerBrokerError>;
   readonly waitForConnection: (
     fence: ProviderWorkerFence,
   ) => Effect.Effect<void, ProviderWorkerBrokerError>;

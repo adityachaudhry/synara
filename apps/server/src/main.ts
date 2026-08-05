@@ -324,7 +324,8 @@ const ServerConfigLive = (input: CliInput) =>
   );
 
 const LayerLive = (input: CliInput) => {
-  const { runtimeServicesLayer, providerLayer } = makeServerApplicationLayers();
+  const { providerWorkerInfrastructureLayer, runtimeServicesLayer, providerLayer } =
+    makeServerApplicationLayers();
   const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
     // The reaper coordinates orchestration state with live provider sessions,
     // so it belongs at the top level where both layers are available.
@@ -338,6 +339,7 @@ const LayerLive = (input: CliInput) => {
   );
 
   return Layer.empty.pipe(
+    Layer.provideMerge(providerWorkerInfrastructureLayer),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
     Layer.provideMerge(providerSessionReaperLayer),

@@ -53,6 +53,8 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { ProviderWorkerBootstrapAuthorityLive } from "./providerWorker/Layers/ProviderWorkerBootstrapAuthority";
+import { ProviderWorkerBrokerLive } from "./providerWorker/Layers/ProviderWorkerBroker";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -227,7 +229,12 @@ export function makeServerRuntimeServicesLayer(
  */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
+  const providerWorkerInfrastructureLayer = Layer.merge(
+    ProviderWorkerBootstrapAuthorityLive,
+    ProviderWorkerBrokerLive,
+  );
   return {
+    providerWorkerInfrastructureLayer,
     runtimeServicesLayer: makeServerRuntimeServicesLayer({
       agentGatewayCredentialsLayer,
     }),

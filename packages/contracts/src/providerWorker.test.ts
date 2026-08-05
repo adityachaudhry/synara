@@ -44,6 +44,16 @@ describe("provider worker protocol", () => {
     if (decoded.type === "request") expect(decoded.method).toBe("session.start");
   });
 
+  it("decodes registration acknowledgement with the replay fence", () => {
+    const decoded = Schema.decodeUnknownSync(ProviderWorkerServerFrame)({
+      ...fence,
+      type: "registered",
+      acknowledgedSequence: 4,
+    });
+
+    expect(decoded.type).toBe("registered");
+  });
+
   it("rejects unknown methods instead of forwarding arbitrary calls", () => {
     expect(() =>
       Schema.decodeUnknownSync(ProviderWorkerServerFrame)({

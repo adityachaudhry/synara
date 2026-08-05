@@ -145,3 +145,19 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Observation:** A focused `apps/server` production build completed and bundled the React web client into `dist/client`. The earlier unresolved Inter font error did not reproduce after dependency bootstrap completed.
 
 **Conclusion:** The browser-only product build is healthy at this stage. Electron remains outside distributed-runtime scope.
+
+## 2026-08-04 — Worker transport direction and connection fencing
+
+**Revision:** `6688759f` through working tree after `bb676de7`
+
+**Hypothesis:** The control plane should open a connection to a listening process inside each sandbox.
+
+**Why reconsidered:** Railway documents stable private DNS for deployed services. The Sandbox SDK and CLI document a sandbox's ability to join the environment private network and reach services, but do not expose a stable per-sandbox private service name for inbound control-plane traffic.
+
+**Correction:** Invert the connection. A private-network sandbox opens an outbound WebSocket to `synara.railway.internal`; the browser continues to connect only to Synara's public browser WebSocket. The worker route is a separate, uncompressed internal protocol and never creates a browser owner session.
+
+**Implementation:** Add a schema-only, versioned protocol carrying existing Pi adapter inputs and canonical `ProviderRuntimeEvent` values. Add a broker that reserves an exact sandbox/worker/generation tuple, correlates bounded requests, fails them on disconnect, rejects sequence gaps, deduplicates replay, and preserves the acknowledged sequence across reconnects. Add a per-runtime bootstrap authority that stores only SHA-256 credential digests and uses constant-time comparison. The credential can reconnect only the same fenced runtime until explicit revocation.
+
+**Verification:** Eight protocol codec tests, thirteen broker/auth/connection tests, and the browser/server production bundle pass. Wrong credentials, malformed frames, idle registration sockets, duplicate workers, stale generations, disconnects, timeouts, response mismatches, and event gaps are rejected.
+
+**Architectural consequence:** SQLite/Postgres and object storage are not worker message buses. The control plane remains the orchestration authority; the worker WebSocket is a replaceable transport under the existing provider adapter seam.

@@ -46,6 +46,9 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { providerWorkerRouteLayer } from "./providerWorker/httpRoute";
+import { ProviderWorkerBootstrapAuthority } from "./providerWorker/Services/ProviderWorkerBootstrapAuthority";
+import { ProviderWorkerBroker } from "./providerWorker/Services/ProviderWorkerBroker";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -70,6 +73,8 @@ export interface ServerShape {
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
     | ProviderService
+    | ProviderWorkerBootstrapAuthority
+    | ProviderWorkerBroker
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
@@ -165,6 +170,7 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    providerWorkerRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer

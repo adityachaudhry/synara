@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { Deferred, Duration, Effect, Layer, Option, Queue, Stream } from "effect";
 
 import { ProviderWorkerBrokerError } from "../Errors";
+import { providerWorkerFenceKey, sameProviderWorkerFence } from "../fence";
 import type {
   ProviderWorkerBrokerShape,
   ProviderWorkerConnection,
@@ -39,19 +40,8 @@ export interface ProviderWorkerBrokerOptions {
   readonly connectionTimeoutMs?: number;
 }
 
-const workerKey = (fence: ProviderWorkerFence) =>
-  `${fence.sandboxId}\u0000${fence.lifecycleGeneration}`;
-
 const registrationError = (operation: string, fence: ProviderWorkerFence, detail: string) =>
   new ProviderWorkerBrokerError({ operation, detail, sandboxId: fence.sandboxId });
-
-function sameWorker(left: ProviderWorkerFence, right: ProviderWorkerFence): boolean {
-  return (
-    left.sandboxId === right.sandboxId &&
-    left.workerId === right.workerId &&
-    left.lifecycleGeneration === right.lifecycleGeneration
-  );
-}
 
 export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) =>
   Effect.gen(function* () {
@@ -66,7 +56,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
 
     const expectWorker: ProviderWorkerBrokerShape["expectWorker"] = (fence) =>
       Effect.gen(function* () {
-        const key = workerKey(fence);
+        const key = providerWorkerFenceKey(fence);
         if (expected.has(key) || active.has(key)) {
           return yield* registrationError(
             "expectWorker",
@@ -83,9 +73,9 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
 
     const register: ProviderWorkerBrokerShape["register"] = (fence, connection) =>
       Effect.gen(function* () {
-        const key = workerKey(fence);
+        const key = providerWorkerFenceKey(fence);
         const reservation = expected.get(key);
-        if (!reservation || !sameWorker(reservation.fence, fence)) {
+        if (!reservation || !sameProviderWorkerFence(reservation.fence, fence)) {
           yield* connection.close();
           return yield* registrationError(
             "register",
@@ -108,14 +98,15 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           lastSeenAt: Date.now(),
         });
         yield* Deferred.succeed(reservation.ready, undefined);
+        return reservation.lastSequence;
       });
 
     const waitForConnection: ProviderWorkerBrokerShape["waitForConnection"] = (fence) =>
       Effect.gen(function* () {
-        const key = workerKey(fence);
+        const key = providerWorkerFenceKey(fence);
         if (active.has(key)) return;
         const reservation = expected.get(key);
-        if (!reservation || !sameWorker(reservation.fence, fence)) {
+        if (!reservation || !sameProviderWorkerFence(reservation.fence, fence)) {
           return yield* registrationError(
             "waitForConnection",
             fence,
@@ -136,9 +127,9 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
 
     const request: ProviderWorkerBrokerShape["request"] = (fence, method, params) =>
       Effect.gen(function* () {
-        const key = workerKey(fence);
+        const key = providerWorkerFenceKey(fence);
         const worker = active.get(key);
-        if (!worker || !sameWorker(worker.fence, fence)) {
+        if (!worker || !sameProviderWorkerFence(worker.fence, fence)) {
           return yield* registrationError(
             "request",
             fence,
@@ -178,9 +169,9 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
       });
 
     const requireActive = (frame: ProviderWorkerClientFrame) => {
-      const key = workerKey(frame);
+      const key = providerWorkerFenceKey(frame);
       const worker = active.get(key);
-      return worker && sameWorker(worker.fence, frame)
+      return worker && sameProviderWorkerFence(worker.fence, frame)
         ? Effect.succeed({ key, worker })
         : Effect.fail(
             registrationError(
@@ -251,9 +242,9 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
 
     const disconnect: ProviderWorkerBrokerShape["disconnect"] = (fence) =>
       Effect.gen(function* () {
-        const key = workerKey(fence);
+        const key = providerWorkerFenceKey(fence);
         const worker = active.get(key);
-        if (!worker || !sameWorker(worker.fence, fence)) return;
+        if (!worker || !sameProviderWorkerFence(worker.fence, fence)) return;
         active.delete(key);
         const failure = registrationError(
           "disconnect",
