@@ -188,6 +188,52 @@ describe("RailwaySandboxClient", () => {
     ]);
   });
 
+  it("uploads through a freshly connected sandbox instead of the create handle", async () => {
+    const createdSandbox = makeSdkSandbox({
+      files: {
+        write: async () => {
+          throw new Error("create handle file transport did not settle");
+        },
+      },
+    });
+    const writes: string[] = [];
+    const connectedSandbox = makeSdkSandbox({
+      files: {
+        write: async (path) => {
+          writes.push(path);
+        },
+      },
+    });
+    let connectCount = 0;
+    const sdk: RailwaySdkFacade = {
+      create: async () => createdSandbox,
+      connect: async () => {
+        connectCount += 1;
+        return connectedSandbox;
+      },
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+    await Effect.runPromise(
+      client.create({
+        networkIsolation: "PRIVATE",
+        idleTimeoutMinutes: 30,
+        environment: {},
+      }),
+    );
+
+    await Effect.runPromise(
+      client.writeFile("sandbox-1", {
+        path: "/opt/synara/provider-worker.mjs",
+        data: "worker",
+      }),
+    );
+
+    expect(connectCount).toBe(1);
+    expect(writes).toEqual(["/opt/synara/provider-worker.mjs"]);
+  });
+
   it("starts a direct durable command and detaches by session name", async () => {
     const calls: unknown[] = [];
     const sandbox = makeSdkSandbox({

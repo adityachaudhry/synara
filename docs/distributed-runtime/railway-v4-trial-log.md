@@ -470,3 +470,11 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Differential experiment:** The working in-container probe used `Sandbox.connect(id)` before `exec`; Synara reused the object returned by `Sandbox.create()`. Starting the exact uploaded worker through a freshly connected object assigned a durable session, booted the Pi adapter, and repeatedly reached the control-plane route. Those late registration attempts were correctly rejected because the canary's 30-second broker reservation had already been retired.
 
 **Test-first correction:** Require `startDurableProcess` to obtain a fresh connected sandbox handle even when the create handle is cached. A regression used a deliberately unusable create object and a healthy connected object; it failed on the old `create handle cannot establish exec` path and passes after the client reconnects before process start. The existing cached handle remains useful for file uploads and destruction, while the process-control seam starts from current Railway connection state. Nineteen focused lifecycle/provisioner/transport tests pass.
+
+### Follow-up — file materialization did not imply transfer completion
+
+**Observation:** The next clean canary still had no worker process. Both uploaded files existed with complete sizes and modes, and the fresh process connection code was present in the running bundle. Therefore the provisioner had not reached process start even though file materialization looked complete.
+
+**Cause:** The final file-transfer promise can remain unsettled on the cached create object after Railway has already materialized the file. The provisioner correctly awaited that promise, so it never advanced to the newly corrected process-start seam.
+
+**Test-first correction:** Apply the same fresh-connection rule to `writeFile`. A regression creates an unusable file transport on the create object and a working one on `Sandbox.connect(id)`; it fails on the old `writeFile` path and passes after reconnecting. File uploads and worker process start now each use a current SDK connection, while exact sandbox identity and cleanup remain unchanged.

@@ -237,7 +237,7 @@ export function makeRailwaySandboxClient(
     );
 
   const writeFile: RailwaySandboxClientShape["writeFile"] = (runtimeId, input) =>
-    load(runtimeId).pipe(
+    loadFresh(runtimeId).pipe(
       Effect.flatMap((sandbox) =>
         Effect.tryPromise({
           try: () =>
