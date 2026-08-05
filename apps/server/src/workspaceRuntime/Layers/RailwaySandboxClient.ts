@@ -25,6 +25,7 @@ import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 
 export interface RailwaySdkCreateInput {
   readonly token: string;
+  readonly authType: "bearer" | "project-token";
   readonly environmentId: string;
   readonly networkIsolation: "PRIVATE" | "ISOLATED";
   readonly idleTimeoutMinutes: number;
@@ -34,6 +35,7 @@ export interface RailwaySdkCreateInput {
 
 export interface RailwaySdkConnectionInput {
   readonly token: string;
+  readonly authType: "bearer" | "project-token";
   readonly environmentId: string;
 }
 
@@ -136,6 +138,7 @@ export function makeRailwaySandboxClient(
   const createProcessId = options.createProcessId ?? randomUUID;
   const connectionInput: RailwaySdkConnectionInput = {
     token: config.token,
+    authType: config.authType,
     environmentId: config.environmentId,
   };
 

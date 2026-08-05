@@ -94,6 +94,7 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
 const enabledConfig = {
   enabled: true as const,
   token: "not-observable-by-runtime",
+  authType: "bearer" as const,
   environmentId: "environment-1",
   region: "us-east4-eqdc4a",
   idleTimeoutMinutes: 30,

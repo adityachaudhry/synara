@@ -363,3 +363,33 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Course correction:** Treat durable process identity as a capability, not an assumption. `RailwaySandboxClient` now waits briefly for a real session name. When Railway supplies one, Synara detaches and can reattach as before. When it does not, Synara keeps the SDK exec handle attached under an opaque `attached:<id>` handle, supervises it in the control plane, and terminates that exact handle through the existing `WorkspaceRuntime` process seam. The persisted provider binding records `processSupervision` as `durable` or `attached`; older bindings remain decodable.
 
 **Current durability boundary:** Attached supervision enables the end-to-end v4 canary, but the process handle exists only in the current control-plane process. A Synara restart cannot reattach that worker. Restart-safe remote execution still requires Railway to expose durable sessions in this environment, a sandbox image-level process supervisor with a reconnectable control surface, or explicit workspace snapshot-and-rehydrate behavior. The fallback is additive and fails closed; it is not represented as durable when it is not.
+
+## 2026-08-04 — Railway credential and restart trials
+
+### Attempt 1 — Reuse the copied Railway CLI access token
+
+**Observation:** The next browser canary reached the normal distributed session-start path, but Railway rejected `sandboxCreate` as `Not Authorized`. No sandbox, worker, or provider model call was created.
+
+**Cause:** The preview variable contained the CLI OAuth access token copied earlier in the trial. Railway CLI transparently refreshes its local access token, but the copied service variable cannot refresh and had expired. A refreshed token proved the diagnosis, but copying it again would merely reset the same timer.
+
+### Attempt 2 — Create a project token through the public GraphQL API
+
+**Why tried:** Railway's current documentation identifies project tokens as the least-privilege credential scoped to one project environment. API schema introspection exposed `projectTokenCreate(ProjectTokenCreateInput)`.
+
+**Observation:** The authenticated CLI OAuth token could introspect the API but received `Not Authorized` for token creation. This is an intentional privilege boundary, not an application error.
+
+**Correction:** Use the already-authenticated Railway project settings UI to create `synara-distributed-preview-sandboxes`, scoped only to v4 `production`. Capture the one-time value directly into a mode-`0600` temporary file, install it into the preview's encrypted variables, and delete every temporary copy. A disposable SDK probe using `authType: "project-token"` created a private `us-west2` sandbox and destroyed it successfully.
+
+**Application correction:** Railway SDK treats an explicitly supplied token as bearer authentication unless `authType` is also supplied. Add `SYNARA_RAILWAY_SANDBOX_AUTH_TYPE=bearer|project-token`, defaulting to the legacy `bearer`, carry it only in server-side runtime configuration, and include the non-secret mode in redacted diagnostics. This preserves existing configurations while enabling the durable project-scoped credential.
+
+### Attempt 3 — Use `redeploy` to refresh a browser pairing link
+
+**Observation:** `railway redeploy` rebuilt the full image in this source-uploaded preview instead of behaving like a process restart. It eventually succeeded but spent several minutes repeating a clean build.
+
+**Correction:** Use `railway restart` when only a new process and startup pairing credential are required.
+
+### Attempt 4 — Restart the ephemeral SQLite preview
+
+**Observation:** The restart crashed repeatedly with `DatabaseLifecycleLockedError`: the replacement container saw `/data/userdata/state.sqlite.lifecycle-lock` naming owner PID 4, and its own server process also used PID 4. The liveness check therefore treated a lock written by the prior container as owned by the replacement process. The WebSocket proxy then reported connection-refused noise because the server never became ready.
+
+**Conclusion:** A rolling container restart and a same-host process restart are not equivalent for PID-only SQLite lifecycle locks. For this ephemeral canary, a fresh archived deployment is the safe recovery path. Before attaching a persistent volume for production, the lifecycle lock must include a container/boot identity or another cross-container ownership check; otherwise a normal Railway replacement can false-positive on PID reuse. This is independent of the distributed Pi adapter but directly affects the proposed durable control plane.

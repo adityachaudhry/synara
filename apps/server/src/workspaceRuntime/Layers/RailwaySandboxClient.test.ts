@@ -12,6 +12,7 @@ import {
 const config: Extract<RailwaySandboxRuntimeConfig, { readonly enabled: true }> = {
   enabled: true,
   token: "railway-token",
+  authType: "project-token",
   environmentId: "environment-1",
   region: "us-east4-eqdc4a",
   idleTimeoutMinutes: 30,
@@ -66,6 +67,7 @@ describe("RailwaySandboxClient", () => {
 
     expect(received).toEqual({
       token: "railway-token",
+      authType: "project-token",
       environmentId: "environment-1",
       networkIsolation: "PRIVATE",
       idleTimeoutMinutes: 30,

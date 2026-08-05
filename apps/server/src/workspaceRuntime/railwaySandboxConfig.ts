@@ -1,6 +1,7 @@
 export interface RailwaySandboxRuntimeConfigInput {
   readonly token?: string;
   readonly environmentId?: string;
+  readonly authType?: string;
   readonly region?: string;
   readonly idleTimeoutMinutes?: string;
 }
@@ -11,6 +12,7 @@ export type RailwaySandboxRuntimeConfig =
       readonly enabled: true;
       readonly token: string;
       readonly environmentId: string;
+      readonly authType: "bearer" | "project-token";
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
     };
@@ -20,6 +22,7 @@ export type RailwaySandboxRuntimeConfigDescription =
   | {
       readonly enabled: true;
       readonly environmentId: string;
+      readonly authType: "bearer" | "project-token";
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
     };
@@ -37,11 +40,13 @@ export function resolveRailwaySandboxRuntimeConfig(
 ): RailwaySandboxRuntimeConfig {
   const token = trimmed(input.token);
   const environmentId = trimmed(input.environmentId);
+  const authTypeInput = trimmed(input.authType);
   const region = trimmed(input.region);
   const idleTimeoutInput = trimmed(input.idleTimeoutMinutes);
   const hasAnyConfiguration =
     token !== undefined ||
     environmentId !== undefined ||
+    authTypeInput !== undefined ||
     region !== undefined ||
     idleTimeoutInput !== undefined;
 
@@ -55,6 +60,13 @@ export function resolveRailwaySandboxRuntimeConfig(
   ];
   if (missing.length > 0) {
     throw new Error(`Incomplete Railway Sandbox configuration; missing ${missing.join(", ")}.`);
+  }
+
+  const authType = authTypeInput ?? "bearer";
+  if (authType !== "bearer" && authType !== "project-token") {
+    throw new Error(
+      "SYNARA_RAILWAY_SANDBOX_AUTH_TYPE must be bearer or project-token.",
+    );
   }
 
   const idleTimeoutMinutes = idleTimeoutInput === undefined ? 30 : Number(idleTimeoutInput);
@@ -72,6 +84,7 @@ export function resolveRailwaySandboxRuntimeConfig(
     enabled: true,
     token,
     environmentId,
+    authType,
     ...(region === undefined ? {} : { region }),
     idleTimeoutMinutes,
   };
@@ -87,6 +100,7 @@ export function describeRailwaySandboxRuntimeConfig(
   return {
     enabled: true,
     environmentId: config.environmentId,
+    authType: config.authType,
     ...(config.region === undefined ? {} : { region: config.region }),
     idleTimeoutMinutes: config.idleTimeoutMinutes,
   };

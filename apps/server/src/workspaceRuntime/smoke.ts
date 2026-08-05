@@ -124,6 +124,7 @@ function configFromEnvironment() {
   return resolveRailwaySandboxRuntimeConfig({
     token: process.env.SYNARA_RAILWAY_SANDBOX_TOKEN,
     environmentId: process.env.SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID,
+    authType: process.env.SYNARA_RAILWAY_SANDBOX_AUTH_TYPE,
     region: process.env.SYNARA_RAILWAY_SANDBOX_REGION,
     idleTimeoutMinutes: process.env.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
   });

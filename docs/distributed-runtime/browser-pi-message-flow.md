@@ -47,7 +47,7 @@ Pi's `providers.pi.executionTarget` setting is changed in the browser through th
 - Missing setting decodes to `local`.
 - `local` selects the existing in-process Pi adapter.
 - `railway-sandbox` selects the additive `RoutedPiAdapter` path.
-- Railway credentials, environment ID, region, worker-control URL, and provider credential allowlist remain process environment values. They are not returned in the settings view or stored in a thread.
+- Railway credentials, authentication mode, environment ID, region, worker-control URL, and provider credential allowlist remain process environment values. They are not returned in the settings view or stored in a thread. The preview uses an environment-scoped Railway project token with `SYNARA_RAILWAY_SANDBOX_AUTH_TYPE=project-token`.
 - The setting is consulted when a Pi provider session starts. Once started, the thread's actual adapter key and runtime binding are persisted in `provider_session_runtime`.
 
 ## Send path, step by step
@@ -248,6 +248,6 @@ For a durable production topology:
 - The in-memory broker is single-control-plane; restart reconciliation is designed but not yet a horizontally replicated broker.
 - Railway v4 did not assign durable sessions to live execs in this trial. The attached-process fallback survives normal requests and explicit teardown, but not a Synara control-plane restart.
 - Remote model/skill/command/composer discovery currently delegates to local discovery; session lifecycle and turns are the remote canary scope.
-- A bounded Railway user-session token is being used for the trial and must be replaced by a durable least-privilege project token.
+- Railway project-token authentication is configured for the preview, but production secret rotation and revocation still need an operating procedure.
 
 These limitations are why the current result is an additive canary, not yet the permanent distributed production mode.

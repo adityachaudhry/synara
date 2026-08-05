@@ -36,6 +36,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
   const railway = resolveRailwaySandboxRuntimeConfig({
     token: environment.SYNARA_RAILWAY_SANDBOX_TOKEN,
     environmentId: environment.SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID,
+    authType: environment.SYNARA_RAILWAY_SANDBOX_AUTH_TYPE,
     region: environment.SYNARA_RAILWAY_SANDBOX_REGION,
     idleTimeoutMinutes: environment.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
   });

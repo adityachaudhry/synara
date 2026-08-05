@@ -14,17 +14,42 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
     expect(
       resolveRailwaySandboxRuntimeConfig({
         token: " secret ",
-        environmentId: " env-1 ",
-        region: " us-east4-eqdc4a ",
+      environmentId: " env-1 ",
+      authType: " bearer ",
+      region: " us-east4-eqdc4a ",
         idleTimeoutMinutes: "30",
       }),
     ).toEqual({
       enabled: true,
       token: "secret",
       environmentId: "env-1",
+      authType: "bearer",
       region: "us-east4-eqdc4a",
       idleTimeoutMinutes: 30,
     });
+  });
+
+  it("supports an environment-scoped Railway project token explicitly", () => {
+    expect(
+      resolveRailwaySandboxRuntimeConfig({
+        token: "project-secret",
+        environmentId: "env-1",
+        authType: "project-token",
+      }),
+    ).toMatchObject({
+      enabled: true,
+      authType: "project-token",
+    });
+  });
+
+  it("rejects unknown Railway token authentication modes", () => {
+    expect(() =>
+      resolveRailwaySandboxRuntimeConfig({
+        token: "secret",
+        environmentId: "env-1",
+        authType: "magic-token",
+      }),
+    ).toThrow(/AUTH_TYPE/);
   });
 
   it("fails closed for partial configuration", () => {
