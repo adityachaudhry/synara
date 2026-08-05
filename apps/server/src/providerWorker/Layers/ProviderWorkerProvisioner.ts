@@ -51,13 +51,25 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       };
       const credential = yield* authority.issue(fence);
       yield* broker.expectWorker(fence);
+      yield* Effect.logInfo("provider worker reserved", {
+        sandboxId: fence.sandboxId,
+        workerId: fence.workerId,
+        lifecycleGeneration: fence.lifecycleGeneration,
+      });
       let durableSessionName: string | undefined;
 
       const launch = Effect.gen(function* () {
+        yield* Effect.logInfo("provider worker artifact upload starting", {
+          sandboxId: fence.sandboxId,
+          bytes: options.artifact.byteLength,
+        });
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_ARTIFACT_PATH,
           data: options.artifact,
           mode: 0o500,
+        });
+        yield* Effect.logInfo("provider worker artifact upload completed", {
+          sandboxId: fence.sandboxId,
         });
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_CONFIG_PATH,
@@ -72,11 +84,22 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           }),
           mode: 0o600,
         });
+        yield* Effect.logInfo("provider worker config upload completed", {
+          sandboxId: fence.sandboxId,
+        });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
           command: `node ${WORKER_ARTIFACT_PATH}`,
         });
         durableSessionName = durable.sessionName;
+        yield* Effect.logInfo("provider worker process started", {
+          sandboxId: fence.sandboxId,
+          supervision: durable.supervision,
+        });
         yield* broker.waitForConnection(fence);
+        yield* Effect.logInfo("provider worker connected", {
+          sandboxId: fence.sandboxId,
+          workerId: fence.workerId,
+        });
         return {
           schemaVersion: 1,
           runtimeKind: "railway-sandbox-pi",

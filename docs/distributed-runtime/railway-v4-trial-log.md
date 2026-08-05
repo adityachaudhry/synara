@@ -478,3 +478,7 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Cause:** The final file-transfer promise can remain unsettled on the cached create object after Railway has already materialized the file. The provisioner correctly awaited that promise, so it never advanced to the newly corrected process-start seam.
 
 **Test-first correction:** Apply the same fresh-connection rule to `writeFile`. A regression creates an unusable file transport on the create object and a working one on `Sandbox.connect(id)`; it fails on the old `writeFile` path and passes after reconnecting. File uploads and worker process start now each use a current SDK connection, while exact sandbox identity and cleanup remain unchanged.
+
+**Live correction to the conclusion:** The next canary still stalled after both files appeared. Direct in-container experiments then proved that a fresh connected `files.write()` resolved for both a small marker and the complete 14,076,840-byte worker artifact (about 3.7 seconds for the large transfer). Fresh connections remain a useful stale-handle safeguard covered by regression tests, but an unsettled upload was not established as the live root cause.
+
+**Course correction:** Stop inferring the active phase from filesystem side effects. Add secret-free phase logs at worker reservation, artifact upload start/completion, config upload completion, process identity assignment, and broker connection. The next canary will use those events as the authority for where startup stops.
