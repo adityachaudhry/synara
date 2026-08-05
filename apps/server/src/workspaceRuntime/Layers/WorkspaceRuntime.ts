@@ -11,13 +11,15 @@ import {
 import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 
 function runtimeStatus(
-  status: "CREATING" | "RUNNING" | "STOPPED" | "DESTROYED" | "FAILED",
+  status: "CREATING" | "DESTROYING" | "RUNNING" | "STOPPED" | "DESTROYED" | "FAILED",
 ): WorkspaceRuntimeBinding["status"] {
   switch (status) {
     case "CREATING":
       return "creating";
     case "RUNNING":
       return "running";
+    case "DESTROYING":
+      return "destroying";
     case "STOPPED":
       return "stopped";
     case "DESTROYED":

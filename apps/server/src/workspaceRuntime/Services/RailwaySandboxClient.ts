@@ -7,6 +7,7 @@ import type {
 
 export type RailwaySandboxStatus =
   | "CREATING"
+  | "DESTROYING"
   | "RUNNING"
   | "STOPPED"
   | "DESTROYED"

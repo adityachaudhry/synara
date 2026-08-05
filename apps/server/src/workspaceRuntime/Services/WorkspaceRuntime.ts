@@ -6,7 +6,13 @@ export interface WorkspaceRuntimeBinding {
   readonly runtimeKind: "railway-sandbox";
   readonly runtimeId: string;
   readonly lifecycleGeneration: string;
-  readonly status: "creating" | "running" | "stopped" | "destroyed" | "failed";
+  readonly status:
+    | "creating"
+    | "running"
+    | "stopped"
+    | "destroying"
+    | "destroyed"
+    | "failed";
   readonly region: string;
 }
 
