@@ -241,3 +241,15 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Cause:** The source imports Inter, but `apps/web/package.json` and `bun.lock` declared only `@fontsource-variable/jetbrains-mono`. The local worktree contained residual Inter package material, so local builds passed while Railway's clean `bun install --frozen-lockfile` correctly exposed the undeclared dependency. This also explains the earlier Vite dev dependency-scan warning.
 
 **Correction:** Declare `@fontsource-variable/inter` in the web workspace and update the lockfile through the pinned Bun version. Do not externalize the font or weaken the clean Docker build.
+
+## 2026-08-04 — Additive Railway preview deployment, attempt 2
+
+**Revision intended:** `f5659e12`
+
+**Verification before retry:** A local production build from the feature worktree resolved Inter, emitted the Inter font assets, transformed 8,800 modules, and completed both web and server/worker bundles.
+
+**Observation:** Railway attempt 2 produced the same missing-Inter failure, the same pre-fix asset hashes, and the same installed-package count as attempt 1. The declared dependency was absent from the uploaded build context even though it was committed in the worktree.
+
+**Cause:** The feature worktree is intentionally located at `.worktrees/distributed-runtime-railway` under the primary checkout, and the primary checkout ignores `/.worktrees/`. `railway up` discovered the outer repository context and uploaded the primary checkout rather than the nested worktree contents. The deployment message named the intended revision, but the source archive did not represent it.
+
+**Correction:** Materialize `git archive HEAD` into a fresh temporary directory, verify the archived `apps/web/package.json` contains Inter, and pass that exact directory to `railway up --path-as-root`. This preserves worktree isolation while making the deployment source deterministic. Do not copy or merge the feature changes into the user's primary checkout just to satisfy the deploy CLI.
