@@ -124,7 +124,7 @@ With `executionTarget=railway-sandbox`, `ProviderWorkerProvisioner` performs a b
 6. Write a mode-`0600` worker config and mode-`0500` executable artifact.
 7. Forward only explicitly allowlisted provider API environment variables. Synara owner, database, and Railway administration credentials are rejected from the forwarding list.
 8. Start Node directly, without shell glue. Use a named durable session when Railway supplies one; otherwise keep the live exec attached to and supervised by the current Synara control-plane process.
-9. Wait for the worker to connect outward to the private `/internal/provider-worker` WebSocket and prove its full fence.
+9. Wait for the worker to connect outward over Railway's IPv6 private network to the private `/internal/provider-worker` WebSocket and prove its full fence. The browser-facing container proxy is dual-stack; Synara itself remains loopback-bound behind it.
 
 Any failure revokes the credential, retires the broker reservation, stops the exact process handle, and destroys the exact sandbox.
 

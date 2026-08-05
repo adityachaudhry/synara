@@ -393,3 +393,21 @@ Destroy was issued for the exact sandbox ID. The first inventory read returned t
 **Observation:** The restart crashed repeatedly with `DatabaseLifecycleLockedError`: the replacement container saw `/data/userdata/state.sqlite.lifecycle-lock` naming owner PID 4, and its own server process also used PID 4. The liveness check therefore treated a lock written by the prior container as owned by the replacement process. The WebSocket proxy then reported connection-refused noise because the server never became ready.
 
 **Conclusion:** A rolling container restart and a same-host process restart are not equivalent for PID-only SQLite lifecycle locks. For this ephemeral canary, a fresh archived deployment is the safe recovery path. Before attaching a persistent volume for production, the lifecycle lock must include a container/boot identity or another cross-container ownership check; otherwise a normal Railway replacement can false-positive on PID reuse. This is independent of the distributed Pi adapter but directly affects the proposed durable control plane.
+
+## 2026-08-04 — Live distributed Pi canary, private-network trial
+
+**Revision deployed:** `6c3b343a`
+
+**Progress:** Project-token authentication succeeded. The browser command created private sandbox `abf8b2c9-e999-453d-84fd-824ad93cf4e7`, uploaded the 14,076,840-byte worker artifact and private config, and started the real provider-worker process. This passed every boundary that had failed in the first three canaries.
+
+**Observation:** The browser remained in `Connecting`, and the worker process stayed alive without registering at the broker. An independent command inside the exact sandbox resolved `synara-distributed-preview.railway.internal` to Railway IPv6 and IPv4 addresses. IPv6 port 3773 returned `ECONNREFUSED`; the private IPv4 connection timed out. The public health endpoint remained healthy.
+
+**Cause:** Railway private networking routes services over IPv6. The Docker entrypoint exposed the public proxy as `socat TCP-LISTEN:3773,bind=0.0.0.0`, an IPv4-only listener. Public Railway ingress could reach it, but a private-network sandbox could not.
+
+**Test-first correction:** Add a container-entrypoint regression requiring a `TCP6-LISTEN` listener with `ipv6only=0`, retaining the IPv4 loopback target to Synara on port 3774. The old entrypoint failed the assertion. The corrected socat invocation starts successfully in the same Linux socat image used to validate its option set and accepts both address families.
+
+### Cleanup hang discovered while forcing the failed canary closed
+
+**Observation:** The broker's 30-second registration timeout fired, but failure cleanup did not reach the browser because `stopDurableProcess` waited indefinitely for the reattached SDK handle's final exit frame after `kill("TERM")` returned success. An isolated project-token probe also received a real durable session in about 4.3 seconds, accepted the terminate signal, and then reproduced the missing exit-frame hang.
+
+**Correction:** Treat a successful SDK `kill` as delivery of the process-group termination signal and keep sandbox destruction as the authoritative cleanup barrier. Do not wait unboundedly for a transport exit frame after signal acceptance. Apply the same rule to attached handles and direct sandbox destruction. A regression with a never-settling handle failed before the change and now completes immediately. The exact failed canary sandbox and the disposable diagnostic sandbox were explicitly destroyed.

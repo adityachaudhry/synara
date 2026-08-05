@@ -313,6 +313,34 @@ describe("RailwaySandboxClient", () => {
       { signal: "TERM" },
     ]);
   });
+
+  it("does not wait forever for a remote exit frame after signaling a process", async () => {
+    const pendingResult = new Promise<never>(() => undefined);
+    const handle = Object.assign(pendingResult, {
+      sessionName: Promise.resolve("durable-worker-1"),
+      detach: async () => "durable-worker-1",
+      kill: async () => true,
+    });
+    const sandbox = makeSdkSandbox({ exec: () => handle as never });
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    await expect(
+      Promise.race([
+        Effect.runPromise(
+          client.stopDurableProcess("sandbox-1", "durable-worker-1"),
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("stop remained unbounded")), 20),
+        ),
+      ]),
+    ).resolves.toBeUndefined();
+  });
 });
 
 function makeExecHandle(

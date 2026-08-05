@@ -212,7 +212,6 @@ export function makeRailwaySandboxClient(
             for (const [sessionName, process] of processes) {
               try {
                 await process.handle.kill("TERM");
-                await process.handle;
               } catch {
                 // Destroying the sandbox is the authoritative cleanup path.
               } finally {
@@ -313,7 +312,6 @@ export function makeRailwaySandboxClient(
               }
               const terminated = await attached.handle.kill("TERM");
               if (!terminated) throw new Error("Railway attached process was not running.");
-              await attached.handle;
               attachedProcesses.delete(sessionName);
               return;
             }
@@ -323,7 +321,6 @@ export function makeRailwaySandboxClient(
             );
             const terminated = await handle.kill("TERM");
             if (!terminated) throw new Error("Railway durable process was not running.");
-            await handle;
           },
           catch: (cause) => clientFailure(sdk, "stopDurableProcess", runtimeId, cause),
         }),

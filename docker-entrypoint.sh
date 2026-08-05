@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-socat TCP-LISTEN:3773,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:3774 &
+socat TCP6-LISTEN:3773,fork,reuseaddr,ipv6only=0 TCP:127.0.0.1:3774 &
 proxy_pid=$!
 
 node /app/apps/server/dist/index.mjs &
