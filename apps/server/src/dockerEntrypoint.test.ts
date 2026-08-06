@@ -24,6 +24,8 @@ describe("Railway Docker entrypoint", () => {
     expect(dockerfile).not.toContain("\nUSER node\n");
     expect(script).toContain('if [ "$(id -u)" -eq 0 ]; then');
     expect(script).toContain("install -d -m 0700 -o node -g node /data/userdata");
+    expect(script).toContain("/data/gitea-company-projects");
+    expect(script).toContain("/data/worktrees");
     expect(script).toContain('exec /usr/sbin/runuser -u node -- "$0" "$@"');
   });
 });

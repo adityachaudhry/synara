@@ -142,6 +142,53 @@ immediately re-executes the same entrypoint through `runuser -u node`. A disposa
 probe verified that `node` can create a directory inside the initialized path; the probe volume was
 then removed. The application and proxy still run unprivileged.
 
+### Browser shell healthy, WebSocket origin rejected
+
+**Observation:** Corrected deployment `0d5ed8fa-1047-4a8d-aee1-0426c6e9a482` returned HTTP 200 and
+ran all migrations, but the browser stayed at `Loading projects...`. Its WebSocket repeatedly failed
+before any snapshot reached the UI.
+
+**Cause:** The service had no `SYNARA_PUBLIC_URL`. The loopback server therefore had no trusted
+Railway HTTPS origin and correctly rejected the browser upgrade instead of accepting an unrelated
+Origin header.
+
+**Correction:** Configure the exact Railway HTTPS origin and a generated server auth token, using
+Synara's existing secure remote-access and owner-session primitives. Deployment
+`23975e51-a244-47ad-8e75-cad66cd3ba43` then hydrated the empty durable snapshot. Origin checks were
+not weakened. A zsh polling helper also failed because `status` is a reserved read-only parameter;
+the corrected helper uses `deploy_state`. One build-log command placed the deployment ID behind an
+unsupported `--deployment` flag; the CLI's documented positional deployment argument worked.
+
+### One-time browser pairing extraction
+
+**Observation:** Two fresh startup pairing attempts rendered Synara's explicit pairing-failed
+screen even though the credentials were consumed immediately.
+
+**Cause:** The first log parser matched non-whitespace and included the trailing single quote from
+the structured log field. A second diagnostic orchestration attempt used JavaScript's unavailable
+`URL` global in the tool isolate before making a request. Neither was a server authentication bug.
+
+**Correction:** Stop the token match at the structured log quote, slice the fragment without a URL
+parser, exchange it through Synara's existing `/api/auth/bootstrap` endpoint with the exact trusted
+Origin, and install the returned secure HttpOnly owner cookie in the same-origin browser profile.
+The authenticated browser WebSocket connected without warnings. No credential was printed or
+stored in the repository.
+
+### Company catalog and project-root mount
+
+**Observation:** After a three-second catalog fetch, the browser replaced `Folder` with `Company`,
+listed all 33 Gitea directories, selected Cue Cloud, and dispatched create. The command then failed
+with `Failed to create project directory: /data/gitea-company-projects/cue-cloud`.
+
+**Cause:** The first volume fix initialized only `/data/userdata`. The additive compatibility
+workspace root and Synara's `/data/worktrees` root were still absent beneath Railway's root-owned
+mount.
+
+**Correction:** A focused entrypoint test first failed on both missing roots. The entrypoint now
+creates `/data/worktrees` and `/data/gitea-company-projects` as `node:node` with mode `0750` before
+dropping privileges. The focused test passed, and a disposable Docker-volume probe verified that
+the unprivileged user can create the Cue Cloud child directory. The probe volume was removed.
+
 ## Focused verification completed before deployment
 
 - 59 contract tests passed.

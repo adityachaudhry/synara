@@ -19,6 +19,7 @@ flowchart LR
   DB[("Synara SQLite on /data volume\nauthoritative control-plane state")]
   F[("settings.json\nserver-authoritative settings")]
   SD[("Sandbox filesystem\ndisposable working state")]
+  G[("Private Gitea repository\ncompany source data")]
 
   B -->|"thread.create / thread.turn.start"| W
   W --> O
@@ -31,6 +32,7 @@ flowchart LR
   D <--> X
   X <--> S
   S <--> SD
+  G -->|"validated sparse checkout"| S
   L --> I
   X --> I
   I --> DB
@@ -47,8 +49,28 @@ Pi's `providers.pi.executionTarget` setting is changed in the browser through th
 - Missing setting decodes to `local`.
 - `local` selects the existing in-process Pi adapter.
 - `railway-sandbox` selects the additive `RoutedPiAdapter` path.
-- Railway credentials, authentication mode, environment ID, region, worker-control URL, and provider credential allowlist remain process environment values. They are not returned in the settings view or stored in a thread. The preview uses an environment-scoped Railway project token with `SYNARA_RAILWAY_SANDBOX_AUTH_TYPE=project-token`.
+- Railway credentials, authentication mode, environment ID, region, network isolation, worker-control URL, and provider credential allowlist remain process environment values. They are not returned in the settings view or stored in a thread. The v4 preview uses an environment-scoped Railway project token. The initial v3/dev Gitea canary uses a temporary CLI bearer only until a v3/dev project token can be created through Railway's security-gated settings UI.
 - The setting is consulted when a Pi provider session starts. Once started, the thread's actual adapter key and runtime binding are persisted in `provider_session_runtime`.
+
+## Before the first message: selecting a Gitea company project
+
+The browser calls `projects.listGiteaCompanies`. The server—not the browser—uses its Gitea read
+credential to enumerate the configured `companies/` directory and validate each `company.json`.
+The result contains only non-secret descriptors:
+
+- company ID, display name, and safe slug;
+- a compatibility controller workspace root such as `/data/gitea-company-projects/cue-cloud`;
+- an immutable repository binding: kind, credential-free HTTPS origin, owner, repository, ref, and
+  `companies/<slug>` path.
+
+Selecting a descriptor sends the binding through the existing `project.create` command. Server
+admission resolves the descriptor again and canonicalizes title, workspace root, and binding, so a
+browser cannot substitute a different repository, ref, or path. The binding is stored in the
+`project.created` event and in `projection_projects.repository_binding_json`. It is Project
+metadata—not a sandbox lease and not a checkout credential.
+
+The browser creates the project with Pi and the already-ensured
+`anthropic/claude-fable-5` model. Thread creation then follows the ordinary path below.
 
 ## Send path, step by step
 
@@ -117,14 +139,16 @@ No browser, orchestration, projection, approval, or transcript code is different
 With `executionTarget=railway-sandbox`, `ProviderWorkerProvisioner` performs a bounded provisioning transaction:
 
 1. Generate a new lifecycle generation and worker ID.
-2. Create or reconnect a private Railway Sandbox through `WorkspaceRuntime` / `RailwaySandboxRuntime`.
+2. Create or reconnect a Railway Sandbox through `WorkspaceRuntime` / `RailwaySandboxRuntime`, using the configured `PRIVATE` or `ISOLATED` network policy.
 3. Reserve the exact `(sandboxId, workerId, lifecycleGeneration)` fence in the broker.
 4. Issue a random bootstrap credential; keep only its SHA-256 digest in control-plane memory.
 5. Upload the already-built atomic `workerMain.mjs` artifact.
 6. Write a mode-`0600` worker config and mode-`0500` executable artifact.
-7. Forward only explicitly allowlisted provider API environment variables. Synara owner, database, and Railway administration credentials are rejected from the forwarding list.
-8. Start Node directly, without shell glue. Use a named durable session when Railway supplies one; otherwise keep the live exec attached to and supervised by the current Synara control-plane process.
-9. Wait for the worker to connect outward over Railway's IPv6 private network to the private `/internal/provider-worker` WebSocket and prove its full fence. The browser-facing container proxy is dual-stack; Synara itself remains loopback-bound behind it.
+7. For a Gitea-bound project, validate the binding again, install the Gitea token only in the sandbox environment, initialize a sparse Git checkout under `/workspace/repository`, fetch the configured ref, check out `FETCH_HEAD` detached, verify the selected `company.json`, and capture the immutable commit SHA. The checkout command contains only the token environment-variable name.
+8. Forward only explicitly allowlisted provider API environment variables. Synara owner, database, and Railway administration credentials are rejected from the forwarding list.
+9. Upload the worker config with the verified sandbox company cwd, not the controller compatibility path. Remove `repositoryBinding` before the provider RPC because the existing Pi adapter needs only its cwd.
+10. Start Node directly, without shell glue. Use a named durable session when Railway supplies one; otherwise keep the live exec attached to and supervised by the current Synara control-plane process.
+11. Wait for the worker to connect outward to `/internal/provider-worker` and prove its full fence. `PRIVATE` sandboxes can use the Railway private domain over the dual-stack proxy. The v3/dev `ISOLATED` sandbox uses the controller's public WSS domain because it has NAT egress but no environment private-network access.
 
 Any failure revokes the credential, retires the broker reservation, stops the exact process handle, and destroys the exact sandbox.
 
@@ -137,7 +161,7 @@ After the remote worker accepts `session.start`, Synara upserts `provider_sessio
 - `provider_name = pi`;
 - `adapter_key = pi:railway-sandbox`;
 - status, runtime mode, last-seen time, resume cursor, and lifecycle generation;
-- `runtime_payload_json.distributedPiRuntime` containing schema version, sandbox ID/status/region, worker ID, generation, opaque process/session handle, supervision mode (`durable` or `attached`), cwd, and worker home.
+- `runtime_payload_json.distributedPiRuntime` containing schema version, sandbox ID/status/region, worker ID, generation, opaque process/session handle, supervision mode (`durable` or `attached`), cwd, worker home, and—when applicable—the non-secret repository binding plus checked-out commit SHA.
 
 The bootstrap credential and provider API key are never placed in this row.
 
@@ -215,6 +239,7 @@ Loss of these objects must be handled through the journals, persisted provider b
 | Data | Current authority | Notes |
 |---|---|---|
 | Projects, threads, messages, turn intent, approvals, lifecycle facts | `orchestration_events` in Synara SQLite | Authoritative append-only domain history; the additive Railway preview stores the database on its `/data` volume |
+| Gitea company project selection | `project.created` payload + `projection_projects.repository_binding_json` | Non-secret immutable source binding; catalog credential stays in server environment |
 | UI query/read state | `projection_*` SQLite tables | Rebuildable from orchestration events |
 | Provider output before projection | `provider_runtime_events` | Durable ingestion journal |
 | Provider command retry/uncertainty | `orchestration_event_deliveries` + consumer state | Keeps dispatch durable across process failure |
@@ -222,6 +247,7 @@ Loss of these objects must be handled through the journals, persisted provider b
 | Pi execution target | atomic `settings.json` | Server-authoritative, revisioned; local is default |
 | Attachments and managed local artifacts | Existing Synara managed-attachment storage | Metadata travels in orchestration/provider inputs |
 | Live Pi session and workspace | Local process/filesystem or sandbox filesystem | Ephemeral runtime state |
+| Checked-out company files | `/workspace/repository/companies/<slug>` inside the bound sandbox | Disposable sparse checkout; commit SHA and binding are persisted, file contents are not control-plane truth |
 | Railway sandbox inventory/process | Railway control plane plus the active broker/process connection | Project-token execs supplied durable session names in the successful trials, but recovery does not trust a persisted process handle as a single-worker barrier; it destroys and replaces the bound sandbox |
 | Browser session | Secure Synara session cookie + server auth records | Separate from provider-worker authentication |
 
