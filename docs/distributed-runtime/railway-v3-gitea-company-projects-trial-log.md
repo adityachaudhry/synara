@@ -574,3 +574,20 @@ orchestration state, skips non-Pi/local/already-started threads, coalesces racin
 with a per-thread lock, starts the normal provider session, and durably binds it to the thread.
 No model prompt is sent during prewarm. The existing first-message path remains the fallback when
 focus does not happen or preparation fails.
+
+### Chrome exposed a local-draft gap before acceptance
+
+**Attempt:** Reload the deployed bundle, create a new Cue Cloud thread, choose Pi, and rely on the
+composer-focus prewarm.
+
+**Failure:** A brand-new browser thread is intentionally only a client-side draft until its first
+send, so the initial prewarm implementation skipped it because no durable thread existed for the
+authenticated RPC to resolve. It would have accelerated an empty persisted thread but not the
+normal new-thread flow this optimization targets.
+
+**Correction:** On focus, and only for an empty Pi draft, promote the draft through Synara's
+existing idempotent `thread.create` primitive first, preserve inherited project instructions and
+all existing thread environment fields, then invoke the same `provider.prepareThread` RPC. The
+first-send promotion remains idempotent if the user sends while preparation is still racing. This
+adds no draft/runtime primitive and lets the server continue deriving the repository binding from
+durable project state.

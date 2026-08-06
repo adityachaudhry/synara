@@ -2167,27 +2167,6 @@ export default function ChatView({
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
-  const preparedProviderThreadIdRef = useRef<ThreadId | null>(null);
-  const prepareFirstTurnRuntime = useCallback(() => {
-    if (
-      !isServerThread ||
-      !activeThread ||
-      selectedProvider !== "pi" ||
-      activeThread.latestTurn !== null ||
-      activeThread.messages.length > 0 ||
-      preparedProviderThreadIdRef.current === activeThread.id
-    ) {
-      return;
-    }
-    const api = readNativeApi();
-    if (!api) return;
-    preparedProviderThreadIdRef.current = activeThread.id;
-    void api.provider.prepareThread({ threadId: activeThread.id }).catch(() => {
-      if (preparedProviderThreadIdRef.current === activeThread.id) {
-        preparedProviderThreadIdRef.current = null;
-      }
-    });
-  }, [activeThread, isServerThread, selectedProvider]);
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
@@ -3236,6 +3215,78 @@ export default function ChatView({
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
   const threadNotes = activeThread?.notes ?? "";
+  const preparedProviderThreadIdRef = useRef<ThreadId | null>(null);
+  const prepareFirstTurnRuntime = useCallback(() => {
+    if (
+      !activeThread ||
+      selectedProvider !== "pi" ||
+      activeThread.latestTurn !== null ||
+      activeThread.messages.length > 0 ||
+      activeThread.session !== null ||
+      preparedProviderThreadIdRef.current === activeThread.id
+    ) {
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) return;
+    const prewarmThread = async () => {
+      if (!isServerThread) {
+        if (!activeProject) return;
+        const result = await promoteThreadCreate(
+          {
+            type: "thread.create",
+            commandId: newCommandId(),
+            threadId: activeThread.id,
+            projectId: activeProject.id,
+            title: activeThread.title,
+            modelSelection: selectedModelSelection,
+            runtimeMode,
+            interactionMode,
+            envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
+            branch: activeThread.branch,
+            worktreePath: activeThread.worktreePath,
+            workingDirectory: activeThread.workingDirectory ?? null,
+            associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
+            associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
+            associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
+            lastKnownPr: activeThread.lastKnownPr ?? null,
+            createdAt: activeThread.createdAt,
+          },
+          api,
+          { force: true },
+        );
+        if (result === "unavailable") throw new Error("Draft thread promotion is unavailable.");
+
+        const projectInstructions =
+          useProjectInstructionsStore.getState().instructionsByProjectId[activeProject.id] ?? "";
+        const inheritedThreadNotes = mergeProjectInstructionsIntoThreadNotes({
+          threadNotes,
+          projectInstructions,
+        });
+        if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
+          await dispatchThreadNotes(activeThread.id, inheritedThreadNotes).catch(() => undefined);
+        }
+      }
+      await api.provider.prepareThread({ threadId: activeThread.id });
+    };
+
+    preparedProviderThreadIdRef.current = activeThread.id;
+    void prewarmThread().catch(() => {
+      if (preparedProviderThreadIdRef.current === activeThread.id) {
+        preparedProviderThreadIdRef.current = null;
+      }
+    });
+  }, [
+    activeProject,
+    activeThread,
+    activeThreadAssociatedWorktree,
+    interactionMode,
+    isServerThread,
+    runtimeMode,
+    selectedModelSelection,
+    selectedProvider,
+    threadNotes,
+  ]);
   const pinnedMessageIds = useMemo(
     () => new Set(pinnedMessages.map((pin) => pin.messageId)),
     [pinnedMessages],
