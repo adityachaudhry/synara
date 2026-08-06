@@ -11,6 +11,48 @@ import {
 import { makeActivity } from "./storeTestFixtures";
 
 describe("deriveWorkLogEntries", () => {
+  it("collapses runtime stage start and completion into one timed progress row", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "runtime-stage-worker-connect-started",
+        createdAt: "2026-08-06T23:00:00.000Z",
+        kind: "runtime.stage",
+        summary: "Starting Pi",
+        tone: "info",
+        payload: {
+          stage: "worker.connect",
+          state: "started",
+          cold: true,
+          lifecycleGeneration: "generation-1",
+        },
+      }),
+      makeActivity({
+        id: "runtime-stage-worker-connect-completed",
+        createdAt: "2026-08-06T23:00:00.564Z",
+        kind: "runtime.stage",
+        summary: "Starting Pi",
+        tone: "info",
+        payload: {
+          stage: "worker.connect",
+          state: "completed",
+          cold: true,
+          elapsedMs: 564,
+          detail: "564 ms",
+          lifecycleGeneration: "generation-1",
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "runtime-stage-worker-connect-completed",
+        label: "Starting Pi",
+        detail: "564 ms",
+        activityKind: "runtime.stage",
+      },
+    ]);
+  });
+
   it("keeps started tool entries so pending Cursor calls appear immediately", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

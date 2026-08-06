@@ -17,6 +17,7 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
       "failed",
     ]),
     region: Schema.String,
+    baseSource: Schema.optional(Schema.Literals(["checkpoint", "clean"])),
   }),
   fence: Schema.Struct({
     sandboxId: Schema.String.check(Schema.isUUID(undefined)),
@@ -31,6 +32,7 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
     Schema.Struct({
       binding: ProjectRepositoryBinding,
       commit: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u)),
+      checkoutMode: Schema.optional(Schema.Literals(["partial", "shallow"])),
     }),
   ),
 });

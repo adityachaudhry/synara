@@ -64,6 +64,9 @@ export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
           const enabled = yield* requireEnabled(config, "create");
           const record = yield* client
             .create({
+              ...(input.checkpointName === undefined
+                ? {}
+                : { checkpointName: input.checkpointName }),
               networkIsolation: enabled.networkIsolation,
               idleTimeoutMinutes: enabled.idleTimeoutMinutes,
               ...(enabled.region === undefined ? {} : { region: enabled.region }),
@@ -89,6 +92,7 @@ export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
             lifecycleGeneration: input.lifecycleGeneration,
             status: "running",
             region: record.region,
+            baseSource: record.baseSource,
           } satisfies WorkspaceRuntimeBinding;
         });
 

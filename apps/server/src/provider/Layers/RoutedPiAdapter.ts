@@ -1,11 +1,16 @@
+import { randomUUID } from "node:crypto";
+
 import {
+  EventId,
   ProviderSession,
   ProviderTurnStartResult,
   ThreadId,
   TurnId,
+  type ProviderRuntimeEvent,
+  type RuntimeStagePayload,
   type ProviderWorkerMethod,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -19,6 +24,7 @@ import {
   ProviderAdapterSessionNotFoundError,
 } from "../Errors";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 
@@ -64,6 +70,57 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
   const directory = yield* ProviderSessionDirectory;
   const settings = yield* ServerSettingsService;
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
+  const runtimeStageQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+    PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  );
+
+  const publishRuntimeStage = (input: {
+    readonly threadId: ThreadId;
+    readonly lifecycleGeneration: string;
+    readonly payload: RuntimeStagePayload;
+    readonly turnId?: TurnId;
+  }) =>
+    Queue.offer(runtimeStageQueue, {
+      eventId: EventId.makeUnsafe(randomUUID()),
+      provider: "pi",
+      threadId: input.threadId,
+      createdAt: new Date().toISOString(),
+      lifecycleGeneration: input.lifecycleGeneration,
+      ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+      type: "runtime.stage",
+      payload: input.payload,
+    } satisfies ProviderRuntimeEvent).pipe(Effect.asVoid);
+
+  const withAdapterStage = <A, E, R>(input: {
+    readonly threadId: ThreadId;
+    readonly lifecycleGeneration: string;
+    readonly stage: "session.start" | "turn.dispatch";
+    readonly cold: boolean;
+    readonly effect: Effect.Effect<A, E, R>;
+    readonly turnId?: TurnId;
+  }) =>
+    Effect.suspend(() => {
+      const startedAt = Date.now();
+      const publish = (state: "started" | "completed" | "failed") =>
+        publishRuntimeStage({
+          threadId: input.threadId,
+          lifecycleGeneration: input.lifecycleGeneration,
+          ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+          payload: {
+            stage: input.stage,
+            state,
+            cold: input.cold,
+            ...(state === "started"
+              ? {}
+              : { elapsedMs: Math.max(0, Date.now() - startedAt) }),
+          },
+        });
+      return publish("started").pipe(
+        Effect.andThen(input.effect),
+        Effect.tap(() => publish("completed")),
+        Effect.tapError(() => publish("failed")),
+      );
+    });
 
   const requestUnknown = (
     binding: ProviderWorkerRuntimeBinding,
@@ -76,11 +133,11 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       ),
     );
 
-  const requestDecoded = <A, I>(
+  const requestDecoded = <S extends Schema.Top>(
     binding: ProviderWorkerRuntimeBinding,
     method: ProviderWorkerMethod,
     params: unknown,
-    schema: Schema.Schema<A, I>,
+    schema: S,
   ) =>
     requestUnknown(binding, method, params).pipe(
       Effect.flatMap((result) => Schema.decodeUnknownEffect(schema)(result)),
@@ -167,6 +224,8 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       const binding = previous
         ? yield* provisioner.restart(previous, {
             lifecycleGeneration,
+            onStage: (payload) =>
+              publishRuntimeStage({ threadId: input.threadId, lifecycleGeneration, payload }),
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             ...(input.repositoryBinding === undefined
               ? {}
@@ -174,20 +233,26 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
           })
         : yield* provisioner.start({
             lifecycleGeneration,
+            onStage: (payload) =>
+              publishRuntimeStage({ threadId: input.threadId, lifecycleGeneration, payload }),
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             ...(input.repositoryBinding === undefined
               ? {}
               : { repositoryBinding: input.repositoryBinding }),
           });
       const { repositoryBinding: _repositoryBinding, ...workerSessionInput } = input;
-      const session = yield* requestDecoded(
-        binding,
-        "session.start",
-        { ...workerSessionInput, cwd: binding.cwd, lifecycleGeneration },
-        ProviderSession,
-      ).pipe(
-        Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
-      );
+      const session = yield* withAdapterStage({
+        threadId: input.threadId,
+        lifecycleGeneration,
+        stage: "session.start",
+        cold: true,
+        effect: requestDecoded(
+          binding,
+          "session.start",
+          { ...workerSessionInput, cwd: binding.cwd, lifecycleGeneration },
+          ProviderSession,
+        ),
+      }).pipe(Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))));
       yield* persistRemoteBinding({ threadId: input.threadId, lifecycleGeneration, binding }).pipe(
         Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
       );
@@ -205,7 +270,14 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
   const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
     route(
       input.threadId,
-      (binding) => requestDecoded(binding, "turn.send", input, ProviderTurnStartResult),
+      (binding) =>
+        withAdapterStage({
+          threadId: input.threadId,
+          lifecycleGeneration: binding.fence.lifecycleGeneration,
+          stage: "turn.dispatch",
+          cold: false,
+          effect: requestDecoded(binding, "turn.send", input, ProviderTurnStartResult),
+        }),
       local.sendTurn(input),
     );
 
@@ -288,13 +360,19 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       local.listSessions(),
       Effect.forEach(Array.from(remoteByThread.values()), (binding) =>
         requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession)),
-      ).pipe(Effect.map((groups) => groups.flat())),
+      ).pipe(
+        Effect.map((groups) => groups.flat()),
+        Effect.catch(() => Effect.succeed([])),
+      ),
     ]).pipe(Effect.map(([localSessions, remoteSessions]) => [...localSessions, ...remoteSessions]));
 
   const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
     route(
       threadId,
-      (binding) => requestDecoded(binding, "session.has", { threadId }, Schema.Boolean),
+      (binding) =>
+        requestDecoded(binding, "session.has", { threadId }, Schema.Boolean).pipe(
+          Effect.catch(() => Effect.succeed(false)),
+        ),
       local.hasSession(threadId),
     );
 
@@ -377,12 +455,15 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     rollbackThread,
     compactThread,
     stopAll,
-    listModels: local.listModels,
-    listSkills: local.listSkills,
-    listCommands: local.listCommands,
-    getComposerCapabilities: local.getComposerCapabilities,
+    listModels: local.listModels!,
+    listSkills: local.listSkills!,
+    listCommands: local.listCommands!,
+    getComposerCapabilities: local.getComposerCapabilities!,
     get streamEvents() {
-      return Stream.merge(local.streamEvents, broker.streamEvents);
+      return Stream.merge(
+        Stream.merge(local.streamEvents, broker.streamEvents),
+        Stream.fromQueue(runtimeStageQueue),
+      );
     },
   } satisfies PiAdapterShape;
 });

@@ -1,7 +1,11 @@
 import type { ProjectRepositoryBinding } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { makeGiteaCheckoutPlan, parseGiteaCheckoutCommit } from "./giteaCheckout";
+import {
+  makeGiteaCheckoutPlan,
+  parseGiteaCheckoutCommit,
+  parseGiteaCheckoutResult,
+} from "./giteaCheckout";
 
 const binding: ProjectRepositoryBinding = {
   kind: "gitea-subdirectory",
@@ -36,9 +40,10 @@ describe("makeGiteaCheckoutPlan", () => {
     expect(plan.command).not.toContain("remote add");
     expect(plan.command).not.toContain("config core.sparseCheckout");
     expect(plan.command).toContain("-c core.sparseCheckout=true checkout --detach FETCH_HEAD");
-    expect(plan.command).toContain(
-      "fetch --depth=1 'https://glasswing-gitea-dev.up.railway.app/glasswing-admin/glasswing-company-data.git' 'main'",
-    );
+    expect(plan.command).toContain("fetch --depth=1 --no-tags --filter=blob:none");
+    expect(plan.command).toContain("fetch --depth=1 --no-tags");
+    expect(plan.command).toContain("__SYNARA_CHECKOUT_MODE__=partial");
+    expect(plan.command).toContain("__SYNARA_CHECKOUT_MODE__=shallow");
   });
 
   it("rejects a binding outside the configured repository", () => {
@@ -62,5 +67,18 @@ describe("parseGiteaCheckoutCommit", () => {
 
   it("fails when checkout output has no commit marker", () => {
     expect(() => parseGiteaCheckoutCommit("checkout finished")).toThrow(/commit marker/);
+  });
+});
+
+describe("parseGiteaCheckoutResult", () => {
+  it("reports whether the server accepted the blobless partial clone", () => {
+    expect(
+      parseGiteaCheckoutResult(
+        "__SYNARA_CHECKOUT_MODE__=partial\n__SYNARA_CHECKOUT_COMMIT__=0123456789abcdef0123456789abcdef01234567\n",
+      ),
+    ).toEqual({
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      checkoutMode: "partial",
+    });
   });
 });

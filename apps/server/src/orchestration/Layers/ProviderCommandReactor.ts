@@ -473,7 +473,38 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(true),
   });
   const deliverySourceLock = yield* Semaphore.make(1);
+  const prewarmLockIndex = yield* Semaphore.make(1);
+  const prewarmLocks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
   let reconcileDeliveryRuntime: ProviderCommandReactorShape["reconcileDelivery"] | undefined;
+
+  const withThreadPrewarmLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.acquireUseRelease(
+      prewarmLockIndex.withPermits(1)(
+        Effect.gen(function* () {
+          const existing = prewarmLocks.get(threadId);
+          if (existing) {
+            existing.users += 1;
+            return existing;
+          }
+          const entry = { lock: yield* Semaphore.make(1), users: 1 };
+          prewarmLocks.set(threadId, entry);
+          return entry;
+        }),
+      ),
+      (entry) => entry.lock.withPermits(1)(effect),
+      (entry) =>
+        prewarmLockIndex.withPermits(1)(
+          Effect.sync(() => {
+            entry.users -= 1;
+            if (entry.users === 0 && prewarmLocks.get(threadId) === entry) {
+              prewarmLocks.delete(threadId);
+            }
+          }),
+        ),
+    );
 
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
@@ -1036,7 +1067,7 @@ const make = Effect.gen(function* () {
     clearWorkspaceIndexCache(plan.cwd);
   });
 
-  const ensureSessionForThread = Effect.fnUntraced(function* (
+  const ensureSessionForThreadUnlocked = Effect.fnUntraced(function* (
     threadId: ThreadId,
     createdAt: string,
     options?: {
@@ -1295,6 +1326,30 @@ const make = Effect.gen(function* () {
       activeSession: startedSession,
     };
   });
+
+  const ensureSessionForThread = (
+    ...args: Parameters<typeof ensureSessionForThreadUnlocked>
+  ): ReturnType<typeof ensureSessionForThreadUnlocked> =>
+    withThreadPrewarmLock(args[0], ensureSessionForThreadUnlocked(...args));
+
+  const prepareThread: ProviderCommandReactorShape["prepareThread"] = (threadId) =>
+    Effect.gen(function* () {
+        const thread = yield* resolveThread(threadId);
+        if (!thread || thread.deletedAt !== null) return { status: "skipped" as const };
+        const settingsSnapshot = yield* serverSettings.getSnapshot;
+        if (
+          thread.modelSelection.provider !== "pi" ||
+          settingsSnapshot.settings.providers.pi.executionTarget !== "railway-sandbox" ||
+          thread.messages.length > 0 ||
+          thread.latestTurn !== null
+        ) {
+          return { status: "skipped" as const };
+        }
+        const ensured = yield* ensureSessionForThread(threadId, new Date().toISOString());
+        return {
+          status: ensured.activeSessionBeforeEnsure === undefined ? "ready" : "already-ready",
+        } as const;
+      });
 
   const dispatchTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -4096,6 +4151,7 @@ const make = Effect.gen(function* () {
   return {
     start,
     drain,
+    prepareThread,
     listBlockingDeliveries,
     reconcileDelivery,
   } satisfies ProviderCommandReactorShape;

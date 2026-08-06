@@ -6,6 +6,57 @@ import { ProviderRuntimeEvent, type ProviderRuntimeEventType } from "./providerR
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
+  it("decodes bounded distributed runtime stage telemetry", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "runtime.stage",
+      eventId: "event-runtime-stage-1",
+      provider: "pi",
+      createdAt: "2026-08-06T23:00:00.000Z",
+      threadId: "thread-1",
+      lifecycleGeneration: "generation-1",
+      payload: {
+        stage: "worker.connect",
+        state: "completed",
+        cold: true,
+        elapsedMs: 564,
+        detail: {
+          runtimeId: "sandbox-1",
+          artifactSource: "checkpoint",
+        },
+      },
+    });
+
+    expect(parsed.type).toBe("runtime.stage");
+    if (parsed.type !== "runtime.stage") throw new Error("expected runtime.stage");
+    expect(parsed.payload).toEqual({
+      stage: "worker.connect",
+      state: "completed",
+      cold: true,
+      elapsedMs: 564,
+      detail: {
+        runtimeId: "sandbox-1",
+        artifactSource: "checkpoint",
+      },
+    });
+  });
+
+  it("rejects unknown runtime stage names", () => {
+    expect(() =>
+      decodeRuntimeEvent({
+        type: "runtime.stage",
+        eventId: "event-runtime-stage-invalid",
+        provider: "pi",
+        createdAt: "2026-08-06T23:00:00.000Z",
+        threadId: "thread-1",
+        payload: {
+          stage: "worker.secret-step",
+          state: "started",
+          cold: true,
+        },
+      }),
+    ).toThrow();
+  });
+
   it("includes turn.steered in the exported event type", () => {
     const eventType: ProviderRuntimeEventType = "turn.steered";
     expect(eventType).toBe("turn.steered");

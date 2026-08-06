@@ -453,3 +453,124 @@ merely to keep a sandbox alive. The earlier initial, replacement, and credential
 already validated provisioning and Pi responses, while focused tests cover the hardened cleanup
 and event-fencing delta. The next turn will provision a fresh fenced sandbox generation from the
 persisted Gitea binding.
+
+## 2026-08-06 — Chrome browser acceptance canary with SuperTokens
+
+### Native pairing was the wrong browser identity path
+
+**Observation:** The first Chrome load remained on `Loading projects...` and repeatedly failed its
+WebSocket connection. Following the native pairing path produced an expired one-time pairing page.
+
+**Cause:** The deployed Synara service contained the completed SuperTokens integration, but none of
+its four `SUPERTOKENS_*` runtime settings were present. `/api/auth/session` therefore advertised
+only Synara's native bootstrap method. The application code was not missing; the deployment had
+silently selected the local/admin fallback by configuration.
+
+**Correction:** Reuse the existing private Railway `supertokens` Core and its API-key service
+reference, while setting Synara's own public origin as both the SuperTokens API and website domain.
+The next unauthenticated session response advertised `externalProvider: "supertokens"`, and Chrome
+redirected to `/auth`. The native pairing implementation remains additive as an administrative and
+local-mode fallback; it is no longer the normal browser entry path for this deployment.
+
+### OTP delivery appeared missing because Outlook classified it as junk
+
+**Observation:** Both passwordless code requests returned HTTP 200, but Outlook search initially
+showed only older `Login to your account` messages and the Focused/Other inboxes had no new mail.
+
+**Course correction:** The Junk count increased after resend. Opening Junk directly revealed both
+current SuperTokens messages from `noreply@supertokens.io`; the newest code completed the Chrome
+exchange. Chrome then loaded the saved Cue Cloud project and authenticated WebSocket transcript
+without a pairing link. Search indexing lag was not the delivery failure.
+
+### Expired Railway bearer failed before sandbox creation
+
+**Observation:** The first fresh company question was durably appended to the thread, but
+`session.start` failed with Railway GraphQL `Not Authorized`. No sandbox was created.
+
+**Cause:** `SYNARA_RAILWAY_SANDBOX_AUTH_TYPE` was still `bearer`, backed by the trial-only copied
+Railway CLI OAuth access token. It had expired while the controller continued running.
+
+**Correction:** Force the authenticated Railway CLI to refresh, pipe the new opaque bearer into the
+encrypted service variable without printing it, and redeploy the unchanged source. Railway rebuilt
+the source-uploaded image again, confirming that this recovery remains operationally expensive.
+The failed provider start quarantined the thread as designed: the next user message persisted but
+was not dispatched until Chrome used the explicit **Unblock thread** action.
+
+### End-to-end distributed browser result
+
+Unblocking reserved fresh sandbox `02dd7d2a-4fc8-48c5-82d1-8168f57d91d0` in `us-east4-eqdc4a`.
+Chrome visibly progressed through `Connecting`, `Working`, and `Thinking`; displayed live `find`,
+`rg`, and file-read tool rows rooted at `/workspace/repository/companies/cue-cloud`; and streamed a
+partial comparison before the response completed. The partial snapshot ended mid-heading while
+`Stop generation` remained active, proving incremental rendering rather than a final-only update.
+The terminal transcript showed `Worked for 1m 20s`, a source-linked pricing comparison, and an
+analytical conclusion. A full page reload restored the completed answer and composer state from
+durable orchestration history while the sandbox remained `RUNNING`.
+
+**Residual boundary:** The canary meets the browser interaction criteria, but the copied personal
+OAuth bearer is still not a production credential. Replace it with a durable, revocable project
+token or workload identity before treating unattended sandbox provisioning as reliable.
+
+## 2026-08-06 — Distributed Pi first-turn cold-start optimization
+
+### Telemetry isolated infrastructure startup from Pi startup
+
+Three cold starts spent 11.09s, 15.51s, and 16.19s between sandbox creation and worker connection.
+Within that interval, the repeated 14,080,396-byte worker upload cost 3.85–4.01s, the private
+session-config write cost about 1.9s, and company checkout cost 3.94–9.09s. Once connected, the Pi
+worker accepted `session.start` in 120ms and the first `turn.send` about 237ms after connection.
+Follow-ups were already fast because they reused the live fenced worker and went directly to
+`turn.send`.
+
+**Correction:** Add bounded `runtime.stage` events for sandbox creation, checkout, worker files,
+worker process, worker connection, Pi session, and turn dispatch. The web work log collapses each
+started/completed pair into one live row. Checkout and worker preparation now run concurrently,
+and Gitea first attempts a blobless, no-tags shallow fetch before falling back to the compatible
+shallow fetch.
+
+### Railway templates could not contain the local worker artifact
+
+**Attempt:** Use a Railway template as the immutable worker-ready filesystem base.
+
+**Failure:** The SDK template builder accepts shell recipes and packages but has no local artifact
+upload seam. Hosting the bundle elsewhere solely for template construction would introduce a new
+artifact primitive and credential path.
+
+**Correction:** Use a digest-named Railway filesystem checkpoint containing only the executable
+worker artifact and its SHA-256 marker. Per-session credentials remain outside the checkpoint and
+are written after sandbox creation. If the checkpoint is absent, creation falls back to a clean
+sandbox and the original upload path, preserving compatibility.
+
+### Create handles and local build tooling both required fallbacks
+
+The Railway create handle had already rejected its first file operation in live trials. The client
+now makes one fresh connection for the first file write and then reuses that settled handle for
+subsequent writes; durable-process launch still uses a fresh connection because its control handle
+has different failure behavior.
+
+The normal build and test wrappers could not run because `bun` is absent from this machine. System
+Node was also too old for the installed Vitest (`node:util.styleText`). Verification therefore used
+the bundled Node 24 runtime to invoke Vitest, tsdown, and Vite directly. The first Vite build took
+longer than the tool's initial yield and was polled to completion instead of being restarted.
+
+### Checkpoint credentials failed once, then succeeded with refreshed OAuth
+
+**Attempt:** Prepare the checkpoint from the encrypted deployed `SYNARA_RAILWAY_SANDBOX_TOKEN`.
+
+**Failure:** Both checkpoint listing and clean sandbox creation returned Railway GraphQL
+`Not Authorized`; the copied bearer had expired again. Continuing after the list failure proved
+that checkpoint-management permission was not the only issue.
+
+**Correction:** Use the Railway CLI's refreshed OAuth access token without printing it, create
+checkpoint `synara-provider-worker-2157239894081454096f1f1e`, and update the encrypted dev service
+bearer plus `SYNARA_RAILWAY_SANDBOX_WORKER_CHECKPOINT=auto`. The checkpoint contains 14,081,578
+artifact bytes and no runtime credentials.
+
+### Browser prewarm is additive and authenticated
+
+Focusing the composer of an empty Pi thread now calls authenticated WebSocket RPC
+`provider.prepareThread`. The server derives project checkout and runtime settings from durable
+orchestration state, skips non-Pi/local/already-started threads, coalesces racing focus/send calls
+with a per-thread lock, starts the normal provider session, and durably binds it to the thread.
+No model prompt is sent during prewarm. The existing first-message path remains the fallback when
+focus does not happen or preparation fails.

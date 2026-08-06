@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectRepositoryBinding } from "@synara/contracts";
+import type {
+  ProjectRepositoryBinding,
+  RuntimeStage,
+  RuntimeStagePayload,
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
@@ -7,7 +11,7 @@ import { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerFence } from "../fence";
 import {
   makeGiteaCheckoutPlan,
-  parseGiteaCheckoutCommit,
+  parseGiteaCheckoutResult,
   type GiteaCheckoutPlan,
   type GiteaCheckoutRepositoryConfig,
 } from "../giteaCheckout";
@@ -18,6 +22,7 @@ import {
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import { workerArtifactDigest, workerCheckpointName } from "../workerArtifactBase";
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
@@ -37,6 +42,7 @@ export interface ProviderWorkerProvisionerOptions {
   readonly controlUrl: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly giteaCheckout?: GiteaCheckoutRepositoryConfig;
+  readonly workerCheckpoint?: "auto" | string;
 }
 
 function provisionError(operation: string, detail: string, cause: unknown, sandboxId?: string) {
@@ -48,11 +54,53 @@ function provisionError(operation: string, detail: string, cause: unknown, sandb
   });
 }
 
+type ProvisionInput = Parameters<ProviderWorkerProvisionerShape["start"]>[0];
+
+function reportStage(input: ProvisionInput, payload: RuntimeStagePayload) {
+  return input.onStage?.(payload) ?? Effect.void;
+}
+
+function withStage<A, E, R>(input: {
+  readonly provision: ProvisionInput;
+  readonly stage: RuntimeStage;
+  readonly cold: boolean;
+  readonly effect: Effect.Effect<A, E, R>;
+  readonly detail?: Readonly<Record<string, unknown>>;
+}) {
+  return Effect.suspend(() => {
+    const startedAt = Date.now();
+    const completed = (state: "completed" | "failed") =>
+      reportStage(input.provision, {
+        stage: input.stage,
+        state,
+        cold: input.cold,
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        ...(input.detail === undefined ? {} : { detail: input.detail }),
+      });
+    return reportStage(input.provision, {
+      stage: input.stage,
+      state: "started",
+      cold: input.cold,
+      ...(input.detail === undefined ? {} : { detail: input.detail }),
+    }).pipe(
+      Effect.andThen(input.effect),
+      Effect.tap(() => completed("completed")),
+      Effect.tapError(() => completed("failed")),
+    );
+  });
+}
+
 export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisionerOptions) =>
   Effect.gen(function* () {
     const workspaceRuntime = yield* WorkspaceRuntime;
     const broker = yield* ProviderWorkerBroker;
     const authority = yield* ProviderWorkerBootstrapAuthority;
+    const checkpointName =
+      options.workerCheckpoint === undefined
+        ? undefined
+        : options.workerCheckpoint === "auto"
+          ? workerCheckpointName(workerArtifactDigest(options.artifact))
+          : options.workerCheckpoint;
 
     const resolveCheckoutPlan = Effect.fn(function* (
       provision: Parameters<ProviderWorkerProvisionerShape["start"]>[0],
@@ -116,8 +164,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           input.workspace.runtimeId,
         );
       }
-      const commit = yield* Effect.try({
-        try: () => parseGiteaCheckoutCommit(result.stdout),
+      const checkoutResult = yield* Effect.try({
+        try: () => parseGiteaCheckoutResult(result.stdout),
         catch: (cause) =>
           provisionError(
             "checkout.verify",
@@ -130,17 +178,19 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         cwd: input.checkout.plan.cwd,
         repositoryCheckout: {
           binding: input.checkout.binding,
-          commit,
+          commit: checkoutResult.commit,
+          checkoutMode: checkoutResult.checkoutMode,
         },
       } as const;
     });
 
     const provisionConnectedWorker = Effect.fn(function* (input: {
       readonly workspace: ProviderWorkerRuntimeBinding["workspace"];
+      readonly provision: ProvisionInput;
       readonly lifecycleGeneration: string;
       readonly cwd: string;
       readonly homeDir: string;
-      readonly repositoryCheckout?: ProviderWorkerRuntimeBinding["repositoryCheckout"];
+      readonly prepareWorkspace: ReturnType<typeof prepareWorkspace>;
     }) {
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
@@ -157,43 +207,69 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       let durableSessionName: string | undefined;
 
       const launch = Effect.gen(function* () {
-        yield* Effect.logInfo("provider worker artifact upload starting", {
-          sandboxId: fence.sandboxId,
-          bytes: options.artifact.byteLength,
-        });
-        yield* workspaceRuntime.writeFile(input.workspace, {
-          path: WORKER_ARTIFACT_PATH,
-          data: options.artifact,
-          mode: 0o500,
-        });
-        yield* Effect.logInfo("provider worker artifact upload completed", {
-          sandboxId: fence.sandboxId,
-        });
-        yield* workspaceRuntime.writeFile(input.workspace, {
-          path: WORKER_CONFIG_PATH,
-          data: JSON.stringify({
-            controlUrl: options.controlUrl,
-            bootstrapCredential: credential,
-            sandboxId: fence.sandboxId,
-            workerId: fence.workerId,
-            lifecycleGeneration: fence.lifecycleGeneration,
-            cwd: input.cwd,
-            homeDir: input.homeDir,
+        const artifactSource =
+          input.workspace.baseSource === "checkpoint" ? "checkpoint" : "upload";
+        const workerFiles = withStage({
+          provision: input.provision,
+          stage: "worker.files",
+          cold: true,
+          detail: { artifactSource },
+          effect: Effect.gen(function* () {
+            if (artifactSource === "upload") {
+              yield* Effect.logInfo("provider worker artifact upload starting", {
+                sandboxId: fence.sandboxId,
+                bytes: options.artifact.byteLength,
+              });
+              yield* workspaceRuntime.writeFile(input.workspace, {
+                path: WORKER_ARTIFACT_PATH,
+                data: options.artifact,
+                mode: 0o500,
+              });
+              yield* Effect.logInfo("provider worker artifact upload completed", {
+                sandboxId: fence.sandboxId,
+              });
+            }
+            yield* workspaceRuntime.writeFile(input.workspace, {
+              path: WORKER_CONFIG_PATH,
+              data: JSON.stringify({
+                controlUrl: options.controlUrl,
+                bootstrapCredential: credential,
+                sandboxId: fence.sandboxId,
+                workerId: fence.workerId,
+                lifecycleGeneration: fence.lifecycleGeneration,
+                cwd: input.cwd,
+                homeDir: input.homeDir,
+              }),
+              mode: 0o600,
+            });
+            yield* Effect.logInfo("provider worker config upload completed", {
+              sandboxId: fence.sandboxId,
+              artifactSource,
+            });
           }),
-          mode: 0o600,
         });
-        yield* Effect.logInfo("provider worker config upload completed", {
-          sandboxId: fence.sandboxId,
+        const [prepared] = yield* Effect.all([input.prepareWorkspace, workerFiles], {
+          concurrency: "unbounded",
         });
-        const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: workerLaunchCommand(input.homeDir),
+        const durable = yield* withStage({
+          provision: input.provision,
+          stage: "worker.start",
+          cold: true,
+          effect: workspaceRuntime.startDurableProcess(input.workspace, {
+            command: workerLaunchCommand(input.homeDir),
+          }),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {
           sandboxId: fence.sandboxId,
           supervision: durable.supervision,
         });
-        yield* broker.waitForConnection(fence);
+        yield* withStage({
+          provision: input.provision,
+          stage: "worker.connect",
+          cold: true,
+          effect: broker.waitForConnection(fence),
+        });
         yield* Effect.logInfo("provider worker connected", {
           sandboxId: fence.sandboxId,
           workerId: fence.workerId,
@@ -207,20 +283,22 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           processSupervision: durable.supervision,
           cwd: input.cwd,
           homeDir: input.homeDir,
-          ...(input.repositoryCheckout === undefined
+          ...(prepared.repositoryCheckout === undefined
             ? {}
-            : { repositoryCheckout: input.repositoryCheckout }),
+            : { repositoryCheckout: prepared.repositoryCheckout }),
         } satisfies ProviderWorkerRuntimeBinding;
       });
 
       return yield* launch.pipe(
         Effect.mapError((cause) =>
-          provisionError(
-            "launch",
-            "Failed to launch and connect the Railway provider worker.",
-            cause,
-            input.workspace.runtimeId,
-          ),
+          cause instanceof ProviderWorkerProvisioningError
+            ? cause
+            : provisionError(
+                "launch",
+                "Failed to launch and connect the Railway provider worker.",
+                cause,
+                input.workspace.runtimeId,
+              ),
         ),
         Effect.onError(() =>
           broker.retire(fence, "worker startup failed").pipe(
@@ -241,28 +319,48 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const start: ProviderWorkerProvisionerShape["start"] = (input) =>
       Effect.gen(function* () {
         const checkout = yield* resolveCheckoutPlan(input);
-        const workspace = yield* workspaceRuntime.create({
-          lifecycleGeneration: input.lifecycleGeneration,
-          environment: {
-            ...(options.environment ?? {}),
-            ...(checkout?.plan.environment ?? {}),
-          },
+        const workspace = yield* withStage({
+          provision: input,
+          stage: "sandbox.create",
+          cold: true,
+          detail: { checkpoint: checkpointName ?? "none" },
+          effect: workspaceRuntime.create({
+            lifecycleGeneration: input.lifecycleGeneration,
+            ...(checkpointName === undefined ? {} : { checkpointName }),
+            environment: {
+              ...(options.environment ?? {}),
+              ...(checkout?.plan.environment ?? {}),
+            },
+          }),
         });
         return yield* Effect.gen(function* () {
-          const prepared = yield* prepareWorkspace({
-            workspace,
-            provision: input,
-            checkout,
-            fallbackCwd: DEFAULT_CWD,
-          });
+          const cwd = checkout?.plan.cwd ?? (input.cwd?.trim() || DEFAULT_CWD);
+          const workspacePreparation =
+            checkout === undefined
+              ? prepareWorkspace({
+                  workspace,
+                  provision: input,
+                  checkout,
+                  fallbackCwd: DEFAULT_CWD,
+                })
+              : withStage({
+                  provision: input,
+                  stage: "workspace.checkout",
+                  cold: true,
+                  effect: prepareWorkspace({
+                    workspace,
+                    provision: input,
+                    checkout,
+                    fallbackCwd: DEFAULT_CWD,
+                  }),
+                });
           return yield* provisionConnectedWorker({
             workspace,
+            provision: input,
             lifecycleGeneration: input.lifecycleGeneration,
-            cwd: prepared.cwd,
+            cwd,
             homeDir: DEFAULT_HOME_DIR,
-            ...(prepared.repositoryCheckout === undefined
-              ? {}
-              : { repositoryCheckout: prepared.repositoryCheckout }),
+            prepareWorkspace: workspacePreparation,
           });
         }).pipe(
           Effect.onError(() => workspaceRuntime.destroy(workspace).pipe(Effect.catch(() => Effect.void))),
@@ -296,28 +394,48 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         // worker reconnecting alongside the replacement generation.
         yield* workspaceRuntime.destroy(previousWorkspace);
         const checkout = yield* resolveCheckoutPlan(input);
-        const replacementWorkspace = yield* workspaceRuntime.create({
-          lifecycleGeneration: input.lifecycleGeneration,
-          environment: {
-            ...(options.environment ?? {}),
-            ...(checkout?.plan.environment ?? {}),
-          },
+        const replacementWorkspace = yield* withStage({
+          provision: input,
+          stage: "sandbox.create",
+          cold: true,
+          detail: { checkpoint: checkpointName ?? "none" },
+          effect: workspaceRuntime.create({
+            lifecycleGeneration: input.lifecycleGeneration,
+            ...(checkpointName === undefined ? {} : { checkpointName }),
+            environment: {
+              ...(options.environment ?? {}),
+              ...(checkout?.plan.environment ?? {}),
+            },
+          }),
         });
         return yield* Effect.gen(function* () {
-          const prepared = yield* prepareWorkspace({
-            workspace: replacementWorkspace,
-            provision: input,
-            checkout,
-            fallbackCwd: binding.cwd,
-          });
+          const cwd = checkout?.plan.cwd ?? (input.cwd?.trim() || binding.cwd);
+          const workspacePreparation =
+            checkout === undefined
+              ? prepareWorkspace({
+                  workspace: replacementWorkspace,
+                  provision: input,
+                  checkout,
+                  fallbackCwd: binding.cwd,
+                })
+              : withStage({
+                  provision: input,
+                  stage: "workspace.checkout",
+                  cold: true,
+                  effect: prepareWorkspace({
+                    workspace: replacementWorkspace,
+                    provision: input,
+                    checkout,
+                    fallbackCwd: binding.cwd,
+                  }),
+                });
           return yield* provisionConnectedWorker({
             workspace: replacementWorkspace,
+            provision: input,
             lifecycleGeneration: input.lifecycleGeneration,
-            cwd: prepared.cwd,
+            cwd,
             homeDir: binding.homeDir,
-            ...(prepared.repositoryCheckout === undefined
-              ? {}
-              : { repositoryCheckout: prepared.repositoryCheckout }),
+            prepareWorkspace: workspacePreparation,
           });
         }).pipe(
           Effect.onError(() =>
@@ -403,6 +521,9 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
         controlUrl: options.controlUrl,
         ...(options.environment === undefined ? {} : { environment: options.environment }),
         ...(options.giteaCheckout === undefined ? {} : { giteaCheckout: options.giteaCheckout }),
+        ...(options.workerCheckpoint === undefined
+          ? {}
+          : { workerCheckpoint: options.workerCheckpoint }),
       });
     }),
   );

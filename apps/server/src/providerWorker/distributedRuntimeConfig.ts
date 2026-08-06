@@ -40,6 +40,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
     region: environment.SYNARA_RAILWAY_SANDBOX_REGION,
     idleTimeoutMinutes: environment.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
     networkIsolation: environment.SYNARA_RAILWAY_SANDBOX_NETWORK_ISOLATION,
+    workerCheckpoint: environment.SYNARA_RAILWAY_SANDBOX_WORKER_CHECKPOINT,
   });
   if (!railway.enabled) return { enabled: false };
 

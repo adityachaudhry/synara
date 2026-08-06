@@ -41,6 +41,7 @@ function makeFakeRailwayClient(options?: {
           id: `sandbox-${creates}`,
           status: options?.createdStatus ?? "RUNNING",
           region: input.region,
+          baseSource: input.checkpointName ? "checkpoint" : "clean",
         };
         sandboxes.set(record.id, record);
         return record;
@@ -125,6 +126,7 @@ describe("WorkspaceRuntime", () => {
         const runtime = yield* WorkspaceRuntime;
         return yield* runtime.create({
           lifecycleGeneration: "generation-1",
+          checkpointName: "synara-provider-worker-deadbeef",
           environment: { WORKER_TOKEN: "scoped" },
         });
       }),
@@ -136,6 +138,7 @@ describe("WorkspaceRuntime", () => {
       lifecycleGeneration: "generation-1",
       status: "running",
       region: "us-east4-eqdc4a",
+      baseSource: "checkpoint",
     });
   });
 

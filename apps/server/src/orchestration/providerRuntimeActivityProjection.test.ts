@@ -56,6 +56,43 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent): void {
 }
 
 describe("projected activities satisfy the orchestration command schema", () => {
+  it("projects runtime stages into concise non-secret progress activities", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "runtime.stage",
+        eventId: "runtime-stage-worker-connect",
+        lifecycleGeneration: "generation-1",
+        payload: {
+          stage: "worker.connect",
+          state: "completed",
+          cold: true,
+          elapsedMs: 564,
+          detail: {
+            runtimeId: "sandbox-1",
+            artifactSource: "checkpoint",
+          },
+        },
+      }),
+    );
+
+    expect(activity).toMatchObject({
+      kind: "runtime.stage",
+      summary: "Starting Pi",
+      tone: "info",
+      payload: {
+        stage: "worker.connect",
+        state: "completed",
+        cold: true,
+        elapsedMs: 564,
+        detail: "564 ms",
+        lifecycleGeneration: "generation-1",
+        runtimeId: "sandbox-1",
+        artifactSource: "checkpoint",
+      },
+    });
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  });
+
   it("omits an absent approval request id instead of emitting an explicit undefined", () => {
     expectSchemaValidActivities(
       runtimeEvent({

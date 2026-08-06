@@ -156,6 +156,16 @@ export const ProviderCompactThreadInput = Schema.Struct({
 });
 export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 
+export const ProviderPrepareThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderPrepareThreadInput = typeof ProviderPrepareThreadInput.Type;
+
+export const ProviderPrepareThreadResult = Schema.Struct({
+  status: Schema.Literals(["ready", "already-ready", "skipped"]),
+});
+export type ProviderPrepareThreadResult = typeof ProviderPrepareThreadResult.Type;
+
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,

@@ -709,6 +709,8 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.statsGetProfileTokenStats, input),
     },
     provider: {
+      prepareThread: (input) =>
+        transport.request(WS_METHODS.providerPrepareThread, input, { timeoutMs: null }),
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
       // Compaction is capped server-side per provider (ACP providers allow up

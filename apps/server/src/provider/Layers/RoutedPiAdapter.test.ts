@@ -149,10 +149,11 @@ describe("RoutedPiAdapter", () => {
 
     await Effect.runPromise(adapter.startSession(startInput()));
 
-    expect(harness.provisioner.start).toHaveBeenCalledWith({
+    expect(harness.provisioner.start).toHaveBeenCalledWith(expect.objectContaining({
       lifecycleGeneration: "generation-1",
       cwd: "/workspace",
-    });
+      onStage: expect.any(Function),
+    }));
     expect(harness.request).toHaveBeenCalledWith(
       runtimeBinding.fence,
       "session.start",
@@ -180,11 +181,12 @@ describe("RoutedPiAdapter", () => {
 
     await Effect.runPromise(adapter.startSession(input));
 
-    expect(harness.provisioner.start).toHaveBeenCalledWith({
+    expect(harness.provisioner.start).toHaveBeenCalledWith(expect.objectContaining({
       lifecycleGeneration: "generation-1",
       cwd: "/data/gitea-company-projects/cue-cloud",
       repositoryBinding,
-    });
+      onStage: expect.any(Function),
+    }));
     const remoteStartInput = harness.request.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(remoteStartInput).toMatchObject({
       threadId,
@@ -212,10 +214,11 @@ describe("RoutedPiAdapter", () => {
     await Effect.runPromise(adapter.startSession(startInput()));
 
     expect(harness.provisioner.start).not.toHaveBeenCalled();
-    expect(harness.provisioner.restart).toHaveBeenCalledWith(runtimeBinding, {
+    expect(harness.provisioner.restart).toHaveBeenCalledWith(runtimeBinding, expect.objectContaining({
       lifecycleGeneration: "generation-1",
       cwd: "/workspace",
-    });
+      onStage: expect.any(Function),
+    }));
     expect(harness.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId,
@@ -255,5 +258,27 @@ describe("RoutedPiAdapter", () => {
 
     await expect(Effect.runPromise(adapter.stopSession(threadId))).resolves.toBeUndefined();
     expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
+  });
+
+  it("streams bounded cold-start stage events around the remote session handshake", async () => {
+    const harness = makeHarness("railway-sandbox");
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await Effect.runPromise(adapter.startSession(startInput()));
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(Stream.take(adapter.streamEvents, 2))),
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["runtime.stage", "runtime.stage"]);
+    expect(events.map((event) => event.type === "runtime.stage" ? event.payload : undefined)).toEqual([
+      { stage: "session.start", state: "started", cold: true },
+      expect.objectContaining({
+        stage: "session.start",
+        state: "completed",
+        cold: true,
+        elapsedMs: expect.any(Number),
+      }),
+    ]);
+    expect(events.every((event) => event.threadId === threadId)).toBe(true);
   });
 });

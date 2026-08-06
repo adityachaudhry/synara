@@ -210,7 +210,11 @@ import type {
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
-import type { ProviderCompactThreadInput } from "./provider";
+import type {
+  ProviderCompactThreadInput,
+  ProviderPrepareThreadInput,
+  ProviderPrepareThreadResult,
+} from "./provider";
 import type {
   StatsGetProfileStatsInput,
   StatsGetProfileStatsResult,
@@ -731,6 +735,7 @@ export interface NativeApi {
     ) => Promise<StatsGetProfileTokenStatsResult>;
   };
   provider: {
+    prepareThread: (input: ProviderPrepareThreadInput) => Promise<ProviderPrepareThreadResult>;
     getComposerCapabilities: (
       input: ProviderGetComposerCapabilitiesInput,
     ) => Promise<ProviderComposerCapabilities>;

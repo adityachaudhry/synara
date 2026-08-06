@@ -113,7 +113,7 @@ import {
   ProviderListSkillsInput,
   ProviderSkillsCatalogInput,
 } from "./providerDiscovery";
-import { ProviderCompactThreadInput } from "./provider";
+import { ProviderCompactThreadInput, ProviderPrepareThreadInput } from "./provider";
 import {
   PullRequestActionInput,
   PullRequestCommentInput,
@@ -238,6 +238,7 @@ export const WS_METHODS = {
   subscribeOrchestrationDomainEvents: "orchestration.subscribeDomainEvents",
 
   // Provider discovery
+  providerPrepareThread: "provider.prepareThread",
   providerGetComposerCapabilities: "provider.getComposerCapabilities",
   providerCompactThread: "provider.compactThread",
   providerListCommands: "provider.listCommands",
@@ -412,6 +413,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 
   // Provider discovery
+  tagRequestBody(WS_METHODS.providerPrepareThread, ProviderPrepareThreadInput),
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),
   tagRequestBody(WS_METHODS.providerCompactThread, ProviderCompactThreadInput),
   tagRequestBody(WS_METHODS.providerListCommands, ProviderListCommandsInput),

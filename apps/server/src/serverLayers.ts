@@ -252,6 +252,9 @@ export function makeServerApplicationLayers() {
     ? makeProviderWorkerProvisionerFromArtifactLive({
         controlUrl: distributedPiConfig.controlUrl,
         environment: distributedPiConfig.workerEnvironment,
+        ...(distributedPiConfig.railway.workerCheckpoint === undefined
+          ? {}
+          : { workerCheckpoint: distributedPiConfig.railway.workerCheckpoint }),
         ...(giteaCompanyConfig.enabled
           ? {
               giteaCheckout: {

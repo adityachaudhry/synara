@@ -459,6 +459,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
   };
+  if (activity.kind === "runtime.stage") {
+    const stage = typeof payload?.stage === "string" ? payload.stage : undefined;
+    const lifecycleGeneration =
+      typeof payload?.lifecycleGeneration === "string" ? payload.lifecycleGeneration : undefined;
+    if (stage && lifecycleGeneration) {
+      entry.collapseKey = `runtime-stage:${lifecycleGeneration}:${stage}`;
+    }
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
@@ -852,6 +860,13 @@ function collapseDerivedWorkLogEntries(
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);
+      continue;
+    }
+    if (
+      previous?.collapseKey?.startsWith("runtime-stage:") &&
+      previous.collapseKey === entry.collapseKey
+    ) {
+      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
     }
     if (previous && shouldCollapseContextCompactionEntries(previous, entry)) {

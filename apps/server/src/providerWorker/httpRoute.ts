@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { Socket } from "effect/unstable/socket";
 
-import { ProviderWorkerTransportError } from "./Errors";
+import { ProviderWorkerBrokerError, ProviderWorkerTransportError } from "./Errors";
 import { runProviderWorkerConnection, type ProviderWorkerSocket } from "./providerWorkerConnection";
 import { ProviderWorkerBootstrapAuthority } from "./Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "./Services/ProviderWorkerBroker";
@@ -20,6 +20,26 @@ export function mapProviderWorkerSocketRunError(cause: unknown) {
   return cause instanceof ProviderWorkerTransportError
     ? cause
     : toTransportError("read")(cause);
+}
+
+export function providerWorkerTransportDiagnostic(error: ProviderWorkerTransportError) {
+  const cause = error.cause;
+  return {
+    operation: error.operation,
+    detail: error.detail,
+    ...(cause instanceof ProviderWorkerBrokerError
+      ? {
+          causeTag: cause._tag,
+          causeOperation: cause.operation,
+          causeDetail: cause.detail,
+          ...(cause.sandboxId === undefined ? {} : { sandboxId: cause.sandboxId }),
+        }
+      : cause instanceof Error
+        ? { causeTag: cause.name, causeDetail: cause.message }
+        : cause === undefined
+          ? {}
+          : { causeTag: typeof cause, causeDetail: String(cause) }),
+  };
 }
 
 export const makeProviderWorkerSocket = Effect.fn(function* (
@@ -50,10 +70,10 @@ export const providerWorkerRouteLayer = Layer.effectDiscard(
         const socket = yield* makeProviderWorkerSocket(effectSocket);
         yield* runProviderWorkerConnection({ socket, authority, broker }).pipe(
           Effect.catch((error) =>
-            Effect.logWarning("provider worker websocket closed", {
-              operation: error.operation,
-              detail: error.detail,
-            }),
+            Effect.logWarning(
+              "provider worker websocket closed",
+              providerWorkerTransportDiagnostic(error),
+            ),
           ),
         );
         return HttpServerResponse.empty({ status: 204 });

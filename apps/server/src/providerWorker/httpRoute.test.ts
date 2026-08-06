@@ -1,10 +1,35 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { ProviderWorkerTransportError } from "./Errors";
-import { mapProviderWorkerSocketRunError } from "./httpRoute";
+import { ProviderWorkerBrokerError, ProviderWorkerTransportError } from "./Errors";
+import {
+  mapProviderWorkerSocketRunError,
+  providerWorkerTransportDiagnostic,
+} from "./httpRoute";
 
 describe("provider worker HTTP route", () => {
+  it("retains the exact nested broker rejection in its structured diagnostic", () => {
+    const brokerFailure = new ProviderWorkerBrokerError({
+      operation: "event.sequence",
+      detail: "Expected worker event sequence 7, received 8.",
+      sandboxId: "sandbox-1",
+    });
+    const transportFailure = new ProviderWorkerTransportError({
+      operation: "frame.accept",
+      detail: "Worker frame was rejected.",
+      cause: brokerFailure,
+    });
+
+    expect(providerWorkerTransportDiagnostic(transportFailure)).toEqual({
+      operation: "frame.accept",
+      detail: "Worker frame was rejected.",
+      causeTag: "ProviderWorkerBrokerError",
+      causeOperation: "event.sequence",
+      causeDetail: "Expected worker event sequence 7, received 8.",
+      sandboxId: "sandbox-1",
+    });
+  });
+
   it("preserves structured protocol failures from the connection handler", () => {
     const failure = new ProviderWorkerTransportError({
       operation: "register.auth",

@@ -104,6 +104,16 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+const RUNTIME_STAGE_SUMMARIES = {
+  "sandbox.create": "Creating sandbox",
+  "workspace.checkout": "Checking out workspace",
+  "worker.files": "Preparing Pi worker",
+  "worker.start": "Starting Pi worker",
+  "worker.connect": "Starting Pi",
+  "session.start": "Opening Pi session",
+  "turn.dispatch": "Dispatching message",
+} as const;
+
 function stringifyJsonLike(value: unknown): string {
   const seen = new WeakSet<object>();
   return (
@@ -504,6 +514,41 @@ export function projectProviderRuntimeActivities(
     ];
   }
   switch (event.type) {
+    case "runtime.stage": {
+      const detail = event.payload.detail;
+      const runtimeId = asString(detail?.runtimeId);
+      const artifactSource = asString(detail?.artifactSource);
+      const checkoutMode = asString(detail?.checkoutMode);
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: event.payload.state === "failed" ? "error" : "info",
+          kind: "runtime.stage",
+          summary: RUNTIME_STAGE_SUMMARIES[event.payload.stage],
+          payload: toActivityPayload({
+            stage: event.payload.stage,
+            state: event.payload.state,
+            cold: event.payload.cold,
+            ...(event.payload.elapsedMs === undefined
+              ? {}
+              : {
+                  elapsedMs: event.payload.elapsedMs,
+                  detail: `${String(event.payload.elapsedMs)} ms`,
+                }),
+            ...(event.lifecycleGeneration === undefined
+              ? {}
+              : { lifecycleGeneration: event.lifecycleGeneration }),
+            ...(runtimeId === undefined ? {} : { runtimeId }),
+            ...(artifactSource === undefined ? {} : { artifactSource }),
+            ...(checkoutMode === undefined ? {} : { checkoutMode }),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
       if (!payload) {

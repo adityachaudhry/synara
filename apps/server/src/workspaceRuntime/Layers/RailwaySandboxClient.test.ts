@@ -78,7 +78,66 @@ describe("RailwaySandboxClient", () => {
       id: "sandbox-1",
       status: "RUNNING",
       region: "us-east4-eqdc4a",
+      baseSource: "clean",
     });
+  });
+
+  it("boots from a worker checkpoint and reports the immutable base source", async () => {
+    let received: Parameters<RailwaySdkFacade["create"]>[0] | undefined;
+    const sandbox = makeSdkSandbox();
+    const sdk: RailwaySdkFacade = {
+      create: async (input) => {
+        received = input;
+        return sandbox;
+      },
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    const record = await Effect.runPromise(
+      client.create({
+        checkpointName: "synara-provider-worker-deadbeef",
+        networkIsolation: "PRIVATE",
+        idleTimeoutMinutes: 30,
+        environment: {},
+      }),
+    );
+
+    expect(received).toMatchObject({
+      checkpointName: "synara-provider-worker-deadbeef",
+    });
+    expect(record.baseSource).toBe("checkpoint");
+  });
+
+  it("falls back to a clean sandbox when the configured checkpoint is absent", async () => {
+    const sandbox = makeSdkSandbox();
+    const createInputs: unknown[] = [];
+    const sdk: RailwaySdkFacade = {
+      create: async (input) => {
+        createInputs.push(input);
+        if ("checkpointName" in input) throw new Error("checkpoint not found");
+        return sandbox;
+      },
+      connect: async () => sandbox,
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    const record = await Effect.runPromise(
+      client.create({
+        checkpointName: "synara-provider-worker-missing",
+        networkIsolation: "PRIVATE",
+        idleTimeoutMinutes: 30,
+        environment: {},
+      }),
+    );
+
+    expect(createInputs).toHaveLength(2);
+    expect(createInputs[1]).not.toHaveProperty("checkpointName");
+    expect(record.baseSource).toBe("clean");
   });
 
   it("preserves the complete exec result", async () => {
@@ -232,6 +291,38 @@ describe("RailwaySandboxClient", () => {
 
     expect(connectCount).toBe(1);
     expect(writes).toEqual(["/opt/synara/provider-worker.mjs"]);
+  });
+
+  it("reuses the first settled file handle for subsequent writes", async () => {
+    const createdSandbox = makeSdkSandbox();
+    const writes: string[] = [];
+    const connectedSandbox = makeSdkSandbox({
+      files: { write: async (path) => void writes.push(path) },
+    });
+    let connectCount = 0;
+    const sdk: RailwaySdkFacade = {
+      create: async () => createdSandbox,
+      connect: async () => {
+        connectCount += 1;
+        return connectedSandbox;
+      },
+      list: async () => [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+    await Effect.runPromise(
+      client.create({ networkIsolation: "PRIVATE", idleTimeoutMinutes: 30, environment: {} }),
+    );
+
+    await Effect.runPromise(
+      client.writeFile("sandbox-1", { path: "/opt/synara/worker.mjs", data: "worker" }),
+    );
+    await Effect.runPromise(
+      client.writeFile("sandbox-1", { path: "/opt/synara/config.json", data: "{}" }),
+    );
+
+    expect(connectCount).toBe(1);
+    expect(writes).toEqual(["/opt/synara/worker.mjs", "/opt/synara/config.json"]);
   });
 
   it("starts a direct durable command and detaches by session name", async () => {

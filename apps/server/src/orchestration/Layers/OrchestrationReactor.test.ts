@@ -40,7 +40,8 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
-          Layer.succeed(ProviderCommandReactor, {
+        Layer.succeed(ProviderCommandReactor, {
+          prepareThread: () => Effect.succeed({ status: "skipped" }),
             start: Effect.acquireRelease(
               Effect.sync(() => {
                 started.push("provider-command-reactor");

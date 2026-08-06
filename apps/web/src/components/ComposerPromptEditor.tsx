@@ -537,6 +537,7 @@ interface ComposerPromptEditorProps {
     key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
     event: KeyboardEvent,
   ) => boolean;
+  onFocus?: () => void;
   onPaste: ClipboardEventHandler<HTMLElement>;
 }
 
@@ -944,6 +945,7 @@ function ComposerPromptEditorInner({
   onCollapsePastedText,
   onChange,
   onCommandKeyDown,
+  onFocus,
   onPaste,
   editorRef,
 }: ComposerPromptEditorInnerProps) {
@@ -1210,6 +1212,7 @@ function ComposerPromptEditorInner({
               data-testid="composer-editor"
               aria-placeholder={placeholder}
               placeholder={<span />}
+              onFocus={onFocus}
               onPaste={onPaste}
             />
           }

@@ -17,9 +17,11 @@ export interface RailwaySandboxRecord {
   readonly id: string;
   readonly status: RailwaySandboxStatus;
   readonly region: string;
+  readonly baseSource: "checkpoint" | "clean";
 }
 
 export interface RailwaySandboxCreateInput {
+  readonly checkpointName?: string;
   readonly networkIsolation: "PRIVATE" | "ISOLATED";
   readonly idleTimeoutMinutes: number;
   readonly region?: string;

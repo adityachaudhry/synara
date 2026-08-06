@@ -201,6 +201,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "config.warning",
   "deprecation.notice",
   "files.persisted",
+  "runtime.stage",
   "runtime.warning",
   "runtime.error",
 ]);
@@ -253,6 +254,7 @@ const ModelReroutedType = Schema.Literal("model.rerouted");
 const ConfigWarningType = Schema.Literal("config.warning");
 const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
+const RuntimeStageType = Schema.Literal("runtime.stage");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 
@@ -728,6 +730,29 @@ const RuntimeErrorPayload = Schema.Struct({
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 
+export const RuntimeStage = Schema.Literals([
+  "sandbox.create",
+  "workspace.checkout",
+  "worker.files",
+  "worker.start",
+  "worker.connect",
+  "session.start",
+  "turn.dispatch",
+]);
+export type RuntimeStage = typeof RuntimeStage.Type;
+
+export const RuntimeStageState = Schema.Literals(["started", "completed", "failed"]);
+export type RuntimeStageState = typeof RuntimeStageState.Type;
+
+export const RuntimeStagePayload = Schema.Struct({
+  stage: RuntimeStage,
+  state: RuntimeStageState,
+  cold: Schema.Boolean,
+  elapsedMs: Schema.optional(NonNegativeInt),
+  detail: Schema.optional(UnknownRecordSchema),
+});
+export type RuntimeStagePayload = typeof RuntimeStagePayload.Type;
+
 const ProviderRuntimeSessionStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: SessionStartedType,
@@ -1088,6 +1113,13 @@ const ProviderRuntimeErrorEvent = Schema.Struct({
 });
 export type ProviderRuntimeErrorEvent = typeof ProviderRuntimeErrorEvent.Type;
 
+export const ProviderRuntimeStageEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: RuntimeStageType,
+  payload: RuntimeStagePayload,
+});
+export type ProviderRuntimeStageEvent = typeof ProviderRuntimeStageEvent.Type;
+
 export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
@@ -1136,6 +1168,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeConfigWarningEvent,
   ProviderRuntimeDeprecationNoticeEvent,
   ProviderRuntimeFilesPersistedEvent,
+  ProviderRuntimeStageEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
 ]);

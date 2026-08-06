@@ -9,7 +9,7 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
-import type { ThreadId } from "@synara/contracts";
+import type { ProviderPrepareThreadResult, ThreadId } from "@synara/contracts";
 import type {
   ProviderBlockingDeliveryEvidence,
   ProviderDeliveryReconciliationOutcome,
@@ -27,6 +27,11 @@ export interface ProviderDeliveryReconciliationResult {
  * ProviderCommandReactorShape - Service API for provider command reactors.
  */
 export interface ProviderCommandReactorShape {
+  /** Best-effort preparation of a first-turn provider runtime before send. */
+  readonly prepareThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderPrepareThreadResult, unknown>;
+
   /**
    * Start reacting to provider-intent orchestration domain events.
    *

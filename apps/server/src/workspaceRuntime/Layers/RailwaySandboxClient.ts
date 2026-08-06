@@ -24,6 +24,7 @@ import {
 import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 
 export interface RailwaySdkCreateInput {
+  readonly checkpointName?: string;
   readonly token: string;
   readonly authType: "bearer" | "project-token";
   readonly environmentId: string;
@@ -95,17 +96,26 @@ interface AttachedProcess {
 const DEFAULT_DURABLE_SESSION_WAIT_MS = 1_500;
 
 const liveRailwaySdk: RailwaySdkFacade = {
-  create: (input) => Sandbox.create(input),
+  create: (input) => {
+    const { checkpointName, ...options } = input;
+    return checkpointName === undefined
+      ? Sandbox.create(options)
+      : Sandbox.create(checkpointName, options);
+  },
   connect: (runtimeId, input) => Sandbox.connect(runtimeId, input),
   list: (input) => Sandbox.list(input),
   isNotFoundError: (cause) => cause instanceof SandboxNotFoundError,
 };
 
-function toRecord(sandbox: Pick<RailwaySdkSandbox, "id" | "status" | "region">) {
+function toRecord(
+  sandbox: Pick<RailwaySdkSandbox, "id" | "status" | "region">,
+  baseSource: RailwaySandboxRecord["baseSource"] = "clean",
+) {
   return {
     id: sandbox.id,
     status: sandbox.status,
     region: sandbox.region,
+    baseSource,
   } satisfies RailwaySandboxRecord;
 }
 
@@ -133,6 +143,7 @@ export function makeRailwaySandboxClient(
 ): RailwaySandboxClientShape {
   const handles = new Map<string, RailwaySdkSandbox>();
   const attachedProcesses = new Map<string, AttachedProcess>();
+  const requiresFreshFileConnection = new Set<string>();
   const durableSessionWaitMs =
     options.durableSessionWaitMs ?? DEFAULT_DURABLE_SESSION_WAIT_MS;
   const createProcessId = options.createProcessId ?? randomUUID;
@@ -167,15 +178,30 @@ export function makeRailwaySandboxClient(
   const create: RailwaySandboxClientShape["create"] = (input: RailwaySandboxCreateInput) =>
     Effect.tryPromise({
       try: async () => {
-        const sandbox = await sdk.create({
+        const sdkInput: RailwaySdkCreateInput = {
           ...connectionInput,
+          ...(input.checkpointName === undefined
+            ? {}
+            : { checkpointName: input.checkpointName }),
           networkIsolation: input.networkIsolation,
           idleTimeoutMinutes: input.idleTimeoutMinutes,
           ...(input.region === undefined ? {} : { region: input.region }),
           env: { ...input.environment },
-        });
+        };
+        let baseSource: RailwaySandboxRecord["baseSource"] =
+          input.checkpointName === undefined ? "clean" : "checkpoint";
+        let sandbox: RailwaySdkSandbox;
+        try {
+          sandbox = await sdk.create(sdkInput);
+        } catch (cause) {
+          if (input.checkpointName === undefined) throw cause;
+          const { checkpointName: _checkpointName, ...cleanInput } = sdkInput;
+          sandbox = await sdk.create(cleanInput);
+          baseSource = "clean";
+        }
         handles.set(sandbox.id, sandbox);
-        return toRecord(sandbox);
+        requiresFreshFileConnection.add(sandbox.id);
+        return toRecord(sandbox, baseSource);
       },
       catch: (cause) =>
         clientFailure(sdk, "create", undefined, cause) as RailwaySandboxClientError,
@@ -187,6 +213,7 @@ export function makeRailwaySandboxClient(
         const sandbox = await sdk.connect(runtimeId, connectionInput);
         await sandbox.refresh();
         handles.set(runtimeId, sandbox);
+        requiresFreshFileConnection.delete(runtimeId);
         return toRecord(sandbox);
       },
       catch: (cause) => clientFailure(sdk, "connect", runtimeId, cause),
@@ -233,11 +260,21 @@ export function makeRailwaySandboxClient(
           catch: (cause) => clientFailure(sdk, "destroy", runtimeId, cause),
         }),
       ),
-      Effect.tap(() => Effect.sync(() => handles.delete(runtimeId))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          handles.delete(runtimeId);
+          requiresFreshFileConnection.delete(runtimeId);
+        }),
+      ),
     );
 
   const writeFile: RailwaySandboxClientShape["writeFile"] = (runtimeId, input) =>
-    loadFresh(runtimeId).pipe(
+    (requiresFreshFileConnection.has(runtimeId)
+      ? loadFresh(runtimeId).pipe(
+          Effect.tap(() => Effect.sync(() => requiresFreshFileConnection.delete(runtimeId))),
+        )
+      : load(runtimeId)
+    ).pipe(
       Effect.flatMap((sandbox) =>
         Effect.tryPromise({
           try: () =>

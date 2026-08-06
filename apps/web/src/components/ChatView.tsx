@@ -2167,6 +2167,27 @@ export default function ChatView({
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  const preparedProviderThreadIdRef = useRef<ThreadId | null>(null);
+  const prepareFirstTurnRuntime = useCallback(() => {
+    if (
+      !isServerThread ||
+      !activeThread ||
+      selectedProvider !== "pi" ||
+      activeThread.latestTurn !== null ||
+      activeThread.messages.length > 0 ||
+      preparedProviderThreadIdRef.current === activeThread.id
+    ) {
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) return;
+    preparedProviderThreadIdRef.current = activeThread.id;
+    void api.provider.prepareThread({ threadId: activeThread.id }).catch(() => {
+      if (preparedProviderThreadIdRef.current === activeThread.id) {
+        preparedProviderThreadIdRef.current = null;
+      }
+    });
+  }, [activeThread, isServerThread, selectedProvider]);
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
@@ -11016,6 +11037,7 @@ export default function ChatView({
                     onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                     onChange={onPromptChange}
                     onCommandKeyDown={onComposerCommandKey}
+                    onFocus={prepareFirstTurnRuntime}
                     onPaste={onComposerPaste}
                     {...(canCollapsePastedTextToDraft
                       ? { onCollapsePastedText: addPastedTextToDraft }

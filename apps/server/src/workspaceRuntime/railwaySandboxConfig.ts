@@ -1,10 +1,11 @@
 export interface RailwaySandboxRuntimeConfigInput {
-  readonly token?: string;
-  readonly environmentId?: string;
-  readonly authType?: string;
-  readonly region?: string;
-  readonly idleTimeoutMinutes?: string;
-  readonly networkIsolation?: string;
+  readonly token?: string | undefined;
+  readonly environmentId?: string | undefined;
+  readonly authType?: string | undefined;
+  readonly region?: string | undefined;
+  readonly idleTimeoutMinutes?: string | undefined;
+  readonly networkIsolation?: string | undefined;
+  readonly workerCheckpoint?: string | undefined;
 }
 
 export type RailwaySandboxRuntimeConfig =
@@ -17,6 +18,7 @@ export type RailwaySandboxRuntimeConfig =
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
       readonly networkIsolation: "PRIVATE" | "ISOLATED";
+      readonly workerCheckpoint?: "auto" | string;
     };
 
 export type RailwaySandboxRuntimeConfigDescription =
@@ -28,6 +30,7 @@ export type RailwaySandboxRuntimeConfigDescription =
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
       readonly networkIsolation: "PRIVATE" | "ISOLATED";
+      readonly workerCheckpoint?: "auto" | string;
     };
 
 const TOKEN_ENV_KEY = "SYNARA_RAILWAY_SANDBOX_TOKEN";
@@ -47,13 +50,15 @@ export function resolveRailwaySandboxRuntimeConfig(
   const region = trimmed(input.region);
   const idleTimeoutInput = trimmed(input.idleTimeoutMinutes);
   const networkIsolationInput = trimmed(input.networkIsolation);
+  const workerCheckpoint = trimmed(input.workerCheckpoint);
   const hasAnyConfiguration =
     token !== undefined ||
     environmentId !== undefined ||
     authTypeInput !== undefined ||
     region !== undefined ||
     idleTimeoutInput !== undefined ||
-    networkIsolationInput !== undefined;
+    networkIsolationInput !== undefined ||
+    workerCheckpoint !== undefined;
 
   if (!hasAnyConfiguration) {
     return { enabled: false };
@@ -65,6 +70,9 @@ export function resolveRailwaySandboxRuntimeConfig(
   ];
   if (missing.length > 0) {
     throw new Error(`Incomplete Railway Sandbox configuration; missing ${missing.join(", ")}.`);
+  }
+  if (token === undefined || environmentId === undefined) {
+    throw new Error("Incomplete Railway Sandbox configuration.");
   }
 
   const authType = authTypeInput ?? "bearer";
@@ -92,6 +100,15 @@ export function resolveRailwaySandboxRuntimeConfig(
     );
   }
 
+  if (
+    workerCheckpoint !== undefined &&
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(workerCheckpoint)
+  ) {
+    throw new Error(
+      "SYNARA_RAILWAY_SANDBOX_WORKER_CHECKPOINT must be auto or a safe Railway checkpoint name.",
+    );
+  }
+
   return {
     enabled: true,
     token,
@@ -100,6 +117,7 @@ export function resolveRailwaySandboxRuntimeConfig(
     ...(region === undefined ? {} : { region }),
     idleTimeoutMinutes,
     networkIsolation,
+    ...(workerCheckpoint === undefined ? {} : { workerCheckpoint }),
   };
 }
 
@@ -117,5 +135,6 @@ export function describeRailwaySandboxRuntimeConfig(
     ...(config.region === undefined ? {} : { region: config.region }),
     idleTimeoutMinutes: config.idleTimeoutMinutes,
     networkIsolation: config.networkIsolation,
+    ...(config.workerCheckpoint === undefined ? {} : { workerCheckpoint: config.workerCheckpoint }),
   };
 }

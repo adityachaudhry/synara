@@ -14,6 +14,7 @@ export interface WorkspaceRuntimeBinding {
     | "destroyed"
     | "failed";
   readonly region: string;
+  readonly baseSource?: "checkpoint" | "clean" | undefined;
 }
 
 export interface WorkspaceRuntimeInventoryRecord {
@@ -25,6 +26,7 @@ export interface WorkspaceRuntimeInventoryRecord {
 
 export interface WorkspaceRuntimeCreateInput {
   readonly lifecycleGeneration: string;
+  readonly checkpointName?: string;
   readonly environment: Readonly<Record<string, string>>;
 }
 

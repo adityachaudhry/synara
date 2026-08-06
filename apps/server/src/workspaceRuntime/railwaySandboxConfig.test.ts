@@ -19,6 +19,7 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
       region: " us-east4-eqdc4a ",
       idleTimeoutMinutes: "30",
       networkIsolation: " ISOLATED ",
+      workerCheckpoint: " auto ",
       }),
     ).toEqual({
       enabled: true,
@@ -28,6 +29,7 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
       region: "us-east4-eqdc4a",
       idleTimeoutMinutes: 30,
       networkIsolation: "ISOLATED",
+      workerCheckpoint: "auto",
     });
   });
 
@@ -87,5 +89,15 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
     });
 
     expect(JSON.stringify(describeRailwaySandboxRuntimeConfig(config))).not.toContain("secret");
+  });
+
+  it("rejects an unsafe worker checkpoint name", () => {
+    expect(() =>
+      resolveRailwaySandboxRuntimeConfig({
+        token: "secret",
+        environmentId: "env-1",
+        workerCheckpoint: "../../secret",
+      }),
+    ).toThrow(/WORKER_CHECKPOINT/);
   });
 });

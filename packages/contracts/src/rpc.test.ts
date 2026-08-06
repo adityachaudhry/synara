@@ -19,6 +19,7 @@ describe("WS RPC contracts", () => {
     expect(WsRpcGroup).toBeDefined();
     expect(WsBootstrapRpcGroup.requests.has("bootstrap.negotiate")).toBe(true);
     expect(WsFeatureRpcGroup.requests.has("bootstrap.negotiate")).toBe(false);
+    expect(WsFeatureRpcGroup.requests.has("provider.prepareThread")).toBe(true);
     expect(
       WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers),
     ).toBe(true);

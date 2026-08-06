@@ -6,6 +6,7 @@ export const GITEA_CHECKOUT_TOKEN_ENV_KEY = "SYNARA_GITEA_CHECKOUT_TOKEN";
 export const GITEA_CHECKOUT_ROOT = "/workspace/repository";
 
 const COMMIT_MARKER = "__SYNARA_CHECKOUT_COMMIT__=";
+const CHECKOUT_MODE_MARKER = "__SYNARA_CHECKOUT_MODE__=";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
@@ -57,7 +58,7 @@ export function makeGiteaCheckoutPlan(input: {
     `${git} init`,
     `mkdir -p ${shellQuote(path.posix.join(checkoutRoot, ".git/info"))}`,
     `printf '%s\\n' ${shellQuote(sparsePattern)} > ${shellQuote(path.posix.join(checkoutRoot, ".git/info/sparse-checkout"))}`,
-    `GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}`,
+    `if GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 --no-tags ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
     `${git} -c core.sparseCheckout=true checkout --detach FETCH_HEAD`,
     `test -f ${shellQuote(path.posix.join(companyCwd, "company.json"))}`,
     `printf '${COMMIT_MARKER}%s\\n' \"$(${git} rev-parse HEAD)\"`,
@@ -78,4 +79,18 @@ export function parseGiteaCheckoutCommit(stdout: string): string {
     throw new Error("Gitea checkout output did not contain a valid commit marker.");
   }
   return match[1];
+}
+
+export function parseGiteaCheckoutResult(stdout: string): {
+  readonly commit: string;
+  readonly checkoutMode: "partial" | "shallow";
+} {
+  const commit = parseGiteaCheckoutCommit(stdout);
+  const match = stdout.match(
+    new RegExp(`(?:^|\\n)${CHECKOUT_MODE_MARKER}(partial|shallow)(?:\\n|$)`, "u"),
+  );
+  if (match?.[1] !== "partial" && match?.[1] !== "shallow") {
+    throw new Error("Gitea checkout output did not contain a valid checkout mode marker.");
+  }
+  return { commit, checkoutMode: match[1] };
 }

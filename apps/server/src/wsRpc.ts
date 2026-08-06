@@ -1797,6 +1797,11 @@ const makeWsRpcHandlersLayer = () =>
             providerDiscoveryService.getComposerCapabilities(input),
             "Failed to get composer capabilities",
           ),
+        [WS_METHODS.providerPrepareThread]: (input) =>
+          rpcEffect(
+            providerCommandReactor.prepareThread(input.threadId),
+            "Failed to prepare provider thread",
+          ),
         [WS_METHODS.providerCompactThread]: (input) =>
           rpcEffect(providerService.compactThread(input), "Failed to compact thread"),
         [WS_METHODS.providerListCommands]: (input) =>

@@ -80,7 +80,7 @@ describe("ProviderWorkerProvisioner", () => {
         return {
           exitCode: 0,
           stdout:
-            "__SYNARA_CHECKOUT_COMMIT__=0123456789abcdef0123456789abcdef01234567\n",
+            "__SYNARA_CHECKOUT_MODE__=partial\n__SYNARA_CHECKOUT_COMMIT__=0123456789abcdef0123456789abcdef01234567\n",
           stderr: "",
           timedOut: false,
           truncated: false,
@@ -129,11 +129,12 @@ describe("ProviderWorkerProvisioner", () => {
       repositoryCheckout: {
         binding: repositoryBinding,
         commit: "0123456789abcdef0123456789abcdef01234567",
+        checkoutMode: "partial",
       },
     });
     expect(harness.calls).toEqual([
-      "checkout",
       "expect",
+      "checkout",
       "write:/opt/synara/provider-worker.mjs",
       "write:/opt/synara/provider-worker.json",
       "start",
@@ -180,7 +181,7 @@ describe("ProviderWorkerProvisioner", () => {
         provisioner.start({ lifecycleGeneration: "generation-1", repositoryBinding }),
       ),
     ).rejects.toMatchObject({ operation: "checkout.exec" });
-    expect(harness.calls).toEqual(["destroy"]);
+    expect(harness.calls).toEqual(["expect", "retire", "revoke", "destroy"]);
   });
 
   it("uploads an atomic worker and private config before waiting for its fenced connection", async () => {
@@ -219,6 +220,51 @@ describe("ProviderWorkerProvisioner", () => {
       command:
         "mkdir -p '/workspace/.synara-provider-worker/state/logs' && exec node '/opt/synara/provider-worker.mjs' >> '/workspace/.synara-provider-worker/state/logs/worker.log' 2>&1",
     });
+  });
+
+  it("boots from the digest checkpoint and only writes the per-session config", async () => {
+    const harness = makeHarness();
+    harness.workspace.create.mockReturnValue(
+      Effect.succeed({ ...workspaceBinding, baseSource: "checkpoint" }),
+    );
+    const stages: Array<{ readonly stage: string; readonly state: string }> = [];
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+        workerCheckpoint: "auto",
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    await Effect.runPromise(
+      provisioner.start({
+        lifecycleGeneration: "generation-1",
+        onStage: (payload) =>
+          Effect.sync(() => stages.push({ stage: payload.stage, state: payload.state })),
+      }),
+    );
+
+    expect(harness.workspace.create).toHaveBeenCalledWith({
+      lifecycleGeneration: "generation-1",
+      checkpointName: "synara-provider-worker-87eba76e7f3164534045ba92",
+      environment: {},
+    });
+    expect(harness.calls).toEqual([
+      "expect",
+      "write:/opt/synara/provider-worker.json",
+      "start",
+      "connected",
+    ]);
+    expect(stages).toEqual([
+      { stage: "sandbox.create", state: "started" },
+      { stage: "sandbox.create", state: "completed" },
+      { stage: "worker.files", state: "started" },
+      { stage: "worker.files", state: "completed" },
+      { stage: "worker.start", state: "started" },
+      { stage: "worker.start", state: "completed" },
+      { stage: "worker.connect", state: "started" },
+      { stage: "worker.connect", state: "completed" },
+    ]);
   });
 
   it("retires credentials and destroys the exact sandbox when startup cannot connect", async () => {
