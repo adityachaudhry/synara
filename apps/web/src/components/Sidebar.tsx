@@ -387,6 +387,7 @@ import { useFocusedChatContext } from "../focusedChatContext";
 import { waitForRecoverableProjectInReadModel } from "../lib/projectCreateRecovery";
 import {
   createOrRecoverProjectFromPath,
+  GITEA_COMPANY_DEFAULT_MODEL_SELECTION,
   PROJECT_CREATE_EXISTING_SYNC_ERROR,
 } from "../lib/projectCreation";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -3384,10 +3385,7 @@ export default function Sidebar() {
             createIfMissing: true,
             spaceId: value.spaceId,
             title: value.company.companyName,
-            defaultModelSelection: {
-              provider: "pi",
-              model: getDefaultModel("pi"),
-            },
+            defaultModelSelection: GITEA_COMPANY_DEFAULT_MODEL_SELECTION,
             repositoryBinding: value.company.binding,
           });
         } else {

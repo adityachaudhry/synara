@@ -28,6 +28,12 @@ export const PROJECT_CREATE_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 export const PROJECT_CREATE_SYNC_ERROR =
   "The project was created, but it has not synced into Glasswing AI yet. Try again in a moment.";
+// Pi discovers most models dynamically, but the server explicitly guarantees
+// this Anthropic entry whenever Anthropic credentials are available.
+export const GITEA_COMPANY_DEFAULT_MODEL_SELECTION = {
+  provider: "pi",
+  model: "anthropic/claude-fable-5",
+} as const satisfies ModelSelection;
 
 function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
   return workspaceRoot.split(/[/\\]/).findLast((segment) => segment.length > 0) ?? workspaceRoot;

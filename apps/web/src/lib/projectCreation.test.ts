@@ -12,7 +12,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useSpacesUiStore } from "../spacesUiStore";
-import { createOrRecoverProjectFromPath } from "./projectCreation";
+import {
+  createOrRecoverProjectFromPath,
+  GITEA_COMPANY_DEFAULT_MODEL_SELECTION,
+} from "./projectCreation";
 
 const NOW_ISO = "2026-06-26T20:00:00.000Z";
 const WORKSPACE_ROOT = "/Users/tester/Developer/synara";
@@ -110,7 +113,7 @@ describe("createOrRecoverProjectFromPath", () => {
       api: makeApi(dispatchCommand),
       workspaceRoot: "/data/gitea-company-projects/cue-cloud",
       title: "Cue Cloud",
-      defaultModelSelection: { provider: "pi", model: "pi" },
+      defaultModelSelection: GITEA_COMPANY_DEFAULT_MODEL_SELECTION,
       repositoryBinding,
       loadSnapshot: async () =>
         makeSnapshot(
@@ -123,7 +126,10 @@ describe("createOrRecoverProjectFromPath", () => {
     expect(dispatchCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Cue Cloud",
-        defaultModelSelection: { provider: "pi", model: "pi" },
+        defaultModelSelection: {
+          provider: "pi",
+          model: "anthropic/claude-fable-5",
+        },
         repositoryBinding,
       }),
     );
