@@ -13,4 +13,17 @@ describe("Railway Docker entrypoint", () => {
     expect(script).toContain("ipv6only=0");
     expect(script).toContain("TCP:127.0.0.1:3774");
   });
+
+  it("initializes the mounted state directory before dropping root privileges", () => {
+    const script = readFileSync(
+      new URL("../../../docker-entrypoint.sh", import.meta.url),
+      "utf8",
+    );
+    const dockerfile = readFileSync(new URL("../../../Dockerfile", import.meta.url), "utf8");
+
+    expect(dockerfile).not.toContain("\nUSER node\n");
+    expect(script).toContain('if [ "$(id -u)" -eq 0 ]; then');
+    expect(script).toContain("install -d -m 0700 -o node -g node /data/userdata");
+    expect(script).toContain('exec /usr/sbin/runuser -u node -- "$0" "$@"');
+  });
 });

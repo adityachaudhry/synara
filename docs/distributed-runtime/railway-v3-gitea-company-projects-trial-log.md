@@ -1,0 +1,158 @@
+# Railway v3 Gitea company projects — trial log
+
+Date: 2026-08-06
+
+## Objective and boundary
+
+Deploy an additive, browser-only Synara service into Railway project `v3`, environment `dev`.
+Users choose a company directory from the private `glasswing-admin/glasswing-company-data`
+Gitea repository, create an ordinary Synara project/thread, and run Pi in a disposable Railway
+Sandbox hydrated with only that company directory. Existing v3 services are not modified.
+
+The implementation remains an adapter over Synara's existing primitives:
+
+- `Project` receives an optional immutable `repositoryBinding`.
+- `Thread`, `Turn`, orchestration commands/events, provider sessions, and provider runtime events
+  remain the durable flow.
+- Railway sandboxes and Pi sessions remain disposable execution attempts.
+- SQLite on the Synara `/data` volume remains control-plane truth; sandbox files are not truth.
+
+## Target topology
+
+- Railway project: `v3` (`7bf8f727-f0a8-4aea-b1b4-4266aecc49f0`)
+- Railway environment: `dev` (`51f1e0e3-5714-4b56-8214-03e69b0c6afc`)
+- Existing Gitea service: `glasswing-gitea` (`999981ea-3c2a-4bb2-a077-068673527a7d`)
+- Existing Gitea origin: `https://glasswing-gitea-dev.up.railway.app`
+- New additive service: `synara-gitea-dev` (`ad3904fc-9b54-460d-b147-d87a4f0956c6`)
+- New additive volume: `synara-gitea-dev-volume` mounted at `/data`
+- Browser URL: `https://synara-gitea-dev-dev.up.railway.app`
+- Sandbox policy: `ISOLATED` (public NAT egress only), 30-minute idle timeout, `us-east4-eqdc4a`
+
+The Dockerfile builds `apps/web` and `apps/server` only. Electron is not built or deployed.
+
+## Repository catalog observations
+
+The Gitea repository is private and has 33 directories under `companies/`. The contents API and
+Git smart HTTP both accept the existing read token. The user-scoped `/api/v1/user/repos` endpoint
+returns `403`, so catalog enumeration uses the repository contents endpoint rather than relying on
+user repository listing.
+
+Each valid directory must have a safe slug and a readable `company.json`. Invalid directories are
+returned as diagnostics, not silently converted into projects. Project creation revalidates the
+descriptor server-side and canonicalizes title, compatibility workspace root, repository origin,
+owner, repository, ref, and path before dispatching Synara's existing `project.create` command.
+
+## Implementation trials and corrections
+
+### Catalog and project persistence
+
+Added schema-only Gitea binding/catalog contracts, an optional `repository_binding_json` projection
+column, catalog RPC, browser company picker, and server-side create admission. Ordinary local and
+GitHub projects retain their current behavior. The migration lineage check passed through 73 tags.
+
+### Provider startup propagation
+
+The first focused provider-reactor test proved that repository metadata stopped at the Project
+projection. The reactor now resolves project and cwd together and includes the binding only for a
+bound project. A companion assertion proves an ordinary project still omits it.
+
+### Sandbox hydration
+
+The first provisioner test showed the worker could start before any repository checkout. The
+provisioner now validates the binding against the configured Gitea repository, creates a fresh
+sandbox, sparse-checks out only the selected company under `/workspace/repository`, verifies
+`company.json`, records the immutable commit SHA, and only then uploads/starts the provider worker.
+
+The checkout token is installed only in the sandbox environment. The shell command contains the
+environment variable name, never the token. The token is not written to the worker config, runtime
+binding, SQLite, browser RPC payloads, or logs. A failed checkout destroys the sandbox before worker
+launch.
+
+The routed Pi adapter now fails closed if a Gitea-bound project is configured for local execution.
+For remote execution it gives the provisioner the binding, removes the binding before the provider
+RPC, and replaces the controller compatibility cwd with the verified sandbox company cwd.
+
+### Network policy
+
+Railway SDK 3.7 documents `ISOLATED` as NAT egress without environment private-network access and
+`PRIVATE` as membership in the Railway environment network. The original runtime hard-coded
+`PRIVATE`. A new validated setting makes the policy explicit. v3/dev uses `ISOLATED`, reaches Gitea
+over HTTPS, and returns to Synara over its public WSS endpoint.
+
+### Pi model default caught before deployment
+
+Pi deliberately has no global static model default because its catalog is discovered dynamically.
+The first company UI path called `getDefaultModel("pi")`, which returns `null`. Focused tests had
+covered binding transport but not the Sidebar call site. The company adapter now selects
+`anthropic/claude-fable-5`, one of the Anthropic models the existing Pi adapter explicitly ensures,
+while normal model selection remains available after project creation.
+
+## Railway deployment trials
+
+### Wrong local link detected before mutation
+
+`railway status` initially showed the isolated worktree linked to v4/production and
+`synara-distributed-preview`. No mutation was made there. The worktree was explicitly relinked by
+project and environment IDs to v3/dev and verified before creating the new service.
+
+### Volume selector mismatch
+
+Attempting `railway volume add` with top-level `--project`, `--environment`, and `--service`
+selectors failed because those flags are accepted by the `volume` parent but not forwarded by the
+`volume add` subcommand in Railway CLI 5.15.0. After verifying the exact linked service, the retry
+used `railway volume add --mount-path /data --json` and created only the new service volume.
+
+### Project-token API boundary
+
+GraphQL schema introspection showed `projectTokenCreate(ProjectTokenCreateInput!)`, but invoking it
+with the authenticated Railway CLI OAuth identity returned `Not Authorized`. This reproduces the
+earlier v4 trial: token creation is intentionally a Railway settings-UI privilege boundary.
+
+For the initial canary only, the refreshed CLI access token is installed as `bearer`. It is
+temporary and must not be called durable. The final configuration must replace it with a v3/dev
+project token and change `SYNARA_RAILWAY_SANDBOX_AUTH_TYPE` to `project-token`.
+
+### Secret-safe variable installation mistakes
+
+The first secret-safe pipeline used GNU `base64 --decode`; macOS `base64` rejected that flag. A
+non-secret origin probe verified the Railway CLI syntax, then the pipeline switched to `base64 -D`.
+The long Anthropic value still failed through that pipeline, so the correction passed it directly
+to `railway variable set ... --stdin` through a spawned process. No secret value was printed.
+
+### Clean Docker build
+
+The first source upload is deployment `d1c33aa8-e10a-4fbe-93ac-72c818348599`. The clean build
+installed 2,583 packages, built the browser bundle in 1 minute 58 seconds, built the server and
+provider-worker artifact successfully, and then spent additional time exporting the large runtime
+image. End-to-end status remains to be appended after the service and browser canary are verified.
+
+### First boot — mounted volume ownership
+
+**Observation:** The image built successfully, but the public health endpoint returned `502` and
+the container restarted repeatedly. The exact startup cause was `EACCES: permission denied, mkdir
+'/data/userdata'`.
+
+**Cause:** The image's build stage created and owned `/data` as `node`, but Railway mounts the new
+volume over that path at runtime. The mount root is owned by root, and the Dockerfile started
+directly as `USER node`, so Synara could not initialize its private state directory.
+
+**Correction:** Add a focused entrypoint regression. The runtime now starts at the container
+default user only long enough to `install` `/data/userdata` with mode `0700` and owner `node`, then
+immediately re-executes the same entrypoint through `runuser -u node`. A disposable Docker-volume
+probe verified that `node` can create a directory inside the initialized path; the probe volume was
+then removed. The application and proxy still run unprivileged.
+
+## Focused verification completed before deployment
+
+- 59 contract tests passed.
+- 102 persistence/projection tests passed.
+- Migration lineage passed across 73 tags.
+- 54 catalog, RPC, and project-creation tests passed.
+- 5 browser dialog tests passed from the required `apps/web` Vitest cwd.
+- 2 provider-reactor binding tests passed.
+- 48 catalog, routing, checkout, provisioner, and workspace-runtime tests passed.
+- 4 project-creation tests passed after correcting the Pi default model.
+
+The repository intentionally did not run `bun fmt`, `bun lint`, or `bun typecheck`; the workspace
+instructions prohibit those heavyweight checks unless the user explicitly requests them. The clean
+Railway Docker build is the production-bundle compilation check for this deployment.
