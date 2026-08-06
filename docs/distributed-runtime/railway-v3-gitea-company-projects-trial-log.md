@@ -251,6 +251,18 @@ URL directly in `git fetch`. The plan still supplies the token only through the 
 uses sparse checkout, detaches `FETCH_HEAD`, verifies `company.json`, and records the commit marker.
 The checkout, provisioner, and routed-adapter suites pass 14 focused tests.
 
+### Railway safe-git rejected persistent sparse-checkout config
+
+**Observation:** Deployment `9fbb98a0-0b30-425b-a175-f842d0473f08` created sandbox
+`0456f80e-8669-4dab-bfcb-74a70eeccae0`, accepted `git init`, and then rejected
+`git config core.sparseCheckout true`. The provisioner again destroyed the incomplete sandbox
+before worker launch.
+
+**Correction:** Add a failing assertion prohibiting the persistent config command. Sparse behavior
+is now enabled only for checkout with `git -c core.sparseCheckout=true checkout --detach
+FETCH_HEAD`; the existing sparse pattern remains in `.git/info/sparse-checkout`. The same 14
+checkout/provisioner/routing tests pass.
+
 ## Focused verification completed before deployment
 
 - 59 contract tests passed.

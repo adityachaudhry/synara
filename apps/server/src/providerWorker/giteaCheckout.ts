@@ -55,11 +55,10 @@ export function makeGiteaCheckoutPlan(input: {
     "set -eu",
     `mkdir -p ${shellQuote(checkoutRoot)}`,
     `${git} init`,
-    `${git} config core.sparseCheckout true`,
     `mkdir -p ${shellQuote(path.posix.join(checkoutRoot, ".git/info"))}`,
     `printf '%s\\n' ${shellQuote(sparsePattern)} > ${shellQuote(path.posix.join(checkoutRoot, ".git/info/sparse-checkout"))}`,
     `GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}`,
-    `${git} checkout --detach FETCH_HEAD`,
+    `${git} -c core.sparseCheckout=true checkout --detach FETCH_HEAD`,
     `test -f ${shellQuote(path.posix.join(companyCwd, "company.json"))}`,
     `printf '${COMMIT_MARKER}%s\\n' \"$(${git} rev-parse HEAD)\"`,
   ].join(" && ");

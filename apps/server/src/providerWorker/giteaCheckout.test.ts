@@ -34,6 +34,8 @@ describe("makeGiteaCheckoutPlan", () => {
     expect(plan.command).toContain("$SYNARA_GITEA_CHECKOUT_TOKEN");
     expect(plan.command).not.toContain("super-secret-token");
     expect(plan.command).not.toContain("remote add");
+    expect(plan.command).not.toContain("config core.sparseCheckout");
+    expect(plan.command).toContain("-c core.sparseCheckout=true checkout --detach FETCH_HEAD");
     expect(plan.command).toContain(
       "fetch --depth=1 'https://glasswing-gitea-dev.up.railway.app/glasswing-admin/glasswing-company-data.git' 'main'",
     );
