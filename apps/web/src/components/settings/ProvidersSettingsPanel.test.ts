@@ -5,10 +5,19 @@ import { type AppSettings, AppSettingsSchema } from "~/appSettings";
 import {
   createProviderInstallDisclosureState,
   createProviderInstallResetPatch,
+  isProviderInstallFieldVisibleOnSurface,
   isProviderInstallSettingsDirty,
 } from "./ProvidersSettingsPanel";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
+
+describe("isProviderInstallFieldVisibleOnSurface", () => {
+  it("keeps distributed execution routing browser-only", () => {
+    expect(isProviderInstallFieldVisibleOnSurface("execution-target", false)).toBe(true);
+    expect(isProviderInstallFieldVisibleOnSurface("execution-target", true)).toBe(false);
+    expect(isProviderInstallFieldVisibleOnSurface("text", true)).toBe(true);
+  });
+});
 
 describe("createProviderInstallDisclosureState", () => {
   it("opens Pi rather than Codex when Railway Sandbox execution is configured", () => {

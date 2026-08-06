@@ -100,6 +100,23 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     return binding ? remote(binding) : localEffect;
   };
 
+  const loadPersistedRemote = (threadId: Parameters<PiAdapterShape["hasSession"]>[0]) =>
+    directory.getBinding(threadId).pipe(
+      Effect.map((binding) =>
+        Option.match(binding, {
+          onNone: () => undefined,
+          onSome: (value) => persistedDistributedBinding(value.runtimePayload),
+        }),
+      ),
+      Effect.mapError((cause) =>
+        adapterError(
+          "runtime.binding.read",
+          "Failed to read the persisted remote Pi runtime binding.",
+          cause,
+        ),
+      ),
+    );
+
   const persistRemoteBinding = (input: {
     readonly threadId: Parameters<PiAdapterShape["hasSession"]>[0];
     readonly lifecycleGeneration: string;
@@ -245,12 +262,18 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       local.respondToUserInput(threadId, requestId, answers),
     );
 
-  const stopSession: PiAdapterShape["stopSession"] = (threadId) => {
-    const binding = remoteByThread.get(threadId);
-    if (!binding) return local.stopSession(threadId);
-    return Effect.gen(function* () {
-      const requestResult = yield* requestUnknown(binding, "session.stop", { threadId }).pipe(
-        Effect.result,
+  const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
+    Effect.gen(function* () {
+      const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
+      if (!binding) return yield* local.stopSession(threadId);
+      yield* requestUnknown(binding, "session.stop", { threadId }).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning(
+            "Remote Pi session.stop response was lost; destroying the bound sandbox.",
+            cause,
+          ),
+        ),
+        Effect.catch(() => Effect.void),
       );
       yield* provisioner.stop(binding).pipe(
         Effect.mapError((cause) =>
@@ -258,9 +281,7 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
         ),
       );
       remoteByThread.delete(threadId);
-      if (requestResult._tag === "Failure") return yield* requestResult.failure;
     });
-  };
 
   const listSessions: PiAdapterShape["listSessions"] = () =>
     Effect.all([
@@ -311,14 +332,34 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     );
 
   const stopAll: PiAdapterShape["stopAll"] = () =>
-    Effect.forEach(Array.from(remoteByThread.entries()), ([threadId, binding]) =>
-      provisioner.stop(binding).pipe(
-        Effect.tap(() => Effect.sync(() => remoteByThread.delete(threadId))),
-        Effect.mapError((cause) =>
-          adapterError("runtime.stopAll", "Failed to destroy a remote Pi runtime.", cause),
-        ),
+    Effect.gen(function* () {
+      const bindings = new Map<string, ProviderWorkerRuntimeBinding>();
+      for (const persisted of yield* directory.listBindings()) {
+        if (persisted.provider !== "pi") continue;
+        const remote = persistedDistributedBinding(persisted.runtimePayload);
+        if (remote) bindings.set(persisted.threadId, remote);
+      }
+      for (const [threadId, binding] of remoteByThread) bindings.set(threadId, binding);
+
+      yield* Effect.forEach(
+        Array.from(bindings.entries()),
+        ([threadId, binding]) =>
+          provisioner.stop(binding).pipe(
+            Effect.tap(() => Effect.sync(() => remoteByThread.delete(threadId))),
+            Effect.mapError((cause) =>
+              adapterError("runtime.stopAll", "Failed to destroy a remote Pi runtime.", cause),
+            ),
+          ),
+        { discard: true },
+      );
+      yield* local.stopAll();
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof ProviderAdapterRequestError
+          ? cause
+          : adapterError("runtime.stopAll", "Failed to stop all Pi runtimes.", cause),
       ),
-    ).pipe(Effect.andThen(local.stopAll()), Effect.asVoid);
+    );
 
   return {
     provider: "pi",

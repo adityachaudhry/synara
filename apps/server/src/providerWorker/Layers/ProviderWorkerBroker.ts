@@ -23,6 +23,7 @@ interface ExpectedWorker {
   readonly fence: ProviderWorkerFence;
   readonly ready: Deferred.Deferred<void, ProviderWorkerBrokerError>;
   lastSequence: number;
+  threadId?: string;
 }
 
 interface ActiveWorker {
@@ -30,6 +31,7 @@ interface ActiveWorker {
   readonly connection: ProviderWorkerConnection;
   lastSequence: number;
   lastSeenAt: number;
+  threadId?: string;
 }
 
 interface PendingRequest {
@@ -99,6 +101,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           connection,
           lastSequence: reservation.lastSequence,
           lastSeenAt: Date.now(),
+          ...(reservation.threadId === undefined ? {} : { threadId: reservation.threadId }),
         });
         yield* connection
           .send({
@@ -151,6 +154,39 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
             "request",
             fence,
             "The expected provider worker is not connected.",
+          );
+        }
+        const paramsThreadId =
+          params !== null && typeof params === "object" && !Array.isArray(params)
+            ? (params as { readonly threadId?: unknown }).threadId
+            : undefined;
+        if (method === "session.start") {
+          if (typeof paramsThreadId !== "string" || paramsThreadId.length === 0) {
+            return yield* registrationError(
+              "request.identity",
+              fence,
+              "A remote session.start request must identify its assigned thread.",
+            );
+          }
+          if (worker.threadId !== undefined && worker.threadId !== paramsThreadId) {
+            return yield* registrationError(
+              "request.identity",
+              fence,
+              "The provider worker is already assigned to a different thread.",
+            );
+          }
+          worker.threadId = paramsThreadId;
+          const reservation = expected.get(key);
+          if (reservation) reservation.threadId = paramsThreadId;
+        } else if (
+          typeof paramsThreadId === "string" &&
+          worker.threadId !== undefined &&
+          worker.threadId !== paramsThreadId
+        ) {
+          return yield* registrationError(
+            "request.identity",
+            fence,
+            "The provider request targets a different thread than this worker assignment.",
           );
         }
         const requestId = randomUUID();
@@ -241,7 +277,21 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                         registrationError("worker.response", frame, frame.error.message),
                       ).pipe(Effect.asVoid);
                 }
-                case "event":
+                case "event": {
+                  if (
+                    frame.event.provider !== "pi" ||
+                    worker.threadId === undefined ||
+                    frame.event.threadId !== worker.threadId ||
+                    frame.event.lifecycleGeneration !== worker.fence.lifecycleGeneration
+                  ) {
+                    return Effect.fail(
+                      registrationError(
+                        "event.identity",
+                        frame,
+                        "Worker event provider, thread, or lifecycle generation does not match its assignment.",
+                      ),
+                    );
+                  }
                   if (frame.sequence <= worker.lastSequence) {
                     return acknowledgeSequence(worker, worker.lastSequence);
                   }
@@ -272,6 +322,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                     ),
                     Effect.andThen(acknowledgeSequence(worker, frame.sequence)),
                   );
+                }
               }
             }),
           );

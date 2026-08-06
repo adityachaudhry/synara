@@ -30,6 +30,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, type ReactNode, useCallback, useMemo, useState } from "react";
 
 import type { AppSettings, AppSettingsBinding } from "~/appSettings";
+import { isElectron } from "~/env";
 import { CentralIcon } from "~/lib/central-icons";
 import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
 import {
@@ -132,6 +133,13 @@ type ProviderInstallSettings = {
   readonly docs: ReadonlyArray<{ readonly label: string; readonly href: string }>;
   readonly fields: readonly ProviderInstallField[];
 };
+
+export function isProviderInstallFieldVisibleOnSurface(
+  kind: ProviderInstallField["kind"],
+  electron: boolean,
+): boolean {
+  return kind !== "execution-target" || !electron;
+}
 
 const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> =
   PROVIDER_DESCRIPTORS.map((descriptor) => ({
@@ -811,14 +819,16 @@ function ProviderToolRow(props: {
                   />
                 </div>
               ) : null}
-              {props.config.fields.map((field) => (
-                <ProviderInstallFieldControl
-                  key={field.settingsKey}
-                  field={field}
-                  settings={props.settings}
-                  updateSettings={props.updateSettings}
-                />
-              ))}
+              {props.config.fields
+                .filter((field) => isProviderInstallFieldVisibleOnSurface(field.kind, isElectron))
+                .map((field) => (
+                  <ProviderInstallFieldControl
+                    key={field.settingsKey}
+                    field={field}
+                    settings={props.settings}
+                    updateSettings={props.updateSettings}
+                  />
+                ))}
             </div>
           </div>
         </CollapsiblePanel>

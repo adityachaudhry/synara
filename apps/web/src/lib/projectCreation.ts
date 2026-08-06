@@ -39,6 +39,37 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
   return workspaceRoot.split(/[/\\]/).findLast((segment) => segment.length > 0) ?? workspaceRoot;
 }
 
+function equalRepositoryBinding(
+  left: ProjectRepositoryBinding | undefined,
+  right: ProjectRepositoryBinding | undefined,
+): boolean {
+  return (
+    left?.kind === right?.kind &&
+    left?.origin === right?.origin &&
+    left?.owner === right?.owner &&
+    left?.repository === right?.repository &&
+    left?.ref === right?.ref &&
+    left?.path === right?.path
+  );
+}
+
+function assertRecoveredRepositoryBinding(
+  requested: ProjectRepositoryBinding | undefined,
+  recovered: OrchestrationShellSnapshot["projects"][number] | null,
+): void {
+  if (requested === undefined) return;
+  if (!recovered) {
+    throw new Error(
+      "This workspace root is already linked, but Synara cannot verify its repository binding yet. Try again after the project syncs.",
+    );
+  }
+  if (!equalRepositoryBinding(requested, recovered.repositoryBinding)) {
+    throw new Error(
+      "This workspace root is already linked to a different repository binding. Choose the existing project or resolve the binding conflict first.",
+    );
+  }
+}
+
 // Creates a project row for a folder, recovering the existing server project when
 // the create command races an already-linked workspace root.
 export async function createOrRecoverProjectFromPath(input: {
@@ -120,6 +151,7 @@ export async function createOrRecoverProjectFromPath(input: {
       delayMs,
     });
     if (project && snapshot) {
+      assertRecoveredRepositoryBinding(input.repositoryBinding, project);
       return {
         projectId: project.id,
         project,
@@ -130,6 +162,7 @@ export async function createOrRecoverProjectFromPath(input: {
 
     const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
     if (duplicateProjectId) {
+      assertRecoveredRepositoryBinding(input.repositoryBinding, null);
       return {
         projectId: duplicateProjectId as ProjectId,
         project: null,

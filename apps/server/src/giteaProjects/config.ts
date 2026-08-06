@@ -98,6 +98,9 @@ export function resolveGiteaCompanyCatalogConfig(input: {
     "SYNARA_GITEA_COMPANIES_ROOT",
     values.SYNARA_GITEA_COMPANIES_ROOT!,
   );
+  if (companiesRoot !== "companies") {
+    throw new Error("SYNARA_GITEA_COMPANIES_ROOT must be exactly 'companies'.");
+  }
   const projectRoot = values.SYNARA_GITEA_PROJECT_ROOT!;
   if (!path.posix.isAbsolute(projectRoot) || path.posix.normalize(projectRoot) !== projectRoot) {
     throw new Error("SYNARA_GITEA_PROJECT_ROOT must be a normalized absolute POSIX path.");

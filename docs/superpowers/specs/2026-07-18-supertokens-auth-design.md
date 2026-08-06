@@ -147,4 +147,3 @@ After local verification:
 - v4 has isolated, healthy SuperTokens and Postgres services.
 - Deployment remains GitHub-Actions-driven.
 - Production success is verified with a real OTP from macOS Mail.
-

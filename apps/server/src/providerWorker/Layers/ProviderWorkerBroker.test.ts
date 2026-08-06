@@ -3,7 +3,7 @@ import {
   type ProviderWorkerServerFrame,
 } from "@synara/contracts";
 import { Effect, Option, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ProviderWorkerBrokerError } from "../Errors";
 import type { ProviderWorkerConnection } from "../Services/ProviderWorkerBroker";
@@ -36,6 +36,40 @@ function makeConnection(onSend?: (frame: ProviderWorkerServerFrame) => void) {
       return closeCount;
     },
   };
+}
+
+async function bindThread(
+  broker: Awaited<ReturnType<typeof makeBroker>>,
+  fake: ReturnType<typeof makeConnection>,
+  threadId = "thread-1",
+): Promise<void> {
+  fake.sent.length = 0;
+  const request = Effect.runPromise(
+    broker.request(fence, "session.start", {
+      threadId,
+      provider: "pi",
+      runtimeMode: "full-access",
+    }),
+  );
+  await viWaitFor(() => fake.sent.length === 1);
+  const frame = fake.sent[0];
+  if (!frame || frame.type !== "request") throw new Error("session.start frame not sent");
+  await Effect.runPromise(
+    broker.accept({
+      protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+      ...fence,
+      type: "response",
+      requestId: frame.requestId,
+      ok: true,
+      result: null,
+    }),
+  );
+  await request;
+  fake.sent.length = 0;
+}
+
+function makeBroker() {
+  return makeProviderWorkerBroker();
 }
 
 describe("ProviderWorkerBroker", () => {
@@ -129,6 +163,7 @@ describe("ProviderWorkerBroker", () => {
     const fake = makeConnection();
     await Effect.runPromise(broker.expectWorker(fence));
     await Effect.runPromise(broker.register(fence, fake.connection));
+    await bindThread(broker, fake);
     const nextEvent = Effect.runPromise(Stream.runHead(broker.streamEvents));
 
     const frame = {
@@ -141,6 +176,7 @@ describe("ProviderWorkerBroker", () => {
         provider: "pi" as const,
         type: "session.state.changed" as const,
         threadId: "thread-1" as never,
+        lifecycleGeneration: fence.lifecycleGeneration,
         createdAt: "2026-08-05T01:00:00.000Z",
         payload: { state: "ready" as const },
       },
@@ -179,6 +215,7 @@ describe("ProviderWorkerBroker", () => {
     const fake = makeConnection((frame) => order.push(`send:${frame.type}`));
     await Effect.runPromise(broker.expectWorker(fence));
     await Effect.runPromise(broker.register(fence, fake.connection));
+    await bindThread(broker, fake);
     order.length = 0;
 
     await Effect.runPromise(
@@ -192,6 +229,7 @@ describe("ProviderWorkerBroker", () => {
           provider: "pi",
           type: "session.state.changed",
           threadId: "thread-1" as never,
+          lifecycleGeneration: fence.lifecycleGeneration,
           createdAt: "2026-08-05T01:00:00.000Z",
           payload: { state: "ready" },
         },
@@ -206,11 +244,13 @@ describe("ProviderWorkerBroker", () => {
     const first = makeConnection();
     await Effect.runPromise(broker.expectWorker(fence));
     await Effect.runPromise(broker.register(fence, first.connection));
+    await bindThread(broker, first);
     const event = {
       eventId: "event-1",
       provider: "pi" as const,
       type: "session.state.changed" as const,
       threadId: "thread-1" as never,
+      lifecycleGeneration: fence.lifecycleGeneration,
       createdAt: "2026-08-05T01:00:00.000Z",
       payload: { state: "ready" as const },
     };
@@ -250,6 +290,47 @@ describe("ProviderWorkerBroker", () => {
     );
 
     expect(Option.getOrUndefined(await secondRead)?.eventId).toBe("event-2");
+  });
+
+  it("rejects events whose provider, thread, or lifecycle generation do not match the worker", async () => {
+    const persistEvent = vi.fn(() => Effect.void);
+    const broker = await Effect.runPromise(makeProviderWorkerBroker({ persistEvent }));
+    const fake = makeConnection();
+    await Effect.runPromise(broker.expectWorker(fence));
+    await Effect.runPromise(broker.register(fence, fake.connection));
+    await bindThread(broker, fake);
+
+    const canonicalEvent = {
+      eventId: "event-fenced-1",
+      provider: "pi" as const,
+      type: "session.state.changed" as const,
+      threadId: "thread-1" as never,
+      lifecycleGeneration: fence.lifecycleGeneration,
+      createdAt: "2026-08-05T01:00:00.000Z",
+      payload: { state: "ready" as const },
+    };
+    const variants = [
+      { ...canonicalEvent, provider: "codex" as const },
+      { ...canonicalEvent, threadId: "thread-other" as never },
+      { ...canonicalEvent, lifecycleGeneration: "generation-other" },
+    ];
+
+    for (const [index, event] of variants.entries()) {
+      const result = await Effect.runPromise(
+        broker
+          .accept({
+            protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+            ...fence,
+            type: "event",
+            sequence: index + 1,
+            event,
+          })
+          .pipe(Effect.result),
+      );
+      expect(result._tag).toBe("Failure");
+    }
+    expect(persistEvent).not.toHaveBeenCalled();
+    expect(fake.sent).toEqual([]);
   });
 
   it("times out a request and removes its correlation", async () => {

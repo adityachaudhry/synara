@@ -66,6 +66,21 @@ function equalBinding(left: ProjectRepositoryBinding, right: ProjectRepositoryBi
   );
 }
 
+function humanizeCompanySlug(slug: string): string {
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toLocaleUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
+function httpStatusFromCatalogError(error: GiteaCompanyCatalogError): number | undefined {
+  const cause = error.cause;
+  return cause !== null && typeof cause === "object" && "status" in cause
+    ? ((cause as { readonly status?: unknown }).status as number | undefined)
+    : undefined;
+}
+
 async function mapBounded<T, R>(
   values: ReadonlyArray<T>,
   concurrency: number,
@@ -103,14 +118,27 @@ export function makeGiteaCompanyCatalog(
 
   const requestJson = async (url: string): Promise<unknown> => {
     if (!options.config.enabled) throw catalogError("list", "Gitea company catalog is not configured.");
-    const response = await fetcher(url, {
-      headers: {
-        accept: "application/json",
-        authorization: `token ${options.config.readToken}`,
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetcher(url, {
+        headers: {
+          accept: "application/json",
+          authorization: `token ${options.config.readToken}`,
+        },
+      });
+    } catch (cause) {
+      throw catalogError(
+        "fetch",
+        "Gitea catalog request could not reach the configured server.",
+        cause,
+      );
+    }
     if (!response.ok) {
-      throw catalogError("fetch", `Gitea catalog request failed with HTTP ${response.status}.`);
+      throw catalogError(
+        "fetch",
+        `Gitea catalog request failed with HTTP ${response.status}.`,
+        { status: response.status },
+      );
     }
     return response.json();
   };
@@ -135,6 +163,14 @@ export function makeGiteaCompanyCatalog(
       if (directory.path !== expectedPath) {
         return { diagnostic: `Skipped ${expectedPath}: invalid directory path.` } as const;
       }
+      const binding: ProjectRepositoryBinding = {
+        kind: "gitea-subdirectory",
+        origin: config.origin,
+        owner: config.owner,
+        repository: config.repository,
+        ref: config.ref,
+        path: expectedPath,
+      };
       try {
         const raw = (await requestJson(
           `${repoBase}/${encodeURIComponent(config.companiesRoot)}/${encodeURIComponent(directory.name)}/company.json${refQuery}`,
@@ -148,14 +184,6 @@ export function makeGiteaCompanyCatalog(
         ) {
           throw new Error("invalid metadata");
         }
-        const binding: ProjectRepositoryBinding = {
-          kind: "gitea-subdirectory",
-          origin: config.origin,
-          owner: config.owner,
-          repository: config.repository,
-          ref: config.ref,
-          path: expectedPath,
-        };
         const descriptor: GiteaCompanyProjectDescriptor = {
           companyId: metadata.company_id,
           companyName: metadata.company_name,
@@ -164,8 +192,24 @@ export function makeGiteaCompanyCatalog(
           binding,
         };
         return { descriptor } as const;
-      } catch {
-        return { diagnostic: `Skipped ${expectedPath}: invalid company.json metadata.` } as const;
+      } catch (cause) {
+        if (
+          cause instanceof GiteaCompanyCatalogError &&
+          httpStatusFromCatalogError(cause) !== 404
+        ) {
+          throw cause;
+        }
+        const descriptor: GiteaCompanyProjectDescriptor = {
+          companyId: `company:${directory.name}`,
+          companyName: humanizeCompanySlug(directory.name),
+          companySlug: directory.name,
+          workspaceRoot: `${config.projectRoot}/${directory.name}`,
+          binding,
+        };
+        return {
+          descriptor,
+          diagnostic: `Using directory fallback for ${expectedPath}: invalid company.json metadata.`,
+        } as const;
       }
     });
     const projects = loaded

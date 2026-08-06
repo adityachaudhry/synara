@@ -37,10 +37,13 @@ Git smart HTTP both accept the existing read token. The user-scoped `/api/v1/use
 returns `403`, so catalog enumeration uses the repository contents endpoint rather than relying on
 user repository listing.
 
-Each valid directory must have a safe slug and a readable `company.json`. Invalid directories are
-returned as diagnostics, not silently converted into projects. Project creation revalidates the
-descriptor server-side and canonicalizes title, compatibility workspace root, repository origin,
-owner, repository, ref, and path before dispatching Synara's existing `project.create` command.
+Each directory must have a safe slug. A valid `company.json` supplies the preferred stable ID and
+display name; missing or malformed metadata now remains selectable through a deterministic ID and
+humanized directory name, with an explicit diagnostic. Authentication, authorization, network,
+and server failures fail the whole refresh visibly instead of being mislabeled as bad metadata.
+Project creation revalidates the descriptor server-side and canonicalizes title, compatibility
+workspace root, repository origin, owner, repository, ref, and path before dispatching Synara's
+existing `project.create` command.
 
 ## Implementation trials and corrections
 
@@ -263,13 +266,149 @@ is now enabled only for checkout with `git -c core.sparseCheckout=true checkout 
 FETCH_HEAD`; the existing sparse pattern remains in `.git/info/sparse-checkout`. The same 14
 checkout/provisioner/routing tests pass.
 
+### Invocation-scoped sparse checkout succeeded in a disposable sandbox
+
+**Observation:** A manual probe using the corrected command sequence created a fresh Railway
+Sandbox, initialized `/workspace/repository`, fetched the allowlisted Gitea URL without adding a
+remote, and checked out only `companies/cue-cloud` with
+`git -c core.sparseCheckout=true checkout --detach FETCH_HEAD`.
+
+**Result:** The sandbox resolved commit `5fe13ee20a729671a47dade812298dd3a3d5c51e`, contained
+`company.json` and the expected `analysis/` files, and never persisted a repository remote or
+credential. The probe sandbox was destroyed by its cleanup trap after inspection.
+
+### Browser-to-Pi-to-sandbox canary completed
+
+**Observation:** From the deployed browser UI, a fresh thread under the Gitea-backed Cue Cloud
+project sent `In 2–3 sentences, what does Cue Cloud do? Cite the company files you used.` through
+Pi with Claude Fable 5. Railway created sandbox
+`bafae207-3f3c-4b1f-93f7-63fac1c6f650` in `us-east4-eqdc4a`.
+
+**Result:** While the turn was running, read-only sandbox inspection proved the worker cwd was
+`/workspace/repository/companies/cue-cloud`, the checkout was at commit
+`5fe13ee20a729671a47dade812298dd3a3d5c51e`, and `company.json` plus the sparse analysis files were
+present. Pi returned a cited answer in 51 seconds. The browser rendered the existing Synara
+transcript rows; no distributed-only message type or Electron path was involved.
+
+### Mounted-volume restart rehydrated the thread
+
+**Observation:** Railway service-file download could not inspect `/data/userdata/state.sqlite`
+because the CLI required a registered SSH key. Registering an account-level key would have been a
+broader mutation than this canary needed.
+
+**Correction:** Redeploy only the additive Synara service, reload the existing browser route, and
+query Synara's authenticated RPC read model using a one-time startup pairing credential. After
+deployment `4b7800ad-6720-4c8f-82f9-e16b02c816e5`, the same project, thread, user message, assistant
+message, and event sequences 24 through 52 rehydrated from the `/data` volume. The persisted
+project binding remained `glasswing-admin/glasswing-company-data`, ref `main`, path
+`companies/cue-cloud`; settings still reported Pi `executionTarget: railway-sandbox`. The temporary
+diagnostic bearer session was logged out after the read.
+
+### Temporary Railway OAuth bearer expired across controller recovery
+
+**Observation:** The successful sandbox remained `RUNNING` across the control-plane redeploy, but
+a follow-up in the same thread failed when the new controller attempted `Sandbox.connect` and
+Railway returned `Not Authorized`.
+
+**Cause:** The trial service was still using a short-lived Railway CLI OAuth bearer because v3/dev
+project-token creation was not authorized through the current OAuth identity. The adapter's durable
+binding and reconnect path worked far enough to target the existing sandbox; the external control
+plane correctly rejected its expired credential.
+
+**Correction:** Force the Railway CLI to refresh, copy the refreshed opaque bearer into the
+service variable without printing it, and redeploy the unchanged image so the new deployment
+receives the current environment snapshot. This is deliberately a trial-only correction. The
+production requirement remains a revocable, durable v3/dev project token or workload identity;
+periodically copying a personal CLI bearer is not an acceptable operating model.
+
+**Recovery result:** Deployment `7c8f4b76-0ea9-45bc-91c2-4e2211905958` activated the refreshed
+credential. The failed turn had intentionally quarantined the thread, so a newly submitted message
+was durably retained but its provider command was skipped until the existing **Unblock thread**
+action was used. Recovery destroyed the old sandbox before reserving replacement sandbox
+`9965af6b-dcd7-4676-8d72-9c9382dbf9b4` with lifecycle generation
+`533a2e32-d161-4a72-a663-f42785ce5197`; Railway inventory showed only the replacement. The worker
+connected, hydrated Cue Cloud, and Pi returned the pricing answer in the same browser thread.
+
+The replacement checkout resolved newer Gitea `main` commit
+`07a82d96df504f911e8081cec370b1a968350a73` rather than the original canary's
+`5fe13ee20a729671a47dade812298dd3a3d5c51e`. This is expected for a binding to a moving ref and is
+why each runtime binding also records the resolved commit. A future immutable-run mode should pin
+the prior resolved commit explicitly when reproducibility matters more than refreshing company
+data during recovery.
+
+### Independent review hardening
+
+**Observation:** An independent implementation review found several correctness boundaries that
+the successful canary did not exercise: controller-restart cleanup consulted only an in-memory
+remote map; worker events were checked against the outer transport fence but not the event's inner
+provider/thread/generation; duplicate-root UI recovery did not compare repository bindings; and a
+new workflow would have deployed the generic `synara` service on pushes to another repository's
+main branch.
+
+**Correction:** Focused tests first reproduced the behavioral gaps. Remote `stopSession` and
+`stopAll` now recover distributed bindings from `provider_session_runtime`; the broker binds a
+worker to the thread named by `session.start` and rejects mismatched Pi events before persistence,
+sequence advancement, or acknowledgement; duplicate recovery requires an exact credential-free
+binding match; and the unsafe automatic deployment workflow was removed. Deployment remains an
+explicit, separately authorized v3/dev operation.
+
+**Observation:** The browser catalog RPC could fail while the dialog silently exposed local-folder
+creation, and the same Company UI plus Railway execution-target control was reachable from the
+Electron surface even though this feature is browser-only. Per-file catalog HTTP failures were
+also caught as if they were malformed JSON.
+
+**Correction:** Browser project creation now stays in Company mode on catalog failure, shows the
+actual error with a Retry action, and does not expose Folder as a fallback for that configured
+failure path. Electron skips the catalog RPC, retains its Folder/GitHub sources, and hides the
+Railway execution-target control. Catalog 404/malformed metadata uses the documented directory
+fallback; network, auth, and 5xx failures fail visibly. Configuration now requires the exact
+`companies` root that the binding schema can represent.
+
+**Review correction:** The first browser-only gating change left `source=company` when a server
+explicitly reported that the catalog was unconfigured, even though the picker correctly hid
+Company and exposed Folder. A new browser regression test reproduced the invalid selection. The
+resolved unavailable state now selects and focuses Folder; only an actual catalog error stays in
+Company mode without the unsafe local fallback.
+
+**Correction to an overclaim:** Inspection of `workerClientSession` proved there is no bounded
+request-result replay cache. Earlier documentation claimed one existed. The flow document now
+models the actual boundary: event replay is durable until acknowledgement, while a disconnect
+after a mutating request takes effect but before its response is an uncertain delivery that needs
+provider reconciliation or a new fenced attempt.
+
+### Browser-test invocation used the wrong root
+
+**Observation:** The first focused browser-test command supplied the web config from the monorepo
+root. TanStack Router consequently searched for `src/routes` at the monorepo root and Vitest found
+no browser tests.
+
+**Correction:** Run the same test from `apps/web`, matching the config's root assumptions. All 7
+Create Project browser tests passed, including the new visible-error/retry path.
+
+### Local production-build tool availability
+
+**Observation:** A fresh local web production build completed successfully with Node 24 in 1
+minute 8 seconds. Running the server's build entrypoint directly with the same Node runtime reached
+its `tsdown` step, then failed with `spawn bun ENOENT` because this desktop worktree's PATH has no
+`bun` executable. This is an invocation-environment failure, not a compiler failure.
+
+**Correction:** Do not add a source workaround or silently install a new global runtime. The
+repository's Railway Docker build installs and invokes the pinned Bun toolchain and remains the
+authoritative combined web/server/provider-worker artifact check for the deployment.
+
+### Final independent review
+
+The first independent review produced the hardening items above. A second review caught the
+unconfigured-catalog selection bug; after the regression test and correction, its final narrow
+review reported no remaining findings and a merge-ready verdict for this scope.
+
 ## Focused verification completed before deployment
 
 - 59 contract tests passed.
 - 102 persistence/projection tests passed.
 - Migration lineage passed across 73 tags.
 - 54 catalog, RPC, and project-creation tests passed.
-- 5 browser dialog tests passed from the required `apps/web` Vitest cwd.
+- 7 browser dialog tests passed from the required `apps/web` Vitest cwd.
 - 2 provider-reactor binding tests passed.
 - 48 catalog, routing, checkout, provisioner, and workspace-runtime tests passed.
 - 4 project-creation tests passed after correcting the Pi default model.
@@ -277,3 +416,14 @@ checkout/provisioner/routing tests pass.
 The repository intentionally did not run `bun fmt`, `bun lint`, or `bun typecheck`; the workspace
 instructions prohibit those heavyweight checks unless the user explicitly requests them. The clean
 Railway Docker build is the production-bundle compilation check for this deployment.
+
+## Final branch verification after recovery
+
+- All 5 changed contract test files passed: 70 tests.
+- All 36 changed server test files passed after review hardening: 494 tests.
+- All 10 changed web unit-test files passed: 145 tests.
+- All 3 changed browser-test files passed: 9 tests, including 7 Create Project dialog tests.
+- Migration lineage passed across all 73 released tags from v0.0.16 through v0.6.1.
+- Railway deployment `7c8f4b76-0ea9-45bc-91c2-4e2211905958` completed a clean web/server Docker
+  build and reached `SUCCESS` before the replacement-sandbox recovery canary.
+- `git diff --check` passed for the final documentation changes.

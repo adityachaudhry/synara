@@ -147,7 +147,7 @@ With `executionTarget=railway-sandbox`, `ProviderWorkerProvisioner` performs a b
 7. For a Gitea-bound project, validate the binding again, install the Gitea token only in the sandbox environment, initialize a sparse Git checkout under `/workspace/repository`, fetch the configured ref, check out `FETCH_HEAD` detached, verify the selected `company.json`, and capture the immutable commit SHA. The checkout command contains only the token environment-variable name.
 8. Forward only explicitly allowlisted provider API environment variables. Synara owner, database, and Railway administration credentials are rejected from the forwarding list.
 9. Upload the worker config with the verified sandbox company cwd, not the controller compatibility path. Remove `repositoryBinding` before the provider RPC because the existing Pi adapter needs only its cwd.
-10. Start Node directly, without shell glue. Use a named durable session when Railway supplies one; otherwise keep the live exec attached to and supervised by the current Synara control-plane process.
+10. Start the fixed uploaded Node artifact through Railway's sandbox command runner. The command is provisioner-owned and contains no user-provided script text. Use a named durable session when Railway supplies one; otherwise keep the live exec attached to and supervised by the current Synara control-plane process.
 11. Wait for the worker to connect outward to `/internal/provider-worker` and prove its full fence. `PRIVATE` sandboxes can use the Railway private domain over the dual-stack proxy. The v3/dev `ISOLATED` sandbox uses the controller's public WSS domain because it has NAT egress but no environment private-network access.
 
 Any failure revokes the credential, retires the broker reservation, stops the exact process handle, and destroys the exact sandbox.
@@ -174,7 +174,7 @@ The distributed adapter sends a version-1 `ProviderWorkerRequest`:
 - method such as `session.start`, `turn.send`, `turn.interrupt`, `request.respond`, or `session.stop`;
 - the existing provider input schema as `params`.
 
-The broker correlates one `ProviderWorkerResponse` to the request. Requests are control messages, not database rows. A disconnected or mismatched worker fails the bounded request; a stale generation cannot take over.
+The broker correlates one `ProviderWorkerResponse` to the request. Requests are control messages, not database rows. A disconnected or mismatched worker fails the bounded request; a stale generation cannot take over. Request IDs are scoped to the live controller connection, and the worker does not currently retain a request-result replay cache. Therefore a disconnect after a mutating provider method takes effect but before its response arrives is explicitly uncertain: the orchestration delivery remains durable, but recovery must reconcile provider state or issue a new fenced attempt rather than assuming the original request did or did not run.
 
 ### 9. Reuse the existing Pi adapter inside the sandbox
 
@@ -182,7 +182,7 @@ The broker correlates one `ProviderWorkerResponse` to the request. Requests are 
 
 - the live Pi SDK session object;
 - the sandbox workspace and Pi agent directory;
-- in-memory request replay/response state and monotonic event sequence;
+- the monotonic event sequence and durable-until-ack event outbox;
 - the outbound authenticated WebSocket.
 
 It does not contain orchestration, projections, Synara auth sessions, or database access. The sandbox filesystem is working state, not authoritative history.
@@ -230,9 +230,9 @@ The server then pushes the same `orchestration.domainEvent` channel used by loca
 - Orchestration read models loaded in process and reactor leases while being handled.
 - Local or sandbox Pi SDK session objects.
 - Broker sockets, pending request promises, bootstrap credential digests, and active worker map.
-- Worker response replay cache, event sequence counter, and heartbeat timers.
+- Worker event outbox, event sequence counter, and heartbeat timers.
 
-Loss of these objects must be handled through the journals, persisted provider binding, request fencing, and provider-specific recovery—not by treating memory as authority.
+Loss of these objects must be handled through the journals, persisted provider binding, request fencing, and provider-specific recovery—not by treating memory as authority. In particular, there is no worker request-response replay cache today; the delivery journal may mark an interrupted mutating command uncertain until provider-specific reconciliation or a replacement attempt settles it.
 
 ## What is stored where today
 
@@ -248,7 +248,7 @@ Loss of these objects must be handled through the journals, persisted provider b
 | Attachments and managed local artifacts | Existing Synara managed-attachment storage | Metadata travels in orchestration/provider inputs |
 | Live Pi session and workspace | Local process/filesystem or sandbox filesystem | Ephemeral runtime state |
 | Checked-out company files | `/workspace/repository/companies/<slug>` inside the bound sandbox | Disposable sparse checkout; commit SHA and binding are persisted, file contents are not control-plane truth |
-| Railway sandbox inventory/process | Railway control plane plus the active broker/process connection | Project-token execs supplied durable session names in the successful trials, but recovery does not trust a persisted process handle as a single-worker barrier; it destroys and replaces the bound sandbox |
+| Railway sandbox inventory/process | Railway control plane plus the active broker/process connection | The runtime binding records sandbox identity and lifecycle generation, but recovery does not trust a persisted process handle as a single-worker barrier; it destroys and replaces the bound sandbox when replacement is required |
 | Browser session | Secure Synara session cookie + server auth records | Separate from provider-worker authentication |
 
 ## Microservice recommendation
@@ -274,8 +274,29 @@ For a durable production topology:
 - The additive preview's controller state is durable on a Railway volume mounted at `/data`, which constrains the service to one mounted control-plane deployment. The repository layer is still SQLite rather than a horizontally shared database.
 - Sandbox disk and Pi session files are not yet exported to object storage. Recovery therefore preserves the Synara thread and journals but replaces the old sandbox and loses its unsnapshotted workspace state.
 - The in-memory broker is single-control-plane. Persisted bindings drive restart reconciliation, but the broker itself is not horizontally replicated.
-- Project-token execs supplied durable Railway session names during the successful trials, but those handles were not reliable enough across controller replacement to prove that an old worker had stopped. Sandbox destruction is therefore the authoritative recovery barrier.
+- Railway sandbox handles were not reliable enough across controller replacement to prove that an old worker had stopped. Sandbox destruction is therefore the authoritative recovery barrier.
 - Remote model/skill/command/composer discovery currently delegates to local discovery; session lifecycle and turns are the remote canary scope.
-- Railway project-token authentication is configured for the preview, but production secret rotation and revocation still need an operating procedure.
+- The preview currently uses a short-lived Railway CLI OAuth bearer because project-token creation
+  for v3/dev was rejected for the current OAuth identity. It proves the SDK and adapter path, but it
+  expires across longer recovery windows. Production requires a revocable project-scoped token or
+  workload identity plus an explicit rotation procedure.
 
 These limitations are why the current result is an additive canary, not yet the permanent distributed production mode.
+
+## Live browser-only validation
+
+The additive v3/dev deployment was exercised entirely through the web application. A Cue Cloud
+project was created from the 33-directory Gitea company catalog, a Pi thread was sent from the
+browser, and Railway Sandbox hydrated `companies/cue-cloud` at commit
+`5fe13ee20a729671a47dade812298dd3a3d5c51e`. Pi returned a cited answer from those files in 51
+seconds.
+
+Redeploying only the Synara control plane then proved that the project binding, thread, two
+transcript messages, and orchestration event history rehydrate from the mounted `/data` volume.
+The original sandbox remained independent and running. A post-restart follow-up also exposed the
+temporary OAuth expiry boundary described above; that failure is retained as durable trial
+evidence rather than hidden or deleted. After rotating the trial bearer, the normal unblock path
+destroyed the old sandbox, fenced it with a new lifecycle generation, created exactly one
+replacement sandbox, and completed a follow-up in the same browser thread. Because the project is
+bound to moving ref `main`, the replacement resolved a newer Gitea commit; the resolved commit is
+recorded in the runtime binding so the source version remains observable.

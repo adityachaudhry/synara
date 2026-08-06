@@ -157,6 +157,35 @@ describe("createOrRecoverProjectFromPath", () => {
     });
   });
 
+  it("rejects duplicate-root recovery when the existing project has a different repository binding", async () => {
+    const requestedBinding = {
+      kind: "gitea-subdirectory" as const,
+      origin: "https://glasswing-gitea-dev.up.railway.app",
+      owner: "glasswing-admin",
+      repository: "glasswing-company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+    const existingProject = {
+      ...makeProject("project-existing", "/data/gitea-company-projects/cue-cloud"),
+      repositoryBinding: { ...requestedBinding, path: "companies/other-company" },
+    };
+    const dispatchCommand = vi.fn(async () => {
+      throw new Error(
+        "Orchestration command invariant failed (project.create): Project 'project-existing' already uses workspace root '/data/gitea-company-projects/cue-cloud'.",
+      );
+    });
+
+    await expect(
+      createOrRecoverProjectFromPath({
+        api: makeApi(dispatchCommand),
+        workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+        repositoryBinding: requestedBinding,
+        loadSnapshot: async () => makeSnapshot([existingProject]),
+      }),
+    ).rejects.toThrow("different repository binding");
+  });
+
   it("preserves an optimistically selected space before the shell snapshot catches up", async () => {
     const activeSpaceId = SpaceId.makeUnsafe("space-new");
     useSpacesUiStore.getState().setActiveSpaceId(activeSpaceId);

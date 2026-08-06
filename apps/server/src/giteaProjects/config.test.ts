@@ -56,4 +56,12 @@ describe("resolveGiteaCompanyCatalogConfig", () => {
       "SYNARA_GITEA_READ_TOKEN",
     );
   });
+
+  it("rejects a companies root that cannot be represented by repository bindings", () => {
+    expect(() =>
+      resolveGiteaCompanyCatalogConfig({
+        environment: { ...completeEnvironment, SYNARA_GITEA_COMPANIES_ROOT: "portfolio" },
+      }),
+    ).toThrow("must be exactly 'companies'");
+  });
 });

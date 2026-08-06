@@ -238,4 +238,3 @@ Desktop-only suites and packaging are outside this feature's verification gate. 
 - Completed-turn state is uploaded before sandbox teardown and can be integrity-checked.
 - The sandbox is destroyed after the configured warm lease or explicit stop.
 - The engineering journal includes failed experiments and course corrections as well as successful steps.
-

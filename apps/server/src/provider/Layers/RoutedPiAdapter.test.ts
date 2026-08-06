@@ -78,6 +78,8 @@ function makeHarness(
     provider: "pi",
     capabilities: { sessionModelSwitch: "in-session" },
     startSession: localStart,
+    stopSession: vi.fn(() => Effect.void),
+    stopAll: vi.fn(() => Effect.void),
     streamEvents: Stream.empty,
   } as unknown as PiAdapterShape;
   const provisioner = {
@@ -101,6 +103,20 @@ function makeHarness(
           : Option.some({ runtimePayload: { distributedPiRuntime: persistedBinding } } as never),
       ),
     ),
+    listBindings: vi.fn(() =>
+      Effect.succeed(
+        persistedBinding === undefined
+          ? []
+          : [
+              {
+                threadId,
+                provider: "pi" as const,
+                adapterKey: "pi:railway-sandbox",
+                runtimePayload: { distributedPiRuntime: persistedBinding },
+              },
+            ],
+      ),
+    ),
     upsert,
   };
   const settings = {
@@ -113,7 +129,7 @@ function makeHarness(
     Layer.succeed(ProviderSessionDirectory, directory as never),
     Layer.succeed(ServerSettingsService, settings as never),
   );
-  return { layer, localStart, provisioner, request, upsert };
+  return { layer, local, localStart, provisioner, request, upsert };
 }
 
 describe("RoutedPiAdapter", () => {
@@ -207,5 +223,37 @@ describe("RoutedPiAdapter", () => {
         runtimePayload: { distributedPiRuntime: runtimeBinding },
       }),
     );
+  });
+
+  it("stops a persisted remote sandbox after the controller adapter restarts", async () => {
+    const harness = makeHarness("railway-sandbox", runtimeBinding);
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await Effect.runPromise(adapter.stopSession(threadId));
+
+    expect(harness.request).toHaveBeenCalledWith(runtimeBinding.fence, "session.stop", { threadId });
+    expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
+    expect(harness.local.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("stops every persisted remote sandbox after the controller adapter restarts", async () => {
+    const harness = makeHarness("railway-sandbox", runtimeBinding);
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await Effect.runPromise(adapter.stopAll());
+
+    expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
+    expect(harness.local.stopAll).toHaveBeenCalledOnce();
+  });
+
+  it("treats sandbox destruction as authoritative when the remote stop response is lost", async () => {
+    const harness = makeHarness("railway-sandbox", runtimeBinding);
+    harness.request.mockImplementation((_fence, method: string) =>
+      method === "session.stop" ? Effect.fail(new Error("worker disconnected")) : Effect.succeed(null),
+    );
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await expect(Effect.runPromise(adapter.stopSession(threadId))).resolves.toBeUndefined();
+    expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
   });
 });

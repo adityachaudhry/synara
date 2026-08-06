@@ -463,4 +463,3 @@ git commit -m "test: validate Railway sandbox lifecycle"
 - Independent post-trial listing proves no sandbox orphan remains.
 - The journal contains both bootstrap failures and Railway trial outcomes.
 - No `ProviderService`, orchestration event, browser transcript, or existing local adapter behavior changes in Stage 1.
-

@@ -108,6 +108,77 @@ describe("CreateProjectDialog GitHub source", () => {
     });
   });
 
+  it("keeps browser project creation in Company mode and offers retry when the catalog fails", async () => {
+    nativeApi.listGiteaCompanies
+      .mockRejectedValueOnce(new Error("Company catalog is temporarily unavailable."))
+      .mockResolvedValueOnce({
+        available: true,
+        projects: [
+          {
+            companyId: "company-cue-cloud",
+            companyName: "Cue Cloud",
+            companySlug: "cue-cloud",
+            workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+            binding: {
+              kind: "gitea-subdirectory",
+              origin: "https://glasswing-gitea-dev.up.railway.app",
+              owner: "glasswing-admin",
+              repository: "glasswing-company-data",
+              ref: "main",
+              path: "companies/cue-cloud",
+            },
+          },
+        ],
+        diagnostics: [],
+        refreshedAt: "2026-08-06T12:00:01.000Z",
+      });
+
+    await render(
+      <CreateProjectDialog
+        open
+        githubProvisioningAvailable={false}
+        spaces={[]}
+        activeSpaceId={null}
+        defaultCloneParent="/Users/test/Developer"
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("Company catalog is temporarily unavailable."),
+    );
+    expect(page.getByRole("radio", { name: "Company" })).toHaveAttribute("aria-checked", "true");
+    expect(page.getByRole("radio", { name: "Folder" })).not.toBeInTheDocument();
+
+    await page.getByRole("button", { name: "Retry company catalog" }).click();
+    await vi.waitFor(() => expect(page.getByRole("option", { name: /Cue Cloud/ })).toBeInTheDocument());
+    expect(nativeApi.listGiteaCompanies).toHaveBeenCalledTimes(2);
+  });
+
+  it("selects Folder when a browser server explicitly reports no company catalog", async () => {
+    await render(
+      <CreateProjectDialog
+        open
+        githubProvisioningAvailable={false}
+        spaces={[]}
+        activeSpaceId={null}
+        defaultCloneParent="/Users/test/Developer"
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await vi.waitFor(() =>
+      expect(page.getByRole("radio", { name: "Folder" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      ),
+    );
+    expect(page.getByRole("radio", { name: "Company" })).not.toBeInTheDocument();
+    expect(page.getByLabelText("Project folder path")).toBeInTheDocument();
+  });
+
   it("disables GitHub when the server does not advertise provisioning", async () => {
     await render(
       <CreateProjectDialog

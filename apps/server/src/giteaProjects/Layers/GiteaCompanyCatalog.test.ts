@@ -42,7 +42,7 @@ describe("GiteaCompanyCatalog", () => {
     });
   });
 
-  it("lists sorted company descriptors, skips malformed metadata, and reuses its cache", async () => {
+  it("lists sorted company descriptors, falls back for malformed metadata, and reuses its cache", async () => {
     const requests: string[] = [];
     let active = 0;
     let maxActive = 0;
@@ -91,16 +91,38 @@ describe("GiteaCompanyCatalog", () => {
 
     expect(first.projects.map((project) => project.companyName)).toEqual([
       "Alpha Inc",
+      "Broken",
       "Zeta Labs",
     ]);
     expect(first.projects[0]).toMatchObject({
       workspaceRoot: "/data/gitea-company-projects/alpha",
       binding: { path: "companies/alpha", origin: config.origin },
     });
-    expect(first.diagnostics).toEqual(["Skipped companies/broken: invalid company.json metadata."]);
+    expect(first.projects[1]).toMatchObject({
+      companySlug: "broken",
+      binding: { path: "companies/broken" },
+    });
+    expect(first.diagnostics).toEqual([
+      "Using directory fallback for companies/broken: invalid company.json metadata.",
+    ]);
     expect(second).toEqual(first);
     expect(requests).toHaveLength(4);
     expect(maxActive).toBeLessThanOrEqual(2);
+  });
+
+  it("fails the catalog refresh when a company metadata request has a systemic HTTP error", async () => {
+    const catalog = makeGiteaCompanyCatalog({
+      config,
+      fetch: async (input) =>
+        String(input).includes("/contents/companies?")
+          ? Response.json([{ type: "dir", name: "cue-cloud", path: "companies/cue-cloud" }])
+          : new Response("unavailable", { status: 503 }),
+    });
+
+    await expect(Effect.runPromise(catalog.list())).rejects.toMatchObject({
+      _tag: "GiteaCompanyCatalogError",
+      operation: "fetch",
+    });
   });
 
   it("canonicalizes an allowed binding and rejects repository tampering", async () => {

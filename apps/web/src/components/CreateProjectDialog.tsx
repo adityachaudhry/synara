@@ -116,9 +116,12 @@ export function CreateProjectDialog(props: {
   onOpenChange: (open: boolean) => void;
   onSubmit: (value: CreateProjectSubmitValue, options: CreateProjectSubmitOptions) => Promise<void>;
 }) {
-  const [source, setSource] = useState<"company" | "local" | "github">("local");
+  const [source, setSource] = useState<"company" | "local" | "github">(
+    isElectron ? "local" : "company",
+  );
   const [companyCatalog, setCompanyCatalog] = useState<GiteaCompanyCatalogSnapshot | null>(null);
   const [companyCatalogError, setCompanyCatalogError] = useState<string | null>(null);
+  const [companyCatalogReload, setCompanyCatalogReload] = useState(0);
   const [companySearch, setCompanySearch] = useState("");
   const [selectedCompanySlug, setSelectedCompanySlug] = useState<string | null>(null);
   const [path, setPath] = useState("");
@@ -164,7 +167,7 @@ export function CreateProjectDialog(props: {
     if (props.open === openedRef.current) return;
     openedRef.current = props.open;
     if (!props.open) return;
-    setSource("local");
+    setSource(isElectron ? "local" : "company");
     setCompanyCatalog(null);
     setCompanyCatalogError(null);
     setCompanySearch("");
@@ -187,14 +190,21 @@ export function CreateProjectDialog(props: {
     setFormError(null);
     // Deferred a frame: the dialog moves focus itself on open, so focusing the
     // path field has to happen after that lands or it is immediately undone.
-    const frame = requestAnimationFrame(() => document.getElementById(pathInputId)?.focus());
+    const frame = requestAnimationFrame(() =>
+      document.getElementById(isElectron ? pathInputId : companySearchInputId)?.focus(),
+    );
     return () => cancelAnimationFrame(frame);
-  }, [pathInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
+  }, [companySearchInputId, pathInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
 
   useEffect(() => {
     if (!props.open) return;
+    if (isElectron) return;
     const api = readNativeApi();
-    if (!api) return;
+    if (!api) {
+      setSource("company");
+      setCompanyCatalogError("Unable to reach the company catalog service.");
+      return;
+    }
     let cancelled = false;
     void api.projects
       .listGiteaCompanies()
@@ -202,15 +212,19 @@ export function CreateProjectDialog(props: {
         if (cancelled) return;
         setCompanyCatalog(catalog);
         setCompanyCatalogError(null);
-        if (!isElectron && catalog.available && catalog.projects.length > 0) {
+        if (catalog.available) {
           setSource("company");
           requestAnimationFrame(() =>
             document.getElementById(companySearchInputId)?.focus(),
           );
+        } else {
+          setSource("local");
+          requestAnimationFrame(() => document.getElementById(pathInputId)?.focus());
         }
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setSource("company");
         setCompanyCatalogError(
           error instanceof Error ? error.message : "Unable to load company projects.",
         );
@@ -218,7 +232,7 @@ export function CreateProjectDialog(props: {
     return () => {
       cancelled = true;
     };
-  }, [companySearchInputId, props.open]);
+  }, [companyCatalogReload, companySearchInputId, pathInputId, props.open]);
 
   useEffect(() => {
     if (!props.githubProvisioningAvailable && source === "github") {
@@ -241,7 +255,11 @@ export function CreateProjectDialog(props: {
   );
   const selectedCompany =
     companyProjects.find((company) => company.companySlug === selectedCompanySlug) ?? null;
-  const companyAvailable = companyCatalog?.available === true;
+  const companyAvailable =
+    !isElectron &&
+    (companyCatalog === null || companyCatalog.available || companyCatalogError !== null);
+  const localAvailable = isElectron ||
+    (companyCatalog?.available === false && companyCatalogError === null);
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
   const spaces =
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
@@ -489,7 +507,7 @@ export function CreateProjectDialog(props: {
             disabled={submitting}
             githubAvailable={props.githubProvisioningAvailable}
             companyAvailable={companyAvailable}
-            localAvailable={isElectron || !companyAvailable}
+            localAvailable={localAvailable}
             onValueChange={(nextSource) => {
               setSource(nextSource);
               setFormError(null);
@@ -555,9 +573,24 @@ export function CreateProjectDialog(props: {
                   );
                 })}
                 {filteredCompanies.length === 0 ? (
-                  <p className="px-3 py-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-                    {companyCatalogError ?? "No matching company projects."}
-                  </p>
+                  <div className="space-y-2 px-3 py-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+                    <p>{companyCatalogError ?? "No matching company projects."}</p>
+                    {companyCatalogError ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        aria-label="Retry company catalog"
+                        onClick={() => {
+                          setCompanyCatalog(null);
+                          setCompanyCatalogError(null);
+                          setCompanyCatalogReload((value) => value + 1);
+                        }}
+                      >
+                        Retry
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             </div>
