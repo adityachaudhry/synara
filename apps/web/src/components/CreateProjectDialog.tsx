@@ -4,7 +4,12 @@
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type GitHubProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
+import {
+  type GiteaCompanyCatalogSnapshot,
+  type GiteaCompanyProjectDescriptor,
+  type GitHubProjectProvisionProgressEvent,
+  type SpaceId,
+} from "@synara/contracts";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
@@ -87,7 +92,14 @@ interface CreateGitHubProjectSubmitValue {
   readonly spaceId: SpaceId | null;
 }
 
+interface CreateCompanyProjectSubmitValue {
+  readonly source: "company";
+  readonly company: GiteaCompanyProjectDescriptor;
+  readonly spaceId: SpaceId | null;
+}
+
 export type CreateProjectSubmitValue =
+  | CreateCompanyProjectSubmitValue
   | CreateLocalProjectSubmitValue
   | CreateGitHubProjectSubmitValue;
 
@@ -104,7 +116,11 @@ export function CreateProjectDialog(props: {
   onOpenChange: (open: boolean) => void;
   onSubmit: (value: CreateProjectSubmitValue, options: CreateProjectSubmitOptions) => Promise<void>;
 }) {
-  const [source, setSource] = useState<"local" | "github">("local");
+  const [source, setSource] = useState<"company" | "local" | "github">("local");
+  const [companyCatalog, setCompanyCatalog] = useState<GiteaCompanyCatalogSnapshot | null>(null);
+  const [companyCatalogError, setCompanyCatalogError] = useState<string | null>(null);
+  const [companySearch, setCompanySearch] = useState("");
+  const [selectedCompanySlug, setSelectedCompanySlug] = useState<string | null>(null);
   const [path, setPath] = useState("");
   const [repositoryInput, setRepositoryInput] = useState("");
   const [destinationParent, setDestinationParent] = useState("");
@@ -134,6 +150,7 @@ export function CreateProjectDialog(props: {
   const activeOperationIdRef = useRef<string | null>(null);
   const fieldId = useId();
   const pathInputId = `${fieldId}-path`;
+  const companySearchInputId = `${fieldId}-company-search`;
   const repositoryInputId = `${fieldId}-repository`;
   const destinationParentInputId = `${fieldId}-destination-parent`;
   const directoryNameInputId = `${fieldId}-directory-name`;
@@ -148,6 +165,10 @@ export function CreateProjectDialog(props: {
     openedRef.current = props.open;
     if (!props.open) return;
     setSource("local");
+    setCompanyCatalog(null);
+    setCompanyCatalogError(null);
+    setCompanySearch("");
+    setSelectedCompanySlug(null);
     setPath("");
     setRepositoryInput("");
     setDestinationParent(props.defaultCloneParent);
@@ -171,6 +192,35 @@ export function CreateProjectDialog(props: {
   }, [pathInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
 
   useEffect(() => {
+    if (!props.open) return;
+    const api = readNativeApi();
+    if (!api) return;
+    let cancelled = false;
+    void api.projects
+      .listGiteaCompanies()
+      .then((catalog) => {
+        if (cancelled) return;
+        setCompanyCatalog(catalog);
+        setCompanyCatalogError(null);
+        if (!isElectron && catalog.available && catalog.projects.length > 0) {
+          setSource("company");
+          requestAnimationFrame(() =>
+            document.getElementById(companySearchInputId)?.focus(),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setCompanyCatalogError(
+          error instanceof Error ? error.message : "Unable to load company projects.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companySearchInputId, props.open]);
+
+  useEffect(() => {
     if (!props.githubProvisioningAvailable && source === "github") {
       setSource("local");
     }
@@ -181,6 +231,17 @@ export function CreateProjectDialog(props: {
   const trimmedDestinationParent = destinationParent.trim();
   const trimmedDirectoryName = directoryName.trim();
   const normalizedDirectoryName = normalizeProjectDirectoryName(directoryName);
+  const companyProjects = companyCatalog?.projects ?? [];
+  const normalizedCompanySearch = companySearch.trim().toLocaleLowerCase();
+  const filteredCompanies = companyProjects.filter(
+    (company) =>
+      normalizedCompanySearch.length === 0 ||
+      company.companyName.toLocaleLowerCase().includes(normalizedCompanySearch) ||
+      company.companySlug.toLocaleLowerCase().includes(normalizedCompanySearch),
+  );
+  const selectedCompany =
+    companyProjects.find((company) => company.companySlug === selectedCompanySlug) ?? null;
+  const companyAvailable = companyCatalog?.available === true;
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
   const spaces =
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
@@ -298,6 +359,10 @@ export function CreateProjectDialog(props: {
       setFormError("Type a folder path, or drop a folder above.");
       return;
     }
+    if (source === "company" && !selectedCompany) {
+      setFormError("Select a company project.");
+      return;
+    }
     if (source === "github" && !parsedRepository) {
       setFormError("Enter a GitHub repository as owner/repository or a GitHub.com repository URL.");
       return;
@@ -323,7 +388,12 @@ export function CreateProjectDialog(props: {
     submitAbortRef.current = abortController;
     try {
       const spaceId = spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null;
-      if (source === "github") {
+      if (source === "company" && selectedCompany) {
+        await props.onSubmit(
+          { source: "company", company: selectedCompany, spaceId },
+          { signal: abortController.signal },
+        );
+      } else if (source === "github") {
         const operationId = randomUUID();
         activeOperationIdRef.current = operationId;
         await props.onSubmit(
@@ -418,19 +488,80 @@ export function CreateProjectDialog(props: {
             value={source}
             disabled={submitting}
             githubAvailable={props.githubProvisioningAvailable}
+            companyAvailable={companyAvailable}
+            localAvailable={isElectron || !companyAvailable}
             onValueChange={(nextSource) => {
               setSource(nextSource);
               setFormError(null);
               setProvisionProgress(null);
               requestAnimationFrame(() =>
                 document
-                  .getElementById(nextSource === "local" ? pathInputId : repositoryInputId)
+                  .getElementById(
+                    nextSource === "company"
+                      ? companySearchInputId
+                      : nextSource === "local"
+                        ? pathInputId
+                        : repositoryInputId,
+                  )
                   ?.focus(),
               );
             }}
           />
 
-          {source === "local" ? (
+          {source === "company" ? (
+            <div className="space-y-2">
+              <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
+                <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
+                  <CentralIcon name="search" className="size-4 text-muted-foreground/70" aria-hidden="true" />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id={companySearchInputId}
+                  value={companySearch}
+                  aria-label="Search companies"
+                  placeholder="Search companies"
+                  onChange={(event) => {
+                    setCompanySearch(event.target.value);
+                    setFormError(null);
+                  }}
+                />
+              </InputGroup>
+              <div
+                role="listbox"
+                aria-label="Company projects"
+                className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-foreground/12 p-1.5"
+              >
+                {filteredCompanies.map((company) => {
+                  const selected = company.companySlug === selectedCompanySlug;
+                  return (
+                    <button
+                      key={company.companyId}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
+                        selected ? "bg-foreground/10 text-foreground" : "hover:bg-foreground/5",
+                      )}
+                      onClick={() => {
+                        setSelectedCompanySlug(company.companySlug);
+                        setFormError(null);
+                      }}
+                    >
+                      <span className="truncate">{company.companyName}</span>
+                      <span className="ml-3 shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                        {company.companySlug}
+                      </span>
+                    </button>
+                  );
+                })}
+                {filteredCompanies.length === 0 ? (
+                  <p className="px-3 py-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+                    {companyCatalogError ?? "No matching company projects."}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : source === "local" ? (
             <>
               <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
                 <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
@@ -612,7 +743,7 @@ export function CreateProjectDialog(props: {
             shape="capsule"
             className="px-4 text-[length:var(--app-font-size-ui-lg,13px)] sm:text-[length:var(--app-font-size-ui-lg,13px)]"
             onClick={() => handleOpenChange(false)}
-            disabled={submitting && source === "local"}
+            disabled={submitting && source !== "github"}
           >
             {submitting && source === "github" ? "Cancel clone" : "Cancel"}
           </Button>

@@ -80,8 +80,10 @@ import {
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
+  type ModelSelection,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
+  type ProjectRepositoryBinding,
   SpaceId,
   type ProviderKind,
   ThreadId,
@@ -2456,7 +2458,13 @@ export default function Sidebar() {
   const addProjectFromPath = useCallback(
     async (
       rawCwd: string,
-      options: { createIfMissing?: boolean; spaceId?: SpaceId | null } = {},
+      options: {
+        createIfMissing?: boolean;
+        spaceId?: SpaceId | null;
+        title?: string;
+        defaultModelSelection?: ModelSelection;
+        repositoryBinding?: ProjectRepositoryBinding;
+      } = {},
     ) => {
       const cwd = rawCwd.trim();
       if (!cwd) {
@@ -2497,6 +2505,13 @@ export default function Sidebar() {
             ? {}
             : { createIfMissing: options.createIfMissing }),
           ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+          ...(options.title === undefined ? {} : { title: options.title }),
+          ...(options.defaultModelSelection === undefined
+            ? {}
+            : { defaultModelSelection: options.defaultModelSelection }),
+          ...(options.repositoryBinding === undefined
+            ? {}
+            : { repositoryBinding: options.repositoryBinding }),
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -3280,9 +3295,15 @@ export default function Sidebar() {
   const handleCreateProjectSubmit = useCallback(
     async (value: CreateProjectSubmitValue, options: CreateProjectSubmitOptions) => {
       const previousSpaceId = activeSpaceId;
-      const existingProject =
+      const requestedWorkspaceRoot =
         value.source === "local"
-          ? findWorkspaceRootMatch(projects, value.workspaceRoot, (project) => project.cwd)
+          ? value.workspaceRoot
+          : value.source === "company"
+            ? value.company.workspaceRoot
+            : null;
+      const existingProject =
+        requestedWorkspaceRoot !== null
+          ? findWorkspaceRootMatch(projects, requestedWorkspaceRoot, (project) => project.cwd)
           : null;
       // Reopening an existing project must follow the Space where that project
       // actually lives. New projects use the destination selected in the dialog.
@@ -3356,6 +3377,18 @@ export default function Sidebar() {
                 "The GitHub project was added, but it has not synced into the sidebar yet. Try again in a moment.",
               );
             }
+          });
+        } else if (value.source === "company") {
+          handleSelectSpaceForIncomingProject(destinationSpaceId);
+          await addProjectFromPath(value.company.workspaceRoot, {
+            createIfMissing: true,
+            spaceId: value.spaceId,
+            title: value.company.companyName,
+            defaultModelSelection: {
+              provider: "pi",
+              model: getDefaultModel("pi"),
+            },
+            repositoryBinding: value.company.binding,
           });
         } else {
           handleSelectSpaceForIncomingProject(destinationSpaceId);

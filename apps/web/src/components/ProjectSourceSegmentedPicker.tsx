@@ -5,13 +5,18 @@ import { cn } from "~/lib/utils";
 
 import { FolderClosed } from "./FolderClosed";
 
-export type ProjectSource = "local" | "github";
+export type ProjectSource = "company" | "local" | "github";
 
 const PROJECT_SOURCES: ReadonlyArray<{
   readonly value: ProjectSource;
   readonly label: string;
   readonly icon: ReactNode;
 }> = [
+  {
+    value: "company",
+    label: "Company",
+    icon: <FolderClosed className="size-3.5" aria-hidden="true" />,
+  },
   {
     value: "local",
     label: "Folder",
@@ -32,11 +37,18 @@ export function ProjectSourceSegmentedPicker(props: {
   readonly value: ProjectSource;
   readonly disabled: boolean;
   readonly githubAvailable: boolean;
+  readonly companyAvailable: boolean;
+  readonly localAvailable: boolean;
   readonly onValueChange: (value: ProjectSource) => void;
   readonly className?: string;
 }) {
-  const activeIndex = PROJECT_SOURCES.findIndex((source) => source.value === props.value);
-  const cell = `(100% - 0.25rem) / ${PROJECT_SOURCES.length}`;
+  const projectSources = PROJECT_SOURCES.filter(
+    (source) =>
+      (source.value !== "company" || props.companyAvailable) &&
+      (source.value !== "local" || props.localAvailable),
+  );
+  const activeIndex = projectSources.findIndex((source) => source.value === props.value);
+  const cell = `(100% - 0.25rem) / ${projectSources.length}`;
   const overhang = "5px";
   const chipLeft =
     activeIndex === 0 ? `calc(-1px - ${overhang})` : `calc(0.125rem + ${activeIndex} * (${cell}))`;
@@ -54,7 +66,7 @@ export function ProjectSourceSegmentedPicker(props: {
           className="sidebar-segmented-thumb pointer-events-none absolute -inset-y-[1.5px] z-0 rounded-md transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
           style={{ left: chipLeft, width: chipWidth }}
         />
-        {PROJECT_SOURCES.map((source, index) => {
+        {projectSources.map((source, index) => {
           const active = source.value === props.value;
           const sourceUnavailable = source.value === "github" && !props.githubAvailable;
           const labelShift = active

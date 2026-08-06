@@ -91,6 +91,44 @@ describe("createOrRecoverProjectFromPath", () => {
     });
   });
 
+  it("dispatches catalog-owned title, Pi model, and repository binding", async () => {
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+    const repositoryBinding = {
+      kind: "gitea-subdirectory" as const,
+      origin: "https://glasswing-gitea-dev.up.railway.app",
+      owner: "glasswing-admin",
+      repository: "glasswing-company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+      title: "Cue Cloud",
+      defaultModelSelection: { provider: "pi", model: "pi" },
+      repositoryBinding,
+      loadSnapshot: async () =>
+        makeSnapshot(
+          createdProjectId
+            ? [makeProject(createdProjectId, "/data/gitea-company-projects/cue-cloud")]
+            : [],
+        ),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Cue Cloud",
+        defaultModelSelection: { provider: "pi", model: "pi" },
+        repositoryBinding,
+      }),
+    );
+  });
+
   it("recovers the existing project when project.create reports a duplicate workspace root", async () => {
     const existingProject = makeProject("project-existing");
     const dispatchCommand = vi.fn(async () => {

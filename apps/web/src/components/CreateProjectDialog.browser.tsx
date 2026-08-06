@@ -7,12 +7,19 @@ import { render } from "vitest-browser-react";
 
 const nativeApi = vi.hoisted(() => ({
   onProvisionProgress: vi.fn(() => () => undefined),
+  listGiteaCompanies: vi.fn(async () => ({
+    available: false,
+    projects: [],
+    diagnostics: ["Gitea company catalog is not configured."],
+    refreshedAt: "2026-08-06T12:00:00.000Z",
+  })),
 }));
 
 vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({
     projects: {
       onProvisionProgress: nativeApi.onProvisionProgress,
+      listGiteaCompanies: nativeApi.listGiteaCompanies,
     },
   }),
 }));
@@ -22,6 +29,83 @@ import { CreateProjectDialog } from "./CreateProjectDialog";
 describe("CreateProjectDialog GitHub source", () => {
   afterEach(() => {
     nativeApi.onProvisionProgress.mockClear();
+    nativeApi.listGiteaCompanies.mockReset();
+    nativeApi.listGiteaCompanies.mockResolvedValue({
+      available: false,
+      projects: [],
+      diagnostics: ["Gitea company catalog is not configured."],
+      refreshedAt: "2026-08-06T12:00:00.000Z",
+    });
+  });
+
+  it("defaults a configured browser deployment to searchable Gitea companies", async () => {
+    nativeApi.listGiteaCompanies.mockResolvedValue({
+      available: true,
+      projects: [
+        {
+          companyId: "company-chronicle",
+          companyName: "Chronicle Labs",
+          companySlug: "chronicle-labs",
+          workspaceRoot: "/data/gitea-company-projects/chronicle-labs",
+          binding: {
+            kind: "gitea-subdirectory",
+            origin: "https://glasswing-gitea-dev.up.railway.app",
+            owner: "glasswing-admin",
+            repository: "glasswing-company-data",
+            ref: "main",
+            path: "companies/chronicle-labs",
+          },
+        },
+        {
+          companyId: "company-cue-cloud",
+          companyName: "Cue Cloud",
+          companySlug: "cue-cloud",
+          workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+          binding: {
+            kind: "gitea-subdirectory",
+            origin: "https://glasswing-gitea-dev.up.railway.app",
+            owner: "glasswing-admin",
+            repository: "glasswing-company-data",
+            ref: "main",
+            path: "companies/cue-cloud",
+          },
+        },
+      ],
+      diagnostics: [],
+      refreshedAt: "2026-08-06T12:00:00.000Z",
+    });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    await render(
+      <CreateProjectDialog
+        open
+        githubProvisioningAvailable={false}
+        spaces={[]}
+        activeSpaceId={null}
+        defaultCloneParent="/Users/test/Developer"
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await vi.waitFor(() =>
+      expect(page.getByRole("radio", { name: "Company" })).toBeInTheDocument(),
+    );
+    expect(page.getByRole("radio", { name: "Company" })).toHaveAttribute("aria-checked", "true");
+    expect(page.getByRole("radio", { name: "Folder" })).not.toBeInTheDocument();
+    await page.getByLabelText("Search companies").fill("cue");
+    await page.getByRole("option", { name: /Cue Cloud/ }).click();
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      source: "company",
+      company: {
+        companyName: "Cue Cloud",
+        workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+        binding: { path: "companies/cue-cloud" },
+      },
+      spaceId: null,
+    });
   });
 
   it("disables GitHub when the server does not advertise provisioning", async () => {

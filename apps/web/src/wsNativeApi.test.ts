@@ -142,6 +142,20 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("loads Gitea company projects through the project API", async () => {
+    const snapshot = {
+      available: true,
+      projects: [],
+      diagnostics: [],
+      refreshedAt: "2026-08-06T12:00:00.000Z",
+    };
+    requestMock.mockResolvedValue(snapshot);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    await expect(createWsNativeApi().projects.listGiteaCompanies()).resolves.toEqual(snapshot);
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsListGiteaCompanies);
+  });
+
   it("delivers and caches valid server.welcome payloads", async () => {
     const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
 

@@ -505,6 +505,7 @@ export function createWsNativeApi(): NativeApi {
       onEvent: terminalEventListeners.subscribe,
     },
     projects: {
+      listGiteaCompanies: () => transport.request(WS_METHODS.projectsListGiteaCompanies),
       discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),

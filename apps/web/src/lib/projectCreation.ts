@@ -5,8 +5,10 @@
 
 import {
   type NativeApi,
+  type ModelSelection,
   type OrchestrationShellSnapshot,
   type ProjectId,
+  type ProjectRepositoryBinding,
   type SpaceId,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
@@ -37,6 +39,9 @@ export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   createIfMissing?: boolean;
+  title?: string;
+  defaultModelSelection?: ModelSelection;
+  repositoryBinding?: ProjectRepositoryBinding;
   /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
@@ -57,7 +62,7 @@ export async function createOrRecoverProjectFromPath(input: {
   const delayMs = input.delayMs ?? DEFAULT_PROJECT_CREATE_RECOVERY_DELAY_MS;
   const projectId = newProjectId();
   const createdAt = new Date().toISOString();
-  const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
+  const title = input.title?.trim() || buildProjectTitleFromWorkspaceRoot(workspaceRoot);
 
   try {
     await input.api.orchestration.dispatchCommand({
@@ -67,8 +72,11 @@ export async function createOrRecoverProjectFromPath(input: {
       kind: "project",
       title,
       workspaceRoot,
+      ...(input.repositoryBinding === undefined
+        ? {}
+        : { repositoryBinding: input.repositoryBinding }),
       createWorkspaceRootIfMissing: input.createIfMissing === true,
-      defaultModelSelection: {
+      defaultModelSelection: input.defaultModelSelection ?? {
         provider: "codex",
         model: getDefaultModel("codex"),
       },
