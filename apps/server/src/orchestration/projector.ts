@@ -403,6 +403,7 @@ export function projectEvent(
             kind: payload.kind,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
+            repositoryBinding: payload.repositoryBinding ?? null,
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,

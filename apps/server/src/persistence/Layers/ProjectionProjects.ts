@@ -3,7 +3,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SchemaGetter from "effect/SchemaGetter";
 
-import { ModelSelection, ProjectScript } from "@synara/contracts";
+import { ModelSelection, ProjectRepositoryBinding, ProjectScript } from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   ClearProjectionProjectSpaceAssignmentsInput,
@@ -24,6 +24,7 @@ const SqliteBoolean = Schema.Number.pipe(
 const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    repositoryBinding: Schema.NullOr(Schema.fromJsonString(ProjectRepositoryBinding)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
     isPinned: SqliteBoolean,
   }),
@@ -42,6 +43,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind,
           title,
           workspace_root,
+          repository_binding_json,
           default_model_selection_json,
           scripts_json,
           is_pinned,
@@ -55,6 +57,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.kind},
           ${row.title},
           ${row.workspaceRoot},
+          ${row.repositoryBinding !== null ? JSON.stringify(row.repositoryBinding) : null},
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${JSON.stringify(row.scripts)},
           ${row.isPinned ? 1 : 0},
@@ -68,6 +71,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind = excluded.kind,
           title = excluded.title,
           workspace_root = excluded.workspace_root,
+          repository_binding_json = excluded.repository_binding_json,
           default_model_selection_json = excluded.default_model_selection_json,
           scripts_json = excluded.scripts_json,
           is_pinned = excluded.is_pinned,
@@ -88,6 +92,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind,
           title,
           workspace_root AS "workspaceRoot",
+          repository_binding_json AS "repositoryBinding",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
@@ -110,6 +115,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind,
           title,
           workspace_root AS "workspaceRoot",
+          repository_binding_json AS "repositoryBinding",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",

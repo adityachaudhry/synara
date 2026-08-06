@@ -48,10 +48,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
       yield* sql`
         INSERT INTO projection_projects (
-          project_id, title, workspace_root, default_model_selection_json,
+          project_id, title, workspace_root, repository_binding_json, default_model_selection_json,
           scripts_json, space_id, created_at, updated_at, deleted_at
         ) VALUES (
-          'project-space-snapshot', 'Space project', '/tmp/space-project', NULL,
+          'project-space-snapshot', 'Space project', '/tmp/space-project',
+          '{"kind":"gitea-subdirectory","origin":"https://glasswing-gitea-dev.up.railway.app","owner":"glasswing-admin","repository":"glasswing-company-data","ref":"main","path":"companies/cue-cloud"}', NULL,
           '[]', 'space-snapshot', '2026-07-20T00:00:00.000Z',
           '2026-07-20T00:00:01.000Z', NULL
         )
@@ -67,8 +68,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const full = yield* snapshotQuery.getSnapshot();
       assert.equal(shell.spaces[0]?.id, SpaceId.makeUnsafe("space-snapshot"));
       assert.equal(shell.projects[0]?.spaceId, SpaceId.makeUnsafe("space-snapshot"));
+      assert.equal(shell.projects[0]?.repositoryBinding?.path, "companies/cue-cloud");
       assert.equal(full.spaces[0]?.id, SpaceId.makeUnsafe("space-snapshot"));
       assert.equal(full.projects[0]?.spaceId, SpaceId.makeUnsafe("space-snapshot"));
+      assert.equal(full.projects[0]?.repositoryBinding?.repository, "glasswing-company-data");
 
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_spaces`;
@@ -341,6 +344,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           spaceId: null,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          repositoryBinding: null,
           defaultModelSelection: {
             provider: "codex",
             model: "gpt-5-codex",

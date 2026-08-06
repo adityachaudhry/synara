@@ -4087,6 +4087,14 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         projectId: ProjectId.makeUnsafe("project-live"),
         title: "Live Project",
         workspaceRoot: "/tmp/project-live",
+        repositoryBinding: {
+          kind: "gitea-subdirectory",
+          origin: "https://glasswing-gitea-dev.up.railway.app",
+          owner: "glasswing-admin",
+          repository: "glasswing-company-data",
+          ref: "main",
+          path: "companies/cue-cloud",
+        },
         defaultModelSelection: {
           provider: "codex",
           model: "gpt-5-codex",
@@ -4094,14 +4102,26 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         createdAt,
       });
 
-      const projectRows = yield* sql<{ readonly title: string; readonly scriptsJson: string }>`
+      const projectRows = yield* sql<{
+        readonly title: string;
+        readonly scriptsJson: string;
+        readonly repositoryBindingJson: string | null;
+      }>`
         SELECT
           title,
-          scripts_json AS "scriptsJson"
+          scripts_json AS "scriptsJson",
+          repository_binding_json AS "repositoryBindingJson"
         FROM projection_projects
         WHERE project_id = 'project-live'
       `;
-      assert.deepEqual(projectRows, [{ title: "Live Project", scriptsJson: "[]" }]);
+      assert.deepEqual(projectRows, [
+        {
+          title: "Live Project",
+          scriptsJson: "[]",
+          repositoryBindingJson:
+            '{"kind":"gitea-subdirectory","origin":"https://glasswing-gitea-dev.up.railway.app","owner":"glasswing-admin","repository":"glasswing-company-data","ref":"main","path":"companies/cue-cloud"}',
+        },
+      ]);
 
       const projectorRows = yield* sql<{ readonly lastAppliedSequence: number }>`
         SELECT

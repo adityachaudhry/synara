@@ -696,6 +696,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           kind: nextProjectKind,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
+          repositoryBinding: command.repositoryBinding,
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
           isPinned: command.isPinned,

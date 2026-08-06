@@ -120,6 +120,42 @@ async function projectThreadWithRunningTurn(input: { createdAt: string; startedA
 }
 
 describe("orchestration projector", () => {
+  it("retains a repository binding on project.created", async () => {
+    const now = "2026-08-06T12:00:00.000Z";
+    const next = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "project.created",
+          aggregateKind: "project",
+          aggregateId: "project-cue-cloud",
+          occurredAt: now,
+          commandId: "cmd-project-create",
+          payload: {
+            projectId: "project-cue-cloud",
+            title: "Cue Cloud",
+            workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+            repositoryBinding: {
+              kind: "gitea-subdirectory",
+              origin: "https://glasswing-gitea-dev.up.railway.app",
+              owner: "glasswing-admin",
+              repository: "glasswing-company-data",
+              ref: "main",
+              path: "companies/cue-cloud",
+            },
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+
+    expect(next.projects[0]?.repositoryBinding?.path).toBe("companies/cue-cloud");
+  });
+
   it("applies thread.created events", async () => {
     const now = new Date().toISOString();
     const model = createEmptyReadModel(now);
