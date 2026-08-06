@@ -247,10 +247,23 @@ export function makeServerApplicationLayers() {
     ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
   );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
+  const giteaCompanyConfig = resolveGiteaCompanyCatalogConfig({ environment: process.env });
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled
     ? makeProviderWorkerProvisionerFromArtifactLive({
         controlUrl: distributedPiConfig.controlUrl,
         environment: distributedPiConfig.workerEnvironment,
+        ...(giteaCompanyConfig.enabled
+          ? {
+              giteaCheckout: {
+                origin: giteaCompanyConfig.origin,
+                owner: giteaCompanyConfig.owner,
+                repository: giteaCompanyConfig.repository,
+                ref: giteaCompanyConfig.ref,
+                companiesRoot: giteaCompanyConfig.companiesRoot,
+                readToken: giteaCompanyConfig.readToken,
+              },
+            }
+          : {}),
       }).pipe(
         Layer.provide(
           makeWorkspaceRuntimeLive(distributedPiConfig.railway).pipe(

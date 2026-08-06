@@ -39,6 +39,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
     authType: environment.SYNARA_RAILWAY_SANDBOX_AUTH_TYPE,
     region: environment.SYNARA_RAILWAY_SANDBOX_REGION,
     idleTimeoutMinutes: environment.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
+    networkIsolation: environment.SYNARA_RAILWAY_SANDBOX_NETWORK_ISOLATION,
   });
   if (!railway.enabled) return { enabled: false };
 

@@ -14,7 +14,10 @@ import {
 import { WorkspaceRuntime } from "../Services/WorkspaceRuntime";
 import { makeWorkspaceRuntimeLive } from "./WorkspaceRuntime";
 
-function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandboxRecord["status"] }) {
+function makeFakeRailwayClient(options?: {
+  readonly createdStatus?: RailwaySandboxRecord["status"];
+  readonly expectedNetworkIsolation?: "PRIVATE" | "ISOLATED";
+}) {
   const sandboxes = new Map<string, RailwaySandboxRecord>();
   let creates = 0;
   const writes: unknown[] = [];
@@ -24,7 +27,7 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
     create: (input) =>
       Effect.gen(function* () {
         if (
-          input.networkIsolation !== "PRIVATE" ||
+          input.networkIsolation !== (options?.expectedNetworkIsolation ?? "PRIVATE") ||
           input.idleTimeoutMinutes !== 30 ||
           input.region !== "us-east4-eqdc4a"
         ) {
@@ -98,6 +101,7 @@ const enabledConfig = {
   environmentId: "environment-1",
   region: "us-east4-eqdc4a",
   idleTimeoutMinutes: 30,
+  networkIsolation: "PRIVATE" as const,
 };
 
 function runWorkspace<A>(
@@ -133,6 +137,21 @@ describe("WorkspaceRuntime", () => {
       status: "running",
       region: "us-east4-eqdc4a",
     });
+  });
+
+  it("creates an isolated sandbox when distributed checkout policy requests it", async () => {
+    const fake = makeFakeRailwayClient({ expectedNetworkIsolation: "ISOLATED" });
+
+    const binding = await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        return yield* runtime.create({ lifecycleGeneration: "generation-1", environment: {} });
+      }),
+      { ...enabledConfig, networkIsolation: "ISOLATED" as const },
+    );
+
+    expect(binding.runtimeId).toBe("sandbox-1");
   });
 
   it("connects only to a running sandbox", async () => {

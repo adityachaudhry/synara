@@ -1,3 +1,4 @@
+import { ProjectRepositoryBinding } from "@synara/contracts";
 import { Schema } from "effect";
 
 export const ProviderWorkerRuntimeBinding = Schema.Struct({
@@ -26,6 +27,12 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
   processSupervision: Schema.optional(Schema.Literals(["durable", "attached"])),
   cwd: Schema.String,
   homeDir: Schema.String,
+  repositoryCheckout: Schema.optional(
+    Schema.Struct({
+      binding: ProjectRepositoryBinding,
+      commit: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u)),
+    }),
+  ),
 });
 
 export type ProviderWorkerRuntimeBinding = typeof ProviderWorkerRuntimeBinding.Type;

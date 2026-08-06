@@ -1,4 +1,4 @@
-import type { ProviderSessionStartInput } from "@synara/contracts";
+import type { ProjectRepositoryBinding, ProviderSessionStartInput } from "@synara/contracts";
 import { Effect, Layer, Option, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -29,6 +29,24 @@ const runtimeBinding: ProviderWorkerRuntimeBinding = {
   durableSessionName: "provider-worker-1",
   cwd: "/workspace",
   homeDir: "/workspace/.synara-provider-worker",
+};
+
+const repositoryBinding: ProjectRepositoryBinding = {
+  kind: "gitea-subdirectory",
+  origin: "https://glasswing-gitea-dev.up.railway.app",
+  owner: "glasswing-admin",
+  repository: "glasswing-company-data",
+  ref: "main",
+  path: "companies/cue-cloud",
+};
+
+const repositoryRuntimeBinding: ProviderWorkerRuntimeBinding = {
+  ...runtimeBinding,
+  cwd: "/workspace/repository/companies/cue-cloud",
+  repositoryCheckout: {
+    binding: repositoryBinding,
+    commit: "0123456789abcdef0123456789abcdef01234567",
+  },
 };
 
 function startInput(): ProviderSessionStartInput {
@@ -132,6 +150,43 @@ describe("RoutedPiAdapter", () => {
         runtimePayload: { distributedPiRuntime: runtimeBinding },
       }),
     );
+  });
+
+  it("hydrates a Gitea-bound project remotely and starts Pi in the sandbox checkout", async () => {
+    const harness = makeHarness("railway-sandbox");
+    harness.provisioner.start.mockReturnValue(Effect.succeed(repositoryRuntimeBinding));
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const input = {
+      ...startInput(),
+      cwd: "/data/gitea-company-projects/cue-cloud",
+      repositoryBinding,
+    };
+
+    await Effect.runPromise(adapter.startSession(input));
+
+    expect(harness.provisioner.start).toHaveBeenCalledWith({
+      lifecycleGeneration: "generation-1",
+      cwd: "/data/gitea-company-projects/cue-cloud",
+      repositoryBinding,
+    });
+    const remoteStartInput = harness.request.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(remoteStartInput).toMatchObject({
+      threadId,
+      cwd: "/workspace/repository/companies/cue-cloud",
+      lifecycleGeneration: "generation-1",
+    });
+    expect(remoteStartInput).not.toHaveProperty("repositoryBinding");
+  });
+
+  it("fails closed instead of running a Gitea-bound project on the controller", async () => {
+    const harness = makeHarness("local");
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await expect(
+      Effect.runPromise(adapter.startSession({ ...startInput(), repositoryBinding })),
+    ).rejects.toMatchObject({ method: "session.start" });
+    expect(harness.localStart).not.toHaveBeenCalled();
+    expect(harness.provisioner.start).not.toHaveBeenCalled();
   });
 
   it("rehydrates a persisted remote binding through the existing restart seam", async () => {

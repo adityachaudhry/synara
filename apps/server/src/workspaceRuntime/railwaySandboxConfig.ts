@@ -4,6 +4,7 @@ export interface RailwaySandboxRuntimeConfigInput {
   readonly authType?: string;
   readonly region?: string;
   readonly idleTimeoutMinutes?: string;
+  readonly networkIsolation?: string;
 }
 
 export type RailwaySandboxRuntimeConfig =
@@ -15,6 +16,7 @@ export type RailwaySandboxRuntimeConfig =
       readonly authType: "bearer" | "project-token";
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
+      readonly networkIsolation: "PRIVATE" | "ISOLATED";
     };
 
 export type RailwaySandboxRuntimeConfigDescription =
@@ -25,6 +27,7 @@ export type RailwaySandboxRuntimeConfigDescription =
       readonly authType: "bearer" | "project-token";
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
+      readonly networkIsolation: "PRIVATE" | "ISOLATED";
     };
 
 const TOKEN_ENV_KEY = "SYNARA_RAILWAY_SANDBOX_TOKEN";
@@ -43,12 +46,14 @@ export function resolveRailwaySandboxRuntimeConfig(
   const authTypeInput = trimmed(input.authType);
   const region = trimmed(input.region);
   const idleTimeoutInput = trimmed(input.idleTimeoutMinutes);
+  const networkIsolationInput = trimmed(input.networkIsolation);
   const hasAnyConfiguration =
     token !== undefined ||
     environmentId !== undefined ||
     authTypeInput !== undefined ||
     region !== undefined ||
-    idleTimeoutInput !== undefined;
+    idleTimeoutInput !== undefined ||
+    networkIsolationInput !== undefined;
 
   if (!hasAnyConfiguration) {
     return { enabled: false };
@@ -80,6 +85,13 @@ export function resolveRailwaySandboxRuntimeConfig(
     );
   }
 
+  const networkIsolation = networkIsolationInput ?? "PRIVATE";
+  if (networkIsolation !== "PRIVATE" && networkIsolation !== "ISOLATED") {
+    throw new Error(
+      "SYNARA_RAILWAY_SANDBOX_NETWORK_ISOLATION must be PRIVATE or ISOLATED.",
+    );
+  }
+
   return {
     enabled: true,
     token,
@@ -87,6 +99,7 @@ export function resolveRailwaySandboxRuntimeConfig(
     authType,
     ...(region === undefined ? {} : { region }),
     idleTimeoutMinutes,
+    networkIsolation,
   };
 }
 
@@ -103,5 +116,6 @@ export function describeRailwaySandboxRuntimeConfig(
     authType: config.authType,
     ...(config.region === undefined ? {} : { region: config.region }),
     idleTimeoutMinutes: config.idleTimeoutMinutes,
+    networkIsolation: config.networkIsolation,
   };
 }

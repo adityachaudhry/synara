@@ -127,6 +127,12 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       const activeRemote = remoteByThread.get(input.threadId);
 
       if (target === "local") {
+        if (input.repositoryBinding !== undefined) {
+          return yield* adapterError(
+            "session.start",
+            "Gitea-bound projects require the Railway sandbox Pi execution target.",
+          );
+        }
         const remote = activeRemote ?? persistedRemote;
         if (remote) {
           yield* provisioner.stop(remote).pipe(
@@ -145,15 +151,22 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
         ? yield* provisioner.restart(previous, {
             lifecycleGeneration,
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+            ...(input.repositoryBinding === undefined
+              ? {}
+              : { repositoryBinding: input.repositoryBinding }),
           })
         : yield* provisioner.start({
             lifecycleGeneration,
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+            ...(input.repositoryBinding === undefined
+              ? {}
+              : { repositoryBinding: input.repositoryBinding }),
           });
+      const { repositoryBinding: _repositoryBinding, ...workerSessionInput } = input;
       const session = yield* requestDecoded(
         binding,
         "session.start",
-        { ...input, lifecycleGeneration },
+        { ...workerSessionInput, cwd: binding.cwd, lifecycleGeneration },
         ProviderSession,
       ).pipe(
         Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),

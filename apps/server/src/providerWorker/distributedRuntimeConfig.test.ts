@@ -25,6 +25,7 @@ describe("resolveDistributedPiRuntimeConfig", () => {
         SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID: "environment",
         SYNARA_PROVIDER_WORKER_CONTROL_URL:
           "http://synara.railway.internal:3000/internal/provider-worker",
+        SYNARA_RAILWAY_SANDBOX_NETWORK_ISOLATION: "ISOLATED",
         OPENAI_API_KEY: "openai-secret",
         RANDOM_SECRET: "must-not-forward",
       },
@@ -36,6 +37,7 @@ describe("resolveDistributedPiRuntimeConfig", () => {
       workerEnvironment: { OPENAI_API_KEY: "openai-secret" },
     });
     if (!config.enabled) throw new Error("expected enabled configuration");
+    expect(config.railway.networkIsolation).toBe("ISOLATED");
     expect(JSON.stringify(config.workerEnvironment)).not.toContain("railway-secret");
     expect(JSON.stringify(config.workerEnvironment)).not.toContain("must-not-forward");
   });

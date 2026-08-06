@@ -64,7 +64,7 @@ export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
           const enabled = yield* requireEnabled(config, "create");
           const record = yield* client
             .create({
-              networkIsolation: "PRIVATE",
+              networkIsolation: enabled.networkIsolation,
               idleTimeoutMinutes: enabled.idleTimeoutMinutes,
               ...(enabled.region === undefined ? {} : { region: enabled.region }),
               environment: input.environment,

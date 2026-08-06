@@ -1,4 +1,5 @@
 import { ServiceMap, type Effect } from "effect";
+import type { ProjectRepositoryBinding } from "@synara/contracts";
 
 import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
@@ -6,6 +7,7 @@ import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 export interface ProviderWorkerProvisionInput {
   readonly lifecycleGeneration: string;
   readonly cwd?: string;
+  readonly repositoryBinding?: ProjectRepositoryBinding;
 }
 
 export interface ProviderWorkerProvisionerShape {

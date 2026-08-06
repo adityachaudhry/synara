@@ -17,7 +17,8 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
       environmentId: " env-1 ",
       authType: " bearer ",
       region: " us-east4-eqdc4a ",
-        idleTimeoutMinutes: "30",
+      idleTimeoutMinutes: "30",
+      networkIsolation: " ISOLATED ",
       }),
     ).toEqual({
       enabled: true,
@@ -26,6 +27,7 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
       authType: "bearer",
       region: "us-east4-eqdc4a",
       idleTimeoutMinutes: 30,
+      networkIsolation: "ISOLATED",
     });
   });
 
@@ -66,6 +68,16 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
         idleTimeoutMinutes: "121",
       }),
     ).toThrow(/1 through 120/);
+  });
+
+  it("rejects unknown sandbox network isolation modes", () => {
+    expect(() =>
+      resolveRailwaySandboxRuntimeConfig({
+        token: "secret",
+        environmentId: "env-1",
+        networkIsolation: "PUBLIC",
+      }),
+    ).toThrow(/NETWORK_ISOLATION/);
   });
 
   it("redacts the token from diagnostics", () => {

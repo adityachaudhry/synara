@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
+import type { ProjectRepositoryBinding } from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerFence } from "../fence";
+import {
+  makeGiteaCheckoutPlan,
+  parseGiteaCheckoutCommit,
+  type GiteaCheckoutPlan,
+  type GiteaCheckoutRepositoryConfig,
+} from "../giteaCheckout";
 import {
   ProviderWorkerProvisioner,
   type ProviderWorkerProvisionerShape,
@@ -29,6 +36,7 @@ export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
   readonly controlUrl: string;
   readonly environment?: Readonly<Record<string, string>>;
+  readonly giteaCheckout?: GiteaCheckoutRepositoryConfig;
 }
 
 function provisionError(operation: string, detail: string, cause: unknown, sandboxId?: string) {
@@ -46,11 +54,93 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const broker = yield* ProviderWorkerBroker;
     const authority = yield* ProviderWorkerBootstrapAuthority;
 
+    const resolveCheckoutPlan = Effect.fn(function* (
+      provision: Parameters<ProviderWorkerProvisionerShape["start"]>[0],
+    ) {
+      if (provision.repositoryBinding === undefined) return undefined;
+      if (options.giteaCheckout === undefined) {
+        return yield* provisionError(
+          "checkout.configure",
+          "A Gitea-bound project requires configured sandbox checkout credentials.",
+          undefined,
+        );
+      }
+      const plan = yield* Effect.try({
+        try: () =>
+          makeGiteaCheckoutPlan({
+            binding: provision.repositoryBinding!,
+            repository: options.giteaCheckout!,
+          }),
+        catch: (cause) =>
+          provisionError(
+            "checkout.validate",
+            "The project repository binding is not allowed by the sandbox checkout configuration.",
+            cause,
+          ),
+      });
+      return { binding: provision.repositoryBinding, plan } as const;
+    });
+
+    const prepareWorkspace = Effect.fn(function* (input: {
+      readonly workspace: ProviderWorkerRuntimeBinding["workspace"];
+      readonly provision: Parameters<ProviderWorkerProvisionerShape["start"]>[0];
+      readonly checkout:
+        | { readonly binding: ProjectRepositoryBinding; readonly plan: GiteaCheckoutPlan }
+        | undefined;
+      readonly fallbackCwd: string;
+    }) {
+      if (input.checkout === undefined) {
+        return {
+          cwd: input.provision.cwd?.trim() || input.fallbackCwd,
+          repositoryCheckout: undefined,
+        } as const;
+      }
+      const result = yield* workspaceRuntime.exec(input.workspace, {
+        command: input.checkout.plan.command,
+        timeoutSeconds: 120,
+      }).pipe(
+        Effect.mapError((cause) =>
+          provisionError(
+            "checkout.exec",
+            "Failed to execute the Gitea company checkout.",
+            cause,
+            input.workspace.runtimeId,
+          ),
+        ),
+      );
+      if (result.exitCode !== 0 || result.timedOut) {
+        return yield* provisionError(
+          "checkout.exec",
+          `Gitea company checkout exited with ${String(result.exitCode)}${result.timedOut ? " after timing out" : ""}.`,
+          result.stderr,
+          input.workspace.runtimeId,
+        );
+      }
+      const commit = yield* Effect.try({
+        try: () => parseGiteaCheckoutCommit(result.stdout),
+        catch: (cause) =>
+          provisionError(
+            "checkout.verify",
+            "The Gitea checkout did not report an immutable commit.",
+            cause,
+            input.workspace.runtimeId,
+          ),
+      });
+      return {
+        cwd: input.checkout.plan.cwd,
+        repositoryCheckout: {
+          binding: input.checkout.binding,
+          commit,
+        },
+      } as const;
+    });
+
     const provisionConnectedWorker = Effect.fn(function* (input: {
       readonly workspace: ProviderWorkerRuntimeBinding["workspace"];
       readonly lifecycleGeneration: string;
       readonly cwd: string;
       readonly homeDir: string;
+      readonly repositoryCheckout?: ProviderWorkerRuntimeBinding["repositoryCheckout"];
     }) {
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
@@ -117,6 +207,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           processSupervision: durable.supervision,
           cwd: input.cwd,
           homeDir: input.homeDir,
+          ...(input.repositoryCheckout === undefined
+            ? {}
+            : { repositoryCheckout: input.repositoryCheckout }),
         } satisfies ProviderWorkerRuntimeBinding;
       });
 
@@ -147,15 +240,30 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
 
     const start: ProviderWorkerProvisionerShape["start"] = (input) =>
       Effect.gen(function* () {
+        const checkout = yield* resolveCheckoutPlan(input);
         const workspace = yield* workspaceRuntime.create({
           lifecycleGeneration: input.lifecycleGeneration,
-          environment: { ...(options.environment ?? {}) },
+          environment: {
+            ...(options.environment ?? {}),
+            ...(checkout?.plan.environment ?? {}),
+          },
         });
-        return yield* provisionConnectedWorker({
-          workspace,
-          lifecycleGeneration: input.lifecycleGeneration,
-          cwd: input.cwd?.trim() || DEFAULT_CWD,
-          homeDir: DEFAULT_HOME_DIR,
+        return yield* Effect.gen(function* () {
+          const prepared = yield* prepareWorkspace({
+            workspace,
+            provision: input,
+            checkout,
+            fallbackCwd: DEFAULT_CWD,
+          });
+          return yield* provisionConnectedWorker({
+            workspace,
+            lifecycleGeneration: input.lifecycleGeneration,
+            cwd: prepared.cwd,
+            homeDir: DEFAULT_HOME_DIR,
+            ...(prepared.repositoryCheckout === undefined
+              ? {}
+              : { repositoryCheckout: prepared.repositoryCheckout }),
+          });
         }).pipe(
           Effect.onError(() => workspaceRuntime.destroy(workspace).pipe(Effect.catch(() => Effect.void))),
         );
@@ -187,15 +295,30 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         // be stale after a control-plane restart, and must not leave an older
         // worker reconnecting alongside the replacement generation.
         yield* workspaceRuntime.destroy(previousWorkspace);
+        const checkout = yield* resolveCheckoutPlan(input);
         const replacementWorkspace = yield* workspaceRuntime.create({
           lifecycleGeneration: input.lifecycleGeneration,
-          environment: { ...(options.environment ?? {}) },
+          environment: {
+            ...(options.environment ?? {}),
+            ...(checkout?.plan.environment ?? {}),
+          },
         });
-        return yield* provisionConnectedWorker({
-          workspace: replacementWorkspace,
-          lifecycleGeneration: input.lifecycleGeneration,
-          cwd: input.cwd?.trim() || binding.cwd,
-          homeDir: binding.homeDir,
+        return yield* Effect.gen(function* () {
+          const prepared = yield* prepareWorkspace({
+            workspace: replacementWorkspace,
+            provision: input,
+            checkout,
+            fallbackCwd: binding.cwd,
+          });
+          return yield* provisionConnectedWorker({
+            workspace: replacementWorkspace,
+            lifecycleGeneration: input.lifecycleGeneration,
+            cwd: prepared.cwd,
+            homeDir: binding.homeDir,
+            ...(prepared.repositoryCheckout === undefined
+              ? {}
+              : { repositoryCheckout: prepared.repositoryCheckout }),
+          });
         }).pipe(
           Effect.onError(() =>
             workspaceRuntime.destroy(replacementWorkspace).pipe(Effect.catch(() => Effect.void)),
@@ -279,6 +402,7 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
         artifact,
         controlUrl: options.controlUrl,
         ...(options.environment === undefined ? {} : { environment: options.environment }),
+        ...(options.giteaCheckout === undefined ? {} : { giteaCheckout: options.giteaCheckout }),
       });
     }),
   );
