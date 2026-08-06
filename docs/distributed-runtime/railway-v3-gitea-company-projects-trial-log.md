@@ -208,6 +208,49 @@ unchanged. Sandbox configuration, credentials, and provider availability are sti
 authoritatively by the existing `session.start` path. The focused ProviderHealth and entrypoint
 suites pass 96 tests.
 
+### Clean-install Effect patch race
+
+**Observation:** Deployment `82727b17-b4e5-42a1-9a77-f2e11f54db91` failed inside `bun install`
+before either application build. The Effect language-service prepare hook reported
+`UnableToFindPositionToPatchError` while patching TypeScript.
+
+**Correction:** Run the local patch command against the installed tree, where it confirmed the
+same patch version was already present, then retry the identical source without changing code.
+Deployment `48be4be4-6755-4dd1-b47c-40a5e526c576` passed the prepare hook and completed. The
+identical retry is evidence of a nondeterministic clean-install patch race, not an application
+compile defect; no speculative source workaround was added.
+
+### Refreshed bearer was not active in the restarted deployment
+
+**Observation:** The first distributed turn reached `session.start` but Railway returned
+`Not Authorized` before creating a sandbox. Updating the refreshed CLI bearer with
+`--skip-deploys` and restarting produced the same result.
+
+**Cause:** The variable store contained the refreshed token, but `restart` reused the previous
+deployment's environment snapshot. A local Railway SDK probe with the exact stored bearer created
+and destroyed a one-minute v3/dev sandbox successfully, proving the credential and SDK call were
+valid.
+
+**Correction:** `redeploy` the existing image so current variables are injected without a source
+rebuild. Deployment `e97ad339-0771-43ce-8ce5-3ac95399cd39` then created sandbox
+`12a3dbc0-fbb9-4d9f-a5dd-04d0f94e18f3` in the configured region. The two local probe sandboxes were
+explicitly destroyed.
+
+### Railway safe-git rejected a persistent remote
+
+**Observation:** The first authenticated sandbox was created and then destroyed by the
+provisioner's cleanup path before worker launch. Its hydration command failed with
+`safe-git: refusing to run 'git remote add'`.
+
+**Cause:** The sparse checkout plan created a persistent `origin` remote even though it only needed
+one shallow fetch. Railway's sandbox policy permits the repository operation but rejects that
+remote mutation.
+
+**Correction:** Add a failing test that prohibits `remote add` and requires the allowlisted Gitea
+URL directly in `git fetch`. The plan still supplies the token only through the environment header,
+uses sparse checkout, detaches `FETCH_HEAD`, verifies `company.json`, and records the commit marker.
+The checkout, provisioner, and routed-adapter suites pass 14 focused tests.
+
 ## Focused verification completed before deployment
 
 - 59 contract tests passed.

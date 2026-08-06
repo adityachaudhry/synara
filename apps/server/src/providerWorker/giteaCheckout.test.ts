@@ -33,6 +33,10 @@ describe("makeGiteaCheckoutPlan", () => {
     expect(plan.command).toContain("/companies/cue-cloud/");
     expect(plan.command).toContain("$SYNARA_GITEA_CHECKOUT_TOKEN");
     expect(plan.command).not.toContain("super-secret-token");
+    expect(plan.command).not.toContain("remote add");
+    expect(plan.command).toContain(
+      "fetch --depth=1 'https://glasswing-gitea-dev.up.railway.app/glasswing-admin/glasswing-company-data.git' 'main'",
+    );
   });
 
   it("rejects a binding outside the configured repository", () => {
