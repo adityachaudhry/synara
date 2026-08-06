@@ -453,6 +453,34 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(codex?.versionAdvisory?.updateCommand, null);
     });
 
+    it("projects Railway Sandbox Pi as usable without a controller-local CLI status", () => {
+      const settings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          pi: {
+            ...DEFAULT_SERVER_SETTINGS.providers.pi,
+            executionTarget: "railway-sandbox" as const,
+          },
+        },
+      };
+
+      const statuses = projectProviderStatusesForSettings(
+        [],
+        settings,
+        "2026-08-06T20:00:00.000Z",
+      );
+      const pi = statuses.find((status) => status.provider === "pi");
+
+      assert.strictEqual(pi?.available, true);
+      assert.strictEqual(pi?.status, "ready");
+      assert.strictEqual(pi?.authStatus, "unknown");
+      assert.strictEqual(
+        pi?.message,
+        "Pi will be verified inside the Railway Sandbox when the session starts.",
+      );
+    });
+
     it.effect("does not expose cached ready statuses for disabled providers", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;

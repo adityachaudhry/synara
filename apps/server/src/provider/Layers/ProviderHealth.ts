@@ -2033,6 +2033,17 @@ export function makeDisabledProviderStatus(
   } satisfies ServerProviderStatus;
 }
 
+function makeRailwaySandboxPiStatus(checkedAt: string): ServerProviderStatus {
+  return {
+    provider: PI_PROVIDER,
+    status: "ready",
+    available: true,
+    authStatus: "unknown",
+    checkedAt,
+    message: "Pi will be verified inside the Railway Sandbox when the session starts.",
+  } satisfies ServerProviderStatus;
+}
+
 function isDisabledProviderStatusOverlay(status: ServerProviderStatus): boolean {
   return status.message === DISABLED_PROVIDER_STATUS_MESSAGE && status.available === false;
 }
@@ -2096,6 +2107,14 @@ export function projectProviderStatusesForSettings(
           ? { ...disabledStatusWithAdvisory, updateState: status.updateState }
           : disabledStatusWithAdvisory,
       );
+      continue;
+    }
+
+    // A distributed Pi session does not execute the controller's local CLI.
+    // Let session.start perform the authoritative sandbox/config/auth checks
+    // instead of blocking the browser because `pi` is absent from this image.
+    if (provider === PI_PROVIDER && settings.providers.pi.executionTarget === "railway-sandbox") {
+      projected.push(makeRailwaySandboxPiStatus(status?.checkedAt ?? checkedAt));
       continue;
     }
 

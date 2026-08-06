@@ -189,6 +189,25 @@ creates `/data/worktrees` and `/data/gitea-company-projects` as `node:node` with
 dropping privileges. The focused test passed, and a disposable Docker-volume probe verified that
 the unprivileged user can create the Cue Cloud child directory. The probe volume was removed.
 
+### Pi send gate still measured the controller-local CLI
+
+**Observation:** Cue Cloud project creation succeeded after deployment
+`b04c2fa8-9cbd-4a74-80f5-7731f00c13bd`, the new-thread composer selected Claude Fable 5, and the
+Pi model catalog loaded. Send was still blocked twice with `Provider status is still loading.` No
+turn or sandbox was created.
+
+**Cause:** The routed Pi adapter honored `railway-sandbox`, but the independent provider-health
+projection omitted Pi when the controller image had no local `pi` CLI status. The browser's shared
+send gate correctly blocks a provider absent from the health snapshot. For distributed mode that
+was checking the wrong execution target.
+
+**Correction:** Add a focused provider-health regression proving Railway Sandbox Pi is usable even
+without a controller-local status. The settings projection now emits a remote-target ready status
+only when `executionTarget` is `railway-sandbox`; local mode and disabled-provider behavior remain
+unchanged. Sandbox configuration, credentials, and provider availability are still verified
+authoritatively by the existing `session.start` path. The focused ProviderHealth and entrypoint
+suites pass 96 tests.
+
 ## Focused verification completed before deployment
 
 - 59 contract tests passed.
