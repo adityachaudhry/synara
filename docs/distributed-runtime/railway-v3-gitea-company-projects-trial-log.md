@@ -427,3 +427,29 @@ Railway Docker build is the production-bundle compilation check for this deploym
 - Railway deployment `7c8f4b76-0ea9-45bc-91c2-4e2211905958` completed a clean web/server Docker
   build and reached `SUCCESS` before the replacement-sandbox recovery canary.
 - `git diff --check` passed for the final documentation changes.
+
+## Reviewed runtime deployment
+
+Reviewed runtime commit `11b270e6` was uploaded only to `v3` / `dev` / `synara-gitea-dev` as
+deployment `0466d571-b598-4c4f-b6ef-0ad32265db59`. The pinned Docker toolchain installed 2,583
+packages, built the web bundle, server, and provider-worker artifact, exported image digest
+`sha256:f9cd8e09a21ecea1d7f86135e4abe22ef3472c458bb3a31e362843c2b087d8de`, and reached `SUCCESS`.
+
+The first attempt to follow build output used `railway logs --build <id> --follow`; Railway CLI
+5.15.0 rejected the unsupported `--follow` flag. Bounded `railway logs --build <id>` reads plus
+deployment-status polling provided the same non-mutating monitoring without adding a workaround.
+
+Startup mounted the existing `/data` volume, ran no pending migrations, and bootstrapped the
+orchestration engine at durable sequence 85. The root and saved thread routes both returned HTTP
+200. Reloading the authenticated browser restored Cue Cloud, the existing thread, all three user
+messages, and both prior Pi answers. The deployed Add Project dialog listed all 33 Gitea company
+directories with Company selected and no Folder source.
+
+After the old controller shut down, `railway sandbox list --json` returned an empty inventory, so
+the deployment handoff left no sandbox orphan. The outgoing deployment still had its live binding
+in memory, so this inventory does not by itself prove the new persisted-binding fallback; the new
+restart-then-stop tests cover that exact empty-map case. No post-deploy provider turn was added
+merely to keep a sandbox alive. The earlier initial, replacement, and credential-recovery canaries
+already validated provisioning and Pi responses, while focused tests cover the hardened cleanup
+and event-fencing delta. The next turn will provision a fresh fenced sandbox generation from the
+persisted Gitea binding.
