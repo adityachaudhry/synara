@@ -14,6 +14,7 @@ import type {
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSession,
+  ProjectRepositoryBinding,
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
@@ -195,6 +196,7 @@ describe("ProviderCommandReactor", () => {
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
+    readonly projectRepositoryBinding?: ProjectRepositoryBinding;
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
@@ -575,6 +577,7 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         title: "Provider Project",
         workspaceRoot: "/tmp/provider-project",
+        repositoryBinding: input?.projectRepositoryBinding,
         defaultModelSelection: modelSelection,
         createdAt: now,
       }),
@@ -3314,6 +3317,7 @@ describe("ProviderCommandReactor", () => {
       },
       runtimeMode: "approval-required",
     });
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("repositoryBinding");
 
     const thread = await readHarnessThread(harness);
     expect(thread?.session?.threadId).toBe("thread-1");
@@ -3321,6 +3325,39 @@ describe("ProviderCommandReactor", () => {
     // One scan rechecks the provider's live-turn race before dispatch; the
     // session ensure then performs the only full lookup needed for startup.
     expect(harness.listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the project repository binding into provider session startup", async () => {
+    const repositoryBinding: ProjectRepositoryBinding = {
+      kind: "gitea-subdirectory",
+      origin: "https://glasswing-gitea-dev.up.railway.app",
+      owner: "glasswing-admin",
+      repository: "glasswing-company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+    const harness = await createHarness({ projectRepositoryBinding: repositoryBinding });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-gitea"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-gitea"),
+          role: "user",
+          text: "What does this company do?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ repositoryBinding });
   });
 
   it("routes subagent-thread turn starts to the parent session as steers", async () => {

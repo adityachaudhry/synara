@@ -510,20 +510,34 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const resolveProjectedThreadWorkspace = Effect.fnUntraced(function* (
+    thread: Pick<
+      OrchestrationThread,
+      "projectId" | "envMode" | "worktreePath" | "workingDirectory"
+    >,
+  ): Effect.fn.Return<{
+    readonly project: OrchestrationProjectShell | undefined;
+    readonly cwd: string | undefined;
+  }> {
+    const project = yield* resolveThreadWorkspaceProject(thread);
+    if (!project) {
+      return { project: undefined, cwd: undefined };
+    }
+    return {
+      project,
+      cwd: resolveThreadWorkspaceCwd({
+        thread,
+        projects: [project],
+      }),
+    };
+  });
   const resolveProjectedThreadWorkspaceCwd = Effect.fnUntraced(function* (
     thread: Pick<
       OrchestrationThread,
       "projectId" | "envMode" | "worktreePath" | "workingDirectory"
     >,
   ): Effect.fn.Return<string | undefined> {
-    const project = yield* resolveThreadWorkspaceProject(thread);
-    if (!project) {
-      return undefined;
-    }
-    return resolveThreadWorkspaceCwd({
-      thread,
-      projects: [project],
-    });
+    return (yield* resolveProjectedThreadWorkspace(thread)).cwd;
   });
   const editResendTurnStartKeys = new Set<string>();
   const quarantinedThreads = new Set<string>();
@@ -1072,7 +1086,8 @@ const make = Effect.gen(function* () {
     const resolvedProviderOptions = providerStartOptionsFromServerSettings(
       settingsSnapshot.settings,
     );
-    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const resolvedWorkspace = yield* resolveProjectedThreadWorkspace(thread);
+    const effectiveCwd = resolvedWorkspace.cwd;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -1087,6 +1102,9 @@ const make = Effect.gen(function* () {
     const providerSessionOptions = {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(resolvedWorkspace.project?.repositoryBinding
+        ? { repositoryBinding: resolvedWorkspace.project.repositoryBinding }
+        : {}),
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
