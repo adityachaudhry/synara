@@ -29,6 +29,7 @@ export * from "./stats";
 export * from "./settings";
 export * from "./git";
 export * from "./githubProjectProvisioning";
+export * from "./giteaProjects";
 export * from "./pullRequests";
 export * from "./orchestration";
 export * from "./editor";

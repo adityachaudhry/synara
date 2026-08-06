@@ -87,6 +87,7 @@ import type {
   GitHubProjectProvisionProgressEvent,
   GitHubProjectProvisionResult,
 } from "./githubProjectProvisioning";
+import type { GiteaCompanyCatalogSnapshot } from "./giteaProjects";
 import type {
   PullRequestActionInput,
   PullRequestActionResult,
@@ -575,6 +576,7 @@ export interface NativeApi {
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
   projects: {
+    listGiteaCompanies: () => Promise<GiteaCompanyCatalogSnapshot>;
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;

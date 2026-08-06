@@ -7,6 +7,24 @@ const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSession
 const decodeProviderSendTurnInput = Schema.decodeUnknownSync(ProviderSendTurnInput);
 
 describe("ProviderSessionStartInput", () => {
+  it("accepts an optional Gitea project binding", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-cue-cloud",
+      provider: "pi",
+      runtimeMode: "full-access",
+      repositoryBinding: {
+        kind: "gitea-subdirectory",
+        origin: "https://glasswing-gitea-dev.up.railway.app",
+        owner: "glasswing-admin",
+        repository: "glasswing-company-data",
+        ref: "main",
+        path: "companies/cue-cloud",
+      },
+    });
+
+    expect(parsed.repositoryBinding?.path).toBe("companies/cue-cloud");
+  });
+
   it("accepts codex-compatible payloads", () => {
     const parsed = decodeProviderSessionStartInput({
       threadId: "thread-1",

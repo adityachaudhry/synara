@@ -35,6 +35,7 @@ import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
+import { GiteaCompanyCatalogSnapshot } from "./giteaProjects";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -351,6 +352,15 @@ export const WsProjectsListDirectoriesRpc = Rpc.make(WS_METHODS.projectsListDire
   success: ProjectListDirectoriesResult,
   error: WsRpcError,
 });
+
+export const WsProjectsListGiteaCompaniesRpc = Rpc.make(
+  WS_METHODS.projectsListGiteaCompanies,
+  {
+    payload: Schema.Struct({}),
+    success: GiteaCompanyCatalogSnapshot,
+    error: WsRpcError,
+  },
+);
 
 export const WsProjectsDiscoverScriptsRpc = Rpc.make(WS_METHODS.projectsDiscoverScripts, {
   payload: ProjectDiscoverScriptsInput,
@@ -1026,6 +1036,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
+  WsProjectsListGiteaCompaniesRpc,
   WsProjectsDiscoverScriptsRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,

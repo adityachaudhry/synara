@@ -136,6 +136,7 @@ import {
 
 export const WS_METHODS = {
   // Project registry methods
+  projectsListGiteaCompanies: "projects.listGiteaCompanies",
   projectsDiscoverScripts: "projects.discoverScripts",
   projectsListDirectories: "projects.listDirectories",
   projectsSearchEntries: "projects.searchEntries",
@@ -311,6 +312,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.unsubscribeThread, OrchestrationUnsubscribeThreadInput),
 
   // Project Search
+  tagRequestBody(WS_METHODS.projectsListGiteaCompanies, Schema.Struct({})),
   tagRequestBody(WS_METHODS.projectsDiscoverScripts, ProjectDiscoverScriptsInput),
   tagRequestBody(WS_METHODS.projectsListDirectories, ProjectListDirectoriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),

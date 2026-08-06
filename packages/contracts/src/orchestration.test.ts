@@ -365,6 +365,42 @@ it.effect("decodes historical project.created payloads with a default provider",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
     assert.strictEqual(parsed.isPinned, false);
+    assert.strictEqual(parsed.repositoryBinding, null);
+  }),
+);
+
+it.effect("round-trips a Gitea repository binding through project creation", () =>
+  Effect.gen(function* () {
+    const repositoryBinding = {
+      kind: "gitea-subdirectory" as const,
+      origin: "https://glasswing-gitea-dev.up.railway.app",
+      owner: "glasswing-admin",
+      repository: "glasswing-company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+    const command = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-gitea-project",
+      projectId: "project-cue-cloud",
+      title: "Cue Cloud",
+      workspaceRoot: "/data/gitea-company-projects/cue-cloud",
+      repositoryBinding,
+      createdAt: "2026-08-06T12:00:00.000Z",
+    });
+    const payload = yield* decodeProjectCreatedPayload({
+      projectId: command.projectId,
+      title: command.title,
+      workspaceRoot: command.workspaceRoot,
+      defaultModelSelection: null,
+      scripts: [],
+      repositoryBinding: command.repositoryBinding,
+      createdAt: command.createdAt,
+      updatedAt: command.createdAt,
+    });
+
+    assert.deepStrictEqual(command.repositoryBinding, repositoryBinding);
+    assert.deepStrictEqual(payload.repositoryBinding, repositoryBinding);
   }),
 );
 

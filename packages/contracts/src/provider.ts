@@ -25,6 +25,7 @@ import {
   RuntimeMode,
 } from "./orchestration";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
+import { ProjectRepositoryBinding } from "./giteaProjects";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -54,6 +55,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   provider: Schema.optional(ProviderKind),
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  repositoryBinding: Schema.optional(ProjectRepositoryBinding),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),

@@ -11,6 +11,7 @@ import {
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
+import { ProjectRepositoryBinding } from "./giteaProjects";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -448,6 +449,9 @@ export const OrchestrationProject = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -463,6 +467,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -990,6 +997,9 @@ export const ProjectCreateCommand = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
@@ -1692,6 +1702,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
