@@ -139,6 +139,8 @@ import {
   GitHubProjectProvisioningError,
   makeGitHubProjectProvisioner,
 } from "./project/githubProjectProvisioning";
+import { GiteaCompanyCatalog } from "./giteaProjects/Services/GiteaCompanyCatalog";
+import { canonicalizeGiteaProjectCreate } from "./giteaProjects/projectCreateAdmission";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -320,6 +322,7 @@ const makeWsRpcHandlersLayer = () =>
       const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
+      const giteaCompanyCatalog = yield* GiteaCompanyCatalog;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -805,8 +808,12 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
+              const admittedCommand = yield* canonicalizeGiteaProjectCreate(
+                command,
+                giteaCompanyCatalog.resolveBinding,
+              );
               const { command: normalizedCommand, prepareWorkspaceRoot } =
-                yield* normalizeDispatchCommand({ command });
+                yield* normalizeDispatchCommand({ command: admittedCommand });
               const result = yield* dispatchOrchestrationCommand(normalizedCommand);
               // Only scaffold managed workspace-root subdirectories (Inbox/Outbox/work/outputs)
               // AFTER the decider has accepted the command. A rejected dispatch (e.g. a
@@ -1043,6 +1050,8 @@ const makeWsRpcHandlersLayer = () =>
             }),
           ),
 
+        [WS_METHODS.projectsListGiteaCompanies]: () =>
+          rpcEffect(giteaCompanyCatalog.list(), "Failed to list Gitea company projects"),
         [WS_METHODS.projectsListDirectories]: (input) =>
           rpcEffect(
             workspaceEntries.listDirectories(input),

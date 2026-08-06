@@ -62,6 +62,8 @@ import {
 import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedRuntimeConfig";
 import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
 import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
+import { makeGiteaCompanyCatalogLive } from "./giteaProjects/Layers/GiteaCompanyCatalog";
+import { resolveGiteaCompanyCatalogConfig } from "./giteaProjects/config";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -70,6 +72,9 @@ export function makeServerRuntimeServicesLayer(
     readonly agentGatewayCredentialsLayer?: typeof AgentGatewayCredentialsWithSecretsLive;
   } = {},
 ) {
+  const giteaCompanyCatalogLayer = makeGiteaCompanyCatalogLive({
+    config: resolveGiteaCompanyCatalogConfig({ environment: process.env }),
+  });
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
   const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
@@ -226,6 +231,7 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    giteaCompanyCatalogLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
 
