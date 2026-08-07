@@ -266,6 +266,8 @@ export function deriveWorkLogEntries(
         activity.kind !== "task.completed",
     )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
+    // Controller bootstrap telemetry is durable diagnostics, not conversation content.
+    .filter((activity) => activity.kind !== "runtime.stage")
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>

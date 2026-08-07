@@ -11,7 +11,7 @@ import {
 import { makeActivity } from "./storeTestFixtures";
 
 describe("deriveWorkLogEntries", () => {
-  it("collapses runtime stage start and completion into one timed progress row", () => {
+  it("keeps background runtime stages out of an empty conversation timeline", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "runtime-stage-worker-connect-started",
@@ -43,14 +43,10 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "runtime-stage-worker-connect-completed",
-        label: "Starting Pi",
-        detail: "564 ms",
-        activityKind: "runtime.stage",
-      },
-    ]);
+    const workEntries = deriveWorkLogEntries(activities, undefined);
+
+    expect(workEntries).toEqual([]);
+    expect(deriveTimelineEntries([], [], workEntries)).toEqual([]);
   });
 
   it("keeps started tool entries so pending Cursor calls appear immediately", () => {
