@@ -103,6 +103,10 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { isElectron } from "../env";
+import {
+  getGlasswingModeForCurrentPage,
+  resolveGlasswingChromePresentation,
+} from "../glasswingMode";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
 import { isOrdinarySpaceProject } from "../lib/spaces";
@@ -1226,15 +1230,21 @@ const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; descript
 export function SidebarSurfacePicker({
   views,
   activeView,
+  threadsTitle,
   onSelectView,
   onPrewarmView,
 }: {
   views: ReadonlyArray<SidebarView>;
   activeView: SidebarView;
+  threadsTitle: string;
   onSelectView: (view: SidebarView) => void;
   onPrewarmView?: (view: SidebarView) => void;
 }) {
-  const activeCopy = SIDEBAR_SURFACE_PICKER_COPY[activeView];
+  const copyForView = (view: SidebarView) => {
+    const copy = SIDEBAR_SURFACE_PICKER_COPY[view];
+    return view === "threads" ? { ...copy, title: threadsTitle } : copy;
+  };
+  const activeCopy = copyForView(activeView);
 
   return (
     <Menu>
@@ -1276,7 +1286,7 @@ export function SidebarSurfacePicker({
           }}
         >
           {views.map((view) => {
-            const copy = SIDEBAR_SURFACE_PICKER_COPY[view];
+            const copy = copyForView(view);
             return (
               <MenuRadioItem
                 key={view}
@@ -1304,6 +1314,9 @@ export function SidebarSurfacePicker({
 }
 
 export default function Sidebar() {
+  const glasswingChrome = resolveGlasswingChromePresentation(
+    getGlasswingModeForCurrentPage(),
+  );
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
     readGitHubProvisioningCapability,
@@ -1396,7 +1409,9 @@ export default function Sidebar() {
   // Count-only server query keeps rich pull-request rows off the wire and out of this cache.
   const pullRequestsReviewingQuery = useQuery({
     ...pullRequestReviewRequestCountQueryOptions({ projectId: null }),
-    enabled: projects.some((project) => project.kind === "project"),
+    enabled:
+      glasswingChrome.showPullRequestNavigation &&
+      projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
@@ -4933,22 +4948,24 @@ export default function Sidebar() {
               <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
             </button>
             <SidebarSectionToolbar placement="overlay" revealOnHover>
-              <SidebarIconButton
-                icon={IoIosGitCompare}
-                label={`View pull requests for ${project.name}`}
-                tooltip="Pull requests"
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  // Opens the in-app pull requests view scoped to this project (selecting a
-                  // row there opens the right-dock detail panel) instead of leaving for GitHub.
-                  void navigate({
-                    to: "/pull-requests",
-                    search: { involvement: "all", state: "open", projectId: project.id },
-                  });
-                }}
-              />
+              {glasswingChrome.showPullRequestNavigation ? (
+                <SidebarIconButton
+                  icon={IoIosGitCompare}
+                  label={`View pull requests for ${project.name}`}
+                  tooltip="Pull requests"
+                  tooltipSide="top"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    // Opens the in-app pull requests view scoped to this project (selecting a
+                    // row there opens the right-dock detail panel) instead of leaving for GitHub.
+                    void navigate({
+                      to: "/pull-requests",
+                      search: { involvement: "all", state: "open", projectId: project.id },
+                    });
+                  }}
+                />
+              ) : null}
               <SidebarIconButton
                 icon={TerminalIcon}
                 label={`Create new terminal thread in ${project.name}`}
@@ -5899,6 +5916,7 @@ export default function Sidebar() {
               <SidebarSurfacePicker
                 views={["threads", ...(studioSectionVisible ? (["studio"] as const) : [])]}
                 activeView={isOnStudio ? "studio" : "threads"}
+                threadsTitle={glasswingChrome.sidebarThreadsTitle}
                 onSelectView={handleSidebarViewChange}
                 onPrewarmView={prewarmSidebarViewTarget}
               />
@@ -5952,26 +5970,30 @@ export default function Sidebar() {
                         onMouseEnter={prefetchModelsForPrimaryNewThread}
                         onFocus={prefetchModelsForPrimaryNewThread}
                       />
-                      <SidebarPrimaryAction
-                        icon={KanbanIcon}
-                        label="Kanban"
-                        active={isOnKanban}
-                        onClick={() => {
-                          void navigate({ to: "/kanban" });
-                        }}
-                      />
-                      <SidebarPrimaryAction
-                        icon={IoIosGitCompare}
-                        label="Pull requests"
-                        active={isOnPullRequests}
-                        badge={pullRequestsReviewBadge}
-                        onClick={() => {
-                          void navigate({
-                            to: "/pull-requests",
-                            search: { involvement: "all", state: "open" },
-                          });
-                        }}
-                      />
+                      {glasswingChrome.showKanbanNavigation ? (
+                        <SidebarPrimaryAction
+                          icon={KanbanIcon}
+                          label="Kanban"
+                          active={isOnKanban}
+                          onClick={() => {
+                            void navigate({ to: "/kanban" });
+                          }}
+                        />
+                      ) : null}
+                      {glasswingChrome.showPullRequestNavigation ? (
+                        <SidebarPrimaryAction
+                          icon={IoIosGitCompare}
+                          label="Pull requests"
+                          active={isOnPullRequests}
+                          badge={pullRequestsReviewBadge}
+                          onClick={() => {
+                            void navigate({
+                              to: "/pull-requests",
+                              search: { involvement: "all", state: "open" },
+                            });
+                          }}
+                        />
+                      ) : null}
                       <SidebarPrimaryAction
                         icon={ClockIcon}
                         label="Automations"
@@ -6443,18 +6465,20 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={FolderOpenIcon} />
                 <span>Open in Finder</span>
               </MenuItem>
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "open-in-kanban",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={KanbanIcon} />
-                <span>Open in Kanban</span>
-              </MenuItem>
+              {glasswingChrome.showKanbanNavigation ? (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "open-in-kanban",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={KanbanIcon} />
+                  <span>Open in Kanban</span>
+                </MenuItem>
+              ) : null}
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>

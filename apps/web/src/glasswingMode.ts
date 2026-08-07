@@ -8,6 +8,27 @@ import { GLASSWING_THEME_STATE, type ThemeState } from "./theme/theme.logic";
 export const GLASSWING_MODE_ATTRIBUTE = "data-glasswing-mode";
 export const DEFAULT_GLASSWING_MODE = true;
 
+export interface GlasswingChromePresentation {
+  readonly sidebarThreadsTitle: "GlasswingOS" | "Synara";
+  readonly showKanbanNavigation: boolean;
+  readonly showPullRequestNavigation: boolean;
+  readonly showHandoffAction: boolean;
+}
+
+const GLASSWING_CHROME_PRESENTATION: GlasswingChromePresentation = {
+  sidebarThreadsTitle: "GlasswingOS",
+  showKanbanNavigation: false,
+  showPullRequestNavigation: false,
+  showHandoffAction: false,
+};
+
+const SYNARA_CHROME_PRESENTATION: GlasswingChromePresentation = {
+  sidebarThreadsTitle: "Synara",
+  showKanbanNavigation: true,
+  showPullRequestNavigation: true,
+  showHandoffAction: true,
+};
+
 type SettingsStorageReader = Pick<Storage, "getItem">;
 type AttributeTarget = Pick<Element, "setAttribute">;
 
@@ -34,6 +55,12 @@ const glasswingModeForCurrentPage = readGlasswingMode();
 
 export function getGlasswingModeForCurrentPage(): boolean {
   return glasswingModeForCurrentPage;
+}
+
+export function resolveGlasswingChromePresentation(
+  enabled: boolean,
+): GlasswingChromePresentation {
+  return enabled ? GLASSWING_CHROME_PRESENTATION : SYNARA_CHROME_PRESENTATION;
 }
 
 export function applyGlasswingModeAttribute(root: AttributeTarget, enabled: boolean): void {

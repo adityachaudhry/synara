@@ -84,6 +84,7 @@ interface ChatHeaderProps {
   className?: string;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
+  hideHandoffAction?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -506,6 +507,7 @@ export function ChatHeader({
   className,
   hideSidebarControls: hideSidebarControlsProp,
   hideHandoffControls: hideHandoffControlsProp,
+  hideHandoffAction: hideHandoffActionProp,
   isGitRepo,
   openInTarget,
   activeProjectScripts,
@@ -547,6 +549,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const hideSidebarControls = hideSidebarControlsProp ?? false;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
+  const hideHandoffAction = hideHandoffActionProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
   const showDiffToggle = showDiffToggleProp ?? true;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
@@ -787,7 +790,7 @@ export function ChatHeader({
                   onNavigateToThread={onNavigateToThread}
                 />
               ) : null}
-              {!hideHandoffControls && handoffBadgeLabel ? (
+              {!hideHandoffControls && !hideHandoffAction && handoffBadgeLabel ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -816,7 +819,7 @@ export function ChatHeader({
         {!hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
-        {!hideHandoffControls ? (
+        {!hideHandoffControls && !hideHandoffAction ? (
           <Menu modal={false}>
             <Tooltip>
               <TooltipTrigger

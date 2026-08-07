@@ -3,11 +3,27 @@ import {
   GLASSWING_MODE_ATTRIBUTE,
   applyGlasswingModeAttribute,
   readGlasswingMode,
+  resolveGlasswingChromePresentation,
   resolveGlasswingModeThemeState,
 } from "./glasswingMode";
 import { DEFAULT_THEME_STATE, GLASSWING_THEME_STATE } from "./theme/theme.logic";
 
 describe("Glasswing Mode", () => {
+  it("hides Synara-only chrome while preserving it outside Glasswing mode", () => {
+    expect(resolveGlasswingChromePresentation(true)).toEqual({
+      sidebarThreadsTitle: "GlasswingOS",
+      showKanbanNavigation: false,
+      showPullRequestNavigation: false,
+      showHandoffAction: false,
+    });
+    expect(resolveGlasswingChromePresentation(false)).toEqual({
+      sidebarThreadsTitle: "Synara",
+      showKanbanNavigation: true,
+      showPullRequestNavigation: true,
+      showHandoffAction: true,
+    });
+  });
+
   it("defaults on for missing or unreadable settings", () => {
     expect(readGlasswingMode({ getItem: () => null })).toBe(true);
     expect(readGlasswingMode({ getItem: () => "not-json" })).toBe(true);

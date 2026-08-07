@@ -255,7 +255,10 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
-import { getGlasswingModeForCurrentPage } from "../glasswingMode";
+import {
+  getGlasswingModeForCurrentPage,
+  resolveGlasswingChromePresentation,
+} from "../glasswingMode";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
@@ -1194,8 +1197,10 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
+  const glasswingMode = getGlasswingModeForCurrentPage();
+  const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
   const usesGlasswingDockLauncher =
-    getGlasswingModeForCurrentPage() && surfaceMode === "single" && !isEditorRail;
+    glasswingMode && surfaceMode === "single" && !isEditorRail;
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
@@ -11459,6 +11464,7 @@ export default function ChatView({
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
+          hideHandoffAction={!glasswingChrome.showHandoffAction}
           isGitRepo={isGitRepo}
           openInTarget={threadWorkspaceCwd}
           activeProjectScripts={isEditorRail ? undefined : activeProjectScripts}

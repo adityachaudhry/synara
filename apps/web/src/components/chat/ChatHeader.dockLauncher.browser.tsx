@@ -56,7 +56,7 @@ describe("ChatHeader right-dock launcher", () => {
             onCreateHandoff={vi.fn()}
             onNavigateToThread={vi.fn()}
             onRenameThread={vi.fn()}
-            {...({ dockLauncherAction: { open: false, onToggle } } as Record<string, unknown>)}
+            dockLauncherAction={{ open: false, onToggle }}
           />
         </SidebarProvider>
       </QueryClientProvider>,
@@ -64,9 +64,57 @@ describe("ChatHeader right-dock launcher", () => {
 
     const toggle = page.getByRole("button", { name: "Open panels" });
     expect(toggle).toBeVisible();
+    expect(page.getByRole("button", { name: "Hand off" })).toBeVisible();
     expect(page.getByRole("button", { name: "Toggle diff panel" }).query()).toBeNull();
 
     await toggle.click();
     expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("omits the Handoff action when the host requests Glasswing chrome", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <SidebarProvider>
+          <ChatHeader
+            activeThreadId={ThreadId.makeUnsafe("thread-glasswing-header")}
+            activeThreadTitle="Glasswing header"
+            activeThreadEntryPoint="chat"
+            activeProvider="claudeAgent"
+            activeProjectName={undefined}
+            threadBreadcrumbs={[]}
+            isGitRepo
+            openInTarget={null}
+            activeProjectScripts={undefined}
+            preferredScriptId={null}
+            keybindings={[]}
+            availableEditors={[]}
+            diffToggleShortcutLabel={null}
+            handoffBadgeLabel="Claude to Codex"
+            handoffActionLabel="Hand off"
+            handoffDisabled={false}
+            handoffActionTargetProviders={["codex"]}
+            handoffBadgeSourceProvider="claudeAgent"
+            handoffBadgeTargetProvider="codex"
+            gitCwd={null}
+            diffTotals={{ additions: 0, deletions: 0, hasChanges: false }}
+            diffOpen={false}
+            onRunProjectScript={vi.fn()}
+            onAddProjectScript={vi.fn()}
+            onUpdateProjectScript={vi.fn()}
+            onDeleteProjectScript={vi.fn()}
+            onToggleDiff={vi.fn()}
+            onCreateHandoff={vi.fn()}
+            onNavigateToThread={vi.fn()}
+            onRenameThread={vi.fn()}
+            hideHandoffAction
+          />
+        </SidebarProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(page.getByRole("button", { name: "Hand off" }).query()).toBeNull();
+    expect(page.getByText("Claude to Codex").query()).toBeNull();
   });
 });
