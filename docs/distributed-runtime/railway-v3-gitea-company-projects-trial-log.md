@@ -640,3 +640,20 @@ self-repairs in about 5.6 seconds in the live trial. The rebuilt checkpoint was 
 `/opt/node/bin/node --version`. Provider-selection preparation is also limited to one automatic
 attempt per thread so a failed prewarm cannot create a retry storm; focus or first send remains the
 explicit retry path.
+
+### Dev currently has one concurrent sandbox slot
+
+**Attempt:** After a successful prewarmed first turn and warm follow-up, create another empty Cue
+Cloud Pi thread while the first thread's fenced worker remains live.
+
+**Failure:** The second thread remained at `Creating sandbox`; Railway listed only the first
+running sandbox and did not return a second reservation or an immediate quota error. Releasing the
+exact completed-test sandbox removed the occupied lease, but the already pending create did not
+self-retry. This is a Railway environment capacity/lifecycle constraint, not Pi inference latency.
+
+**Learning:** The current per-thread sandbox adapter is verified for one active worker, but this dev
+environment cannot demonstrate two concurrent thread workers. The next scaling seam is explicit:
+either raise the Railway sandbox concurrency allocation, release idle thread workers, or add a
+bounded reusable worker pool while retaining the existing fenced session and durable-event
+primitives. Until then, an occupied sandbox can make another thread's apparent cold start
+unbounded, so this limitation must stay visible in telemetry and rollout notes.
