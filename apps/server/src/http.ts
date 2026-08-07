@@ -17,6 +17,8 @@ import {
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { isSupportedLocalPreviewFilePath } from "@synara/shared/localPreviewFiles";
+import { isWorkspaceRelativePathSafe, workspaceRelativePathOf } from "@synara/shared/path";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { Cause, DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -35,6 +37,7 @@ import { superTokensEffectRouteLayer } from "./auth/superTokensEffectRoute";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
+import { GiteaCompanyCatalog } from "./giteaProjects/Services/GiteaCompanyCatalog";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
@@ -789,6 +792,48 @@ function streamedFileResponse(input: {
   });
 }
 
+function repositoryPreviewRelativePath(input: {
+  readonly requestedPath: string | null;
+  readonly cwd: string | null;
+}): string | null {
+  const requestedPath = input.requestedPath?.trim();
+  const cwd = input.cwd?.trim();
+  if (
+    !requestedPath ||
+    !cwd ||
+    requestedPath.includes("\0") ||
+    !isSupportedLocalPreviewFilePath(requestedPath)
+  ) {
+    return null;
+  }
+  const normalizedPath = requestedPath.replaceAll("\\", "/");
+  return isWorkspaceRelativePathSafe(normalizedPath)
+    ? normalizedPath
+    : workspaceRelativePathOf(normalizedPath, cwd);
+}
+
+function streamedRepositoryFileResponse(input: {
+  readonly response: Response;
+  readonly path: string;
+  readonly headers: Record<string, string>;
+}): HttpServerResponse.HttpServerResponse {
+  const declaredLength = Number(input.response.headers.get("content-length") ?? "");
+  const contentLength =
+    Number.isSafeInteger(declaredLength) && declaredLength >= 0 ? declaredLength : undefined;
+  const stream = input.response.body
+    ? Stream.fromReadableStream({
+        evaluate: () => input.response.body!,
+        onError: (cause) => new Error(String(cause)),
+      })
+    : Stream.empty;
+  return HttpServerResponse.stream(stream, {
+    status: 200,
+    contentType: Mime.getType(input.path) ?? "application/octet-stream",
+    ...(contentLength === undefined ? {} : { contentLength }),
+    headers: input.headers,
+  });
+}
+
 export const localImageEffectRouteLayer = HttpRouter.add(
   "GET",
   LOCAL_IMAGE_ROUTE_PATH,
@@ -810,33 +855,59 @@ export const localImageEffectRouteLayer = HttpRouter.add(
         previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),
     );
-    if (!previewFile) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
+    const isDownload = url.searchParams.get("download") === "1";
+    const responseHeaders = (fileName: string, filePath: string): Record<string, string> => ({
+      "Cache-Control": "private, max-age=60",
+      // The PDF viewer fetches bytes from either the desktop app origin or
+      // the configured Vite dev origin. Reflect only those trusted origins:
+      // auth-token-less local servers must not expose workspace files to any
+      // random web page that can guess path/cwd query params.
+      ...localPreviewCorsHeaders({ config, request, url }),
+      // PDFs render in an unsandboxed same-origin iframe; never let the
+      // browser second-guess the declared content type.
+      "X-Content-Type-Options": "nosniff",
+      ...(nodePath.extname(filePath).toLowerCase() === ".svg"
+        ? SVG_DOCUMENT_SECURITY_HEADERS
+        : {}),
+      ...(isDownload
+        ? { "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"` }
+        : {}),
+    });
+
+    if (previewFile) {
+      // Stream (don't use HttpServerResponse.file, which depends on
+      // Etag.Generator/Path services and was failing with a 500 here).
+      const fileSystem = yield* FileSystem.FileSystem;
+      return streamedFileResponse({
+        fileSystem,
+        path: previewFile.path,
+        sizeBytes: previewFile.sizeBytes,
+        headers: responseHeaders(previewFile.fileName, previewFile.path),
+      });
     }
 
-    // Stream (don't use HttpServerResponse.file, which depends on
-    // Etag.Generator/Path services and was failing with a 500 here).
-    const fileSystem = yield* FileSystem.FileSystem;
-    const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = previewFile.fileName.replaceAll('"', "");
-    const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
-    return streamedFileResponse({
-      fileSystem,
-      path: previewFile.path,
-      sizeBytes: previewFile.sizeBytes,
-      headers: {
-        "Cache-Control": "private, max-age=60",
-        // The PDF viewer fetches bytes from either the desktop app origin or
-        // the configured Vite dev origin. Reflect only those trusted origins:
-        // auth-token-less local servers must not expose workspace files to any
-        // random web page that can guess path/cwd query params.
-        ...localPreviewCorsHeaders({ config, request, url }),
-        // PDFs render in an unsandboxed same-origin iframe; never let the
-        // browser second-guess the declared content type.
-        "X-Content-Type-Options": "nosniff",
-        ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
-        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
-      },
+    const relativePath = repositoryPreviewRelativePath({
+      requestedPath: url.searchParams.get("path"),
+      cwd: url.searchParams.get("cwd"),
+    });
+    if (!relativePath) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const giteaCompanyCatalog = yield* GiteaCompanyCatalog;
+    const repositoryFile = yield* giteaCompanyCatalog.openWorkspaceFile({
+      cwd: url.searchParams.get("cwd")!.trim(),
+      relativePath,
+    });
+    return yield* Option.match(repositoryFile, {
+      onNone: () => Effect.succeed(HttpServerResponse.text("Not Found", { status: 404 })),
+      onSome: (file) =>
+        Effect.succeed(
+          streamedRepositoryFileResponse({
+            response: file.response,
+            path: file.relativePath,
+            headers: responseHeaders(file.fileName, file.relativePath),
+          }),
+        ),
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );

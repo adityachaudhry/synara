@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { DateTime, Effect, Exit, Layer, Option, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -19,6 +19,10 @@ import {
   type ServerConfigShape,
 } from "./config";
 import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
+import {
+  GiteaCompanyCatalog,
+  type GiteaCompanyCatalogShape,
+} from "./giteaProjects/Services/GiteaCompanyCatalog";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
@@ -115,10 +119,24 @@ function makeFakeServerAuth(): ServerAuthShape {
   } satisfies ServerAuthShape;
 }
 
+function makeFakeGiteaCompanyCatalog(
+  openWorkspaceFile: GiteaCompanyCatalogShape["openWorkspaceFile"] = () =>
+    Effect.succeed(Option.none()),
+): GiteaCompanyCatalogShape {
+  const unused = () => Effect.die("Unexpected Gitea company catalog call in route test");
+  return {
+    list: unused,
+    validateBinding: unused,
+    resolveBinding: unused,
+    openWorkspaceFile,
+  };
+}
+
 async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
   run: (origin: string) => Promise<void>,
+  giteaCompanyCatalog = makeFakeGiteaCompanyCatalog(),
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
@@ -142,6 +160,7 @@ async function withEffectServer(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
               Layer.succeed(ServerAuth, makeFakeServerAuth()),
+              Layer.succeed(GiteaCompanyCatalog, giteaCompanyCatalog),
               ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
               NodeHttpServer.layerHttpServices,
             ),
@@ -181,6 +200,42 @@ describe("localImageEffectRouteLayer", () => {
       expect(downloadResponse.status).toBe(200);
       expect(downloadResponse.headers.get("content-disposition")).toContain("hero.png");
     });
+  });
+
+  it("streams an allowlisted image from the repository bound to a missing workspace", async () => {
+    const workspace = "/data/gitea-company-projects/nth";
+    const config = makeServerConfig({ cwd: workspace });
+    const openedFiles: Array<{ cwd: string; relativePath: string }> = [];
+    const giteaCompanyCatalog = makeFakeGiteaCompanyCatalog((input) => {
+      openedFiles.push(input);
+      return Effect.succeed(
+        Option.some({
+          relativePath: "assets/diagram.png",
+          fileName: "diagram.png",
+          response: new Response(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]), {
+            headers: { "content-length": "4" },
+          }),
+        }),
+      );
+    });
+
+    await withEffectServer(
+      config,
+      localImageEffectRouteLayer,
+      async (origin) => {
+        const params = new URLSearchParams({ path: "assets/diagram.png", cwd: workspace });
+        const response = await fetch(`${origin}/api/local-image?${params}`);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("image/png");
+        expect(response.headers.get("content-length")).toBe("4");
+        await expect(response.arrayBuffer()).resolves.toEqual(
+          Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer,
+        );
+        expect(openedFiles).toEqual([{ cwd: workspace, relativePath: "assets/diagram.png" }]);
+      },
+      giteaCompanyCatalog,
+    );
   });
 
   it("serves an absolute local image outside the workspace for file-panel previews", async () => {
