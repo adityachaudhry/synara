@@ -1,5 +1,5 @@
 import type { ProjectRepositoryBinding } from "@synara/contracts";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { makeGiteaCompanyCatalog } from "./GiteaCompanyCatalog";
@@ -158,5 +158,68 @@ describe("GiteaCompanyCatalog", () => {
     await expect(
       Effect.runPromise(catalog.validateBinding({ ...requested, repository: "other-data" })),
     ).rejects.toMatchObject({ _tag: "GiteaCompanyCatalogError" });
+  });
+
+  it("opens a uniquely matched file from a catalog-bound workspace", async () => {
+    const requests: string[] = [];
+    const catalog = makeGiteaCompanyCatalog({
+      config,
+      fetch: async (input, init) => {
+        const url = String(input);
+        requests.push(url);
+        expect(new Headers(init?.headers).get("authorization")).toBe("token secret-token");
+        if (url.includes("/contents/companies?")) {
+          return Response.json([{ type: "dir", name: "nth", path: "companies/nth" }]);
+        }
+        if (url.includes("/companies/nth/company.json")) {
+          return contentResponse({
+            company_id: "company-nth",
+            company_name: "Nth",
+            company_slug: "nth",
+          });
+        }
+        if (url.includes("/git/trees/main?recursive=true")) {
+          return Response.json({
+            tree: [
+              { type: "blob", path: "companies/nth/analysis/diligence_stage.md" },
+              { type: "blob", path: "companies/nth/analysis/technical_diligence.md" },
+            ],
+          });
+        }
+        if (url.includes("/raw/companies/nth/analysis/technical_diligence.md?ref=main")) {
+          return new Response("# Technical Diligence\n\nRepository-backed preview.\n", {
+            headers: { "content-type": "text/markdown; charset=utf-8" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+      now: () => Date.parse("2026-08-07T12:00:00.000Z"),
+      cacheTtlMs: 60_000,
+    });
+
+    const opened = await Effect.runPromise(
+      catalog.openWorkspaceFile({
+        cwd: "/data/gitea-company-projects/nth",
+        relativePath: "technical_diligence.md",
+      }),
+    );
+    expect(Option.isSome(opened)).toBe(true);
+    if (Option.isNone(opened)) {
+      throw new Error("Expected the bound repository file to open.");
+    }
+    expect(opened.value.relativePath).toBe("analysis/technical_diligence.md");
+    expect(opened.value.fileName).toBe("technical_diligence.md");
+    await expect(opened.value.response.text()).resolves.toBe(
+      "# Technical Diligence\n\nRepository-backed preview.\n",
+    );
+
+    const unbound = await Effect.runPromise(
+      catalog.openWorkspaceFile({
+        cwd: "/Users/tester/local-project",
+        relativePath: "technical_diligence.md",
+      }),
+    );
+    expect(Option.isNone(unbound)).toBe(true);
+    expect(requests.filter((url) => url.includes("/git/trees/"))).toHaveLength(1);
   });
 });
