@@ -26,16 +26,6 @@ interface GiteaFileResponse {
   readonly content?: unknown;
 }
 
-interface GiteaTreeEntry {
-  readonly type?: unknown;
-  readonly path?: unknown;
-}
-
-interface GiteaTreeResponse {
-  readonly tree?: unknown;
-  readonly truncated?: unknown;
-}
-
 interface CompanyMetadata {
   readonly company_id?: unknown;
   readonly company_name?: unknown;
@@ -49,6 +39,8 @@ export interface MakeGiteaCompanyCatalogOptions {
   readonly cacheTtlMs?: number;
   readonly concurrency?: number;
 }
+
+const MAX_BOUND_PROJECT_TREE_ENTRIES = 50_000;
 
 function catalogError(operation: string, detail: string, cause?: unknown) {
   return new GiteaCompanyCatalogError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
@@ -119,8 +111,11 @@ export function makeGiteaCompanyCatalog(
   const concurrency = Math.max(1, Math.min(options.concurrency ?? 6, 16));
   let cached: { readonly expiresAt: number; readonly snapshot: GiteaCompanyCatalogSnapshot } | undefined;
   let inFlight: Promise<GiteaCompanyCatalogSnapshot> | undefined;
-  let treeCache: { readonly expiresAt: number; readonly blobPaths: ReadonlyArray<string> } | undefined;
-  let treeInFlight: Promise<ReadonlyArray<string>> | undefined;
+  const treeCache = new Map<
+    string,
+    { readonly expiresAt: number; readonly blobPaths: ReadonlyArray<string> }
+  >();
+  const treeInFlight = new Map<string, Promise<ReadonlyArray<string>>>();
 
   const disabledSnapshot = (): GiteaCompanyCatalogSnapshot => ({
     available: false,
@@ -273,38 +268,84 @@ export function makeGiteaCompanyCatalog(
   const validateBinding: GiteaCompanyCatalogShape["validateBinding"] = (binding) =>
     resolveBinding(binding).pipe(Effect.map((descriptor) => descriptor.binding));
 
-  const loadBlobPaths = async (): Promise<ReadonlyArray<string>> => {
+  const encodeRepositoryPath = (value: string): string =>
+    value.split("/").map(encodeURIComponent).join("/");
+
+  const loadBlobPaths = async (bindingPath: string): Promise<ReadonlyArray<string>> => {
     const config = options.config;
     if (!config.enabled) {
       throw catalogError("openWorkspaceFile", "Gitea company catalog is not configured.");
     }
-    const raw = (await requestJson(
-      `${config.origin}/api/v1/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}/git/trees/${encodeURIComponent(config.ref)}?recursive=true`,
-    )) as GiteaTreeResponse;
-    if (!Array.isArray(raw.tree) || raw.truncated === true) {
-      throw catalogError(
-        "openWorkspaceFile",
-        "Gitea returned an incomplete repository tree for file preview resolution.",
-      );
+    const repoBase = `${config.origin}/api/v1/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}/contents`;
+    const refQuery = `?ref=${encodeURIComponent(config.ref)}`;
+    const pendingDirectories = [bindingPath];
+    const blobPaths: string[] = [];
+    let scannedEntries = 0;
+
+    while (pendingDirectories.length > 0) {
+      const directories = pendingDirectories.splice(0, concurrency);
+      const listings = await mapBounded(directories, concurrency, async (directory) => {
+        const listed = await requestJson(
+          `${repoBase}/${encodeRepositoryPath(directory)}${refQuery}`,
+        );
+        if (!Array.isArray(listed)) {
+          throw catalogError(
+            "openWorkspaceFile",
+            "Gitea returned an invalid bound repository directory listing.",
+          );
+        }
+        return { directory, listed };
+      });
+
+      for (const { directory, listed } of listings) {
+        for (const entry of listed) {
+          const candidate = entry as GiteaContentsEntry;
+          if (candidate.type !== "dir" && candidate.type !== "file") continue;
+          if (
+            typeof candidate.name !== "string" ||
+            typeof candidate.path !== "string" ||
+            candidate.path !== `${directory}/${candidate.name}` ||
+            !candidate.path.startsWith(`${bindingPath}/`) ||
+            !isWorkspaceRelativePathSafe(candidate.path)
+          ) {
+            throw catalogError(
+              "openWorkspaceFile",
+              "Gitea returned an unsafe bound repository directory entry.",
+            );
+          }
+          scannedEntries += 1;
+          if (scannedEntries > MAX_BOUND_PROJECT_TREE_ENTRIES) {
+            throw catalogError(
+              "openWorkspaceFile",
+              "The bound repository tree is too large for file preview resolution.",
+            );
+          }
+          if (candidate.type === "dir") {
+            pendingDirectories.push(candidate.path);
+          } else {
+            blobPaths.push(candidate.path);
+          }
+        }
+      }
     }
-    return raw.tree.flatMap((entry) => {
-      const candidate = entry as GiteaTreeEntry;
-      return candidate.type === "blob" && typeof candidate.path === "string"
-        ? [candidate.path]
-        : [];
-    });
+    return blobPaths;
   };
 
-  const listBlobPaths = async (): Promise<ReadonlyArray<string>> => {
+  const listBlobPaths = async (bindingPath: string): Promise<ReadonlyArray<string>> => {
     const currentNow = now();
-    if (treeCache && treeCache.expiresAt > currentNow) {
-      return treeCache.blobPaths;
+    const cachedTree = treeCache.get(bindingPath);
+    if (cachedTree && cachedTree.expiresAt > currentNow) {
+      return cachedTree.blobPaths;
     }
-    treeInFlight ??= loadBlobPaths().finally(() => {
-      treeInFlight = undefined;
-    });
-    const blobPaths = await treeInFlight;
-    treeCache = { expiresAt: currentNow + cacheTtlMs, blobPaths };
+    let inFlightTree = treeInFlight.get(bindingPath);
+    if (!inFlightTree) {
+      inFlightTree = loadBlobPaths(bindingPath).finally(() => {
+        treeInFlight.delete(bindingPath);
+      });
+      treeInFlight.set(bindingPath, inFlightTree);
+    }
+    const blobPaths = await inFlightTree;
+    treeCache.set(bindingPath, { expiresAt: currentNow + cacheTtlMs, blobPaths });
     return blobPaths;
   };
 
@@ -328,9 +369,7 @@ export function makeGiteaCompanyCatalog(
 
         const boundPrefix = `${descriptor.binding.path}/`;
         const exactPath = `${boundPrefix}${requestedPath}`;
-        const projectBlobPaths = (await listBlobPaths()).filter((path) =>
-          path.startsWith(boundPrefix),
-        );
+        const projectBlobPaths = await listBlobPaths(descriptor.binding.path);
         const exactMatch = projectBlobPaths.includes(exactPath) ? exactPath : null;
         const suffixMatches = exactMatch
           ? []
@@ -350,7 +389,7 @@ export function makeGiteaCompanyCatalog(
         if (!config.enabled) {
           throw catalogError("openWorkspaceFile", "Gitea company catalog is not configured.");
         }
-        const encodedPath = matchedPath.split("/").map(encodeURIComponent).join("/");
+        const encodedPath = encodeRepositoryPath(matchedPath);
         const response = await request(
           `${config.origin}/api/v1/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}/raw/${encodedPath}?ref=${encodeURIComponent(config.ref)}`,
         );

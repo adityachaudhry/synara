@@ -178,13 +178,25 @@ describe("GiteaCompanyCatalog", () => {
             company_slug: "nth",
           });
         }
-        if (url.includes("/git/trees/main?recursive=true")) {
-          return Response.json({
-            tree: [
-              { type: "blob", path: "companies/nth/analysis/diligence_stage.md" },
-              { type: "blob", path: "companies/nth/analysis/technical_diligence.md" },
-            ],
-          });
+        if (url.includes("/contents/companies/nth?ref=main")) {
+          return Response.json([
+            { type: "file", name: "company.json", path: "companies/nth/company.json" },
+            { type: "dir", name: "analysis", path: "companies/nth/analysis" },
+          ]);
+        }
+        if (url.includes("/contents/companies/nth/analysis?ref=main")) {
+          return Response.json([
+            {
+              type: "file",
+              name: "diligence_stage.md",
+              path: "companies/nth/analysis/diligence_stage.md",
+            },
+            {
+              type: "file",
+              name: "technical_diligence.md",
+              path: "companies/nth/analysis/technical_diligence.md",
+            },
+          ]);
         }
         if (url.includes("/raw/companies/nth/analysis/technical_diligence.md?ref=main")) {
           return new Response("# Technical Diligence\n\nRepository-backed preview.\n", {
@@ -220,6 +232,7 @@ describe("GiteaCompanyCatalog", () => {
       }),
     );
     expect(Option.isNone(unbound)).toBe(true);
-    expect(requests.filter((url) => url.includes("/git/trees/"))).toHaveLength(1);
+    expect(requests.filter((url) => url.includes("/contents/companies/nth?"))).toHaveLength(1);
+    expect(requests.some((url) => url.includes("/git/trees/"))).toBe(false);
   });
 });
