@@ -7,6 +7,10 @@ import {
   workerArtifactDigest,
   workerCheckpointName,
 } from "../src/providerWorker/workerArtifactBase.ts";
+import {
+  makeProviderWorkerNodeRuntimeCommand,
+  PROVIDER_WORKER_NODE_VERSION,
+} from "../src/providerWorker/workerNodeRuntime.ts";
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 
@@ -55,6 +59,12 @@ async function main() {
     // The Railway create handle has intermittently rejected its first file
     // operation in live trials. A fresh connection is the reliable file seam.
     connected = await Sandbox.connect(seed.id, connection);
+    const runtime = await connected.exec(makeProviderWorkerNodeRuntimeCommand(), {
+      timeoutSec: 90,
+    });
+    if (runtime.exitCode !== 0 || runtime.timedOut) {
+      throw new Error(runtime.stderr || runtime.stdout || "Node runtime preparation failed.");
+    }
     await connected.files.write(WORKER_ARTIFACT_PATH, artifact, { mode: 0o500 });
     await connected.files.write(`${WORKER_ARTIFACT_PATH}.sha256`, `${digest}\n`, {
       mode: 0o444,
@@ -66,6 +76,7 @@ async function main() {
         checkpointName: checkpoint.key,
         artifactDigest: digest,
         artifactBytes: artifact.byteLength,
+        nodeVersion: PROVIDER_WORKER_NODE_VERSION,
         replacedCheckpointCount: replaced.length,
         checkpointManagementAuthorized: canManageCheckpoints,
       })}\n`,

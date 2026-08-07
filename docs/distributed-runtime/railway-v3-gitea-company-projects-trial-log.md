@@ -621,3 +621,22 @@ Pi.
 command. The credential remains absent from the repository URL and Git config, while the checkout
 subprocess can authenticate any lazy blob requests. A focused regression test now requires the
 header on both fetch and checkout.
+
+### The default sandbox had no Node runtime
+
+**Attempt:** Prewarm the corrected checkout from a worker-artifact checkpoint and wait for the
+fenced worker connection.
+
+**Failure:** Checkout and checkpoint-backed worker-file preparation completed, but the durable
+process exited immediately with `/usr/bin/bash: exec: node: not found`. The Railway sandbox base
+contains Git and the shell tools needed for checkout, but not Node. Because process detachment does
+not report that immediate exit, the broker correctly waited its 30-second connection deadline.
+
+**Correction:** Rebuild the existing digest-named checkpoint with pinned Node `24.13.1` at
+`/opt/node/bin/node`, and launch the worker through that absolute path. The preparation command
+selects x64 or arm64, verifies the official SHA-256 before extraction, and runs for both checkpoint
+and clean-fallback sandboxes; a warm checkpoint returns immediately while a stale or missing base
+self-repairs in about 5.6 seconds in the live trial. The rebuilt checkpoint was boot-verified with
+`/opt/node/bin/node --version`. Provider-selection preparation is also limited to one automatic
+attempt per thread so a failed prewarm cannot create a retry storm; focus or first send remains the
+explicit retry path.

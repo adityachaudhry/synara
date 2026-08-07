@@ -3291,11 +3291,21 @@ export default function ChatView({
   // Provider menus keep the Lexical editor logically focused, so choosing Pi does not
   // reliably produce a second DOM focus event. Prepare on the Pi selection transition as
   // well; the focus handler remains the fast path when Pi was already selected.
+  const selectionPreparedProviderThreadIdRef = useRef<ThreadId | null>(null);
   useEffect(() => {
-    if (selectedProvider === "pi") {
-      prepareFirstTurnRuntime();
+    if (selectedProvider !== "pi") {
+      selectionPreparedProviderThreadIdRef.current = null;
+      return;
     }
-  }, [prepareFirstTurnRuntime, selectedProvider]);
+    if (
+      !activeThread ||
+      selectionPreparedProviderThreadIdRef.current === activeThread.id
+    ) {
+      return;
+    }
+    selectionPreparedProviderThreadIdRef.current = activeThread.id;
+    prepareFirstTurnRuntime();
+  }, [activeThread, prepareFirstTurnRuntime, selectedProvider]);
   const pinnedMessageIds = useMemo(
     () => new Set(pinnedMessages.map((pin) => pin.messageId)),
     [pinnedMessages],

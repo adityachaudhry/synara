@@ -74,8 +74,17 @@ function makeHarness(options?: { readonly failConnection?: boolean }) {
 describe("ProviderWorkerProvisioner", () => {
   it("sparse-checks out a bound Gitea company before starting the worker", async () => {
     const harness = makeHarness();
-    harness.workspace.exec.mockImplementation(() =>
+    harness.workspace.exec.mockImplementation((_binding, input) =>
       Effect.sync(() => {
+        if (input.command.includes("nodejs.org/dist/")) {
+          return {
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            truncated: false,
+          };
+        }
         harness.calls.push("checkout");
         return {
           exitCode: 0,
@@ -216,9 +225,17 @@ describe("ProviderWorkerProvisioner", () => {
     const configWrite = harness.workspace.writeFile.mock.calls[1]?.[1];
     expect(configWrite?.mode).toBe(0o600);
     expect(String(configWrite?.data)).toContain("bootstrap-secret");
+    expect(harness.workspace.exec).toHaveBeenCalledWith(
+      workspaceBinding,
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-${node_arch}.tar.xz",
+        ),
+      }),
+    );
     expect(harness.workspace.startDurableProcess).toHaveBeenCalledWith(workspaceBinding, {
       command:
-        "mkdir -p '/workspace/.synara-provider-worker/state/logs' && exec node '/opt/synara/provider-worker.mjs' >> '/workspace/.synara-provider-worker/state/logs/worker.log' 2>&1",
+        "mkdir -p '/workspace/.synara-provider-worker/state/logs' && exec '/opt/node/bin/node' '/opt/synara/provider-worker.mjs' >> '/workspace/.synara-provider-worker/state/logs/worker.log' 2>&1",
     });
   });
 

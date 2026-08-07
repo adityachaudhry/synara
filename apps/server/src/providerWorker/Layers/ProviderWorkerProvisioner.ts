@@ -23,6 +23,10 @@ import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBoot
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import { workerArtifactDigest, workerCheckpointName } from "../workerArtifactBase";
+import {
+  makeProviderWorkerNodeRuntimeCommand,
+  PROVIDER_WORKER_NODE_BINARY_PATH,
+} from "../workerNodeRuntime";
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
@@ -34,7 +38,7 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 function workerLaunchCommand(homeDir: string) {
   const logsDir = `${homeDir}/state/logs`;
   const workerLogPath = `${logsDir}/worker.log`;
-  return `mkdir -p ${shellQuote(logsDir)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
+  return `mkdir -p ${shellQuote(logsDir)} && exec ${shellQuote(PROVIDER_WORKER_NODE_BINARY_PATH)} ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
 }
 
 export interface ProviderWorkerProvisionerOptions {
@@ -215,6 +219,22 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           cold: true,
           detail: { artifactSource },
           effect: Effect.gen(function* () {
+            const runtime = yield* workspaceRuntime.exec(input.workspace, {
+              command: makeProviderWorkerNodeRuntimeCommand(),
+              timeoutSeconds: 90,
+            });
+            if (runtime.exitCode !== 0 || runtime.timedOut) {
+              return yield* Effect.fail(
+                provisionError(
+                  "worker.runtime",
+                  "Failed to prepare the pinned Node runtime for the provider worker.",
+                  new Error(
+                    runtime.stderr || runtime.stdout || "Node runtime preparation failed.",
+                  ),
+                  fence.sandboxId,
+                ),
+              );
+            }
             if (artifactSource === "upload") {
               yield* Effect.logInfo("provider worker artifact upload starting", {
                 sandboxId: fence.sandboxId,
