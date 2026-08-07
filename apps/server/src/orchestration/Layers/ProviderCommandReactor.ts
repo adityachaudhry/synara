@@ -95,6 +95,7 @@ import {
 } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
@@ -473,38 +474,7 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(true),
   });
   const deliverySourceLock = yield* Semaphore.make(1);
-  const prewarmLockIndex = yield* Semaphore.make(1);
-  const prewarmLocks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
   let reconcileDeliveryRuntime: ProviderCommandReactorShape["reconcileDelivery"] | undefined;
-
-  const withThreadPrewarmLock = <A, E, R>(
-    threadId: ThreadId,
-    effect: Effect.Effect<A, E, R>,
-  ) =>
-    Effect.acquireUseRelease(
-      prewarmLockIndex.withPermits(1)(
-        Effect.gen(function* () {
-          const existing = prewarmLocks.get(threadId);
-          if (existing) {
-            existing.users += 1;
-            return existing;
-          }
-          const entry = { lock: yield* Semaphore.make(1), users: 1 };
-          prewarmLocks.set(threadId, entry);
-          return entry;
-        }),
-      ),
-      (entry) => entry.lock.withPermits(1)(effect),
-      (entry) =>
-        prewarmLockIndex.withPermits(1)(
-          Effect.sync(() => {
-            entry.users -= 1;
-            if (entry.users === 0 && prewarmLocks.get(threadId) === entry) {
-              prewarmLocks.delete(threadId);
-            }
-          }),
-        ),
-    );
 
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
@@ -1327,10 +1297,16 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const ensureSessionForThread = (
-    ...args: Parameters<typeof ensureSessionForThreadUnlocked>
-  ): ReturnType<typeof ensureSessionForThreadUnlocked> =>
-    withThreadPrewarmLock(args[0], ensureSessionForThreadUnlocked(...args));
+  const sessionPreparation = yield* makeKeyedSingleFlightCache<
+    {
+      readonly activeSessionBeforeEnsure: ProviderSession | undefined;
+      readonly activeSession: ProviderSession;
+    },
+    unknown
+  >({ maxEntries: 256, ttlMs: 0 });
+
+  const ensureSessionForThread = (...args: Parameters<typeof ensureSessionForThreadUnlocked>) =>
+    sessionPreparation.get(args[0], ensureSessionForThreadUnlocked(...args));
 
   const prepareThread: ProviderCommandReactorShape["prepareThread"] = (threadId) =>
     Effect.gen(function* () {

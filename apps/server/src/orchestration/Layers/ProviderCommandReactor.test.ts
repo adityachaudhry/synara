@@ -31,6 +31,7 @@ import {
 import { PROVIDER_DELIVERY_BLOCK_SUMMARY } from "@synara/shared/providerDeliveryBlock";
 import {
   Duration,
+  Deferred,
   Effect,
   Exit,
   Layer,
@@ -204,6 +205,7 @@ describe("ProviderCommandReactor", () => {
     readonly forkThreadResult?: ProviderForkThreadResult | null;
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
+    readonly startSession?: ProviderServiceShape["startSession"];
     readonly commandEventTimeout?: Duration.Duration;
   }) {
     const now = new Date().toISOString();
@@ -221,7 +223,7 @@ describe("ProviderCommandReactor", () => {
       provider: "codex",
       model: "gpt-5-codex",
     };
-    const startSession = vi.fn((_: unknown, input: unknown) => {
+    const defaultStartSession = (_: unknown, input: unknown) => {
       const sessionIndex = nextSessionIndex++;
       const sessionModelSelection =
         typeof input === "object" && input !== null && "modelSelection" in input
@@ -258,7 +260,11 @@ describe("ProviderCommandReactor", () => {
       };
       runtimeSessions.push(session);
       return Effect.succeed(session);
-    });
+    };
+    const startSession = vi.fn(
+      input?.startSession ??
+        (defaultStartSession as unknown as ProviderServiceShape["startSession"]),
+    );
     const sendTurn = vi.fn<ProviderServiceShape["sendTurn"]>((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -545,6 +551,7 @@ describe("ProviderCommandReactor", () => {
         interceptor(command) ?? passthroughDispatch(command, context);
     };
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const serverSettings = await runtime.runPromise(Effect.service(ServerSettingsService));
     const deliveryRepository = await runtime.runPromise(
       Effect.service(OrchestrationEventDeliveryRepository),
     );
@@ -601,6 +608,7 @@ describe("ProviderCommandReactor", () => {
     return {
       engine,
       reactor,
+      serverSettings,
       startSession,
       listSessions,
       sendTurn,
@@ -799,6 +807,39 @@ describe("ProviderCommandReactor", () => {
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     return readModel.threads.find((thread) => thread.id === threadId);
   }
+
+  it("shares one failed distributed Pi preparation across simultaneous callers", async () => {
+    const started = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "pi", model: "claude-sonnet-4-5" },
+      startSession: (() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return yield* Effect.fail(new Error("sandbox create failed"));
+        })) as ProviderServiceShape["startSession"],
+    });
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({
+        providers: { pi: { executionTarget: "railway-sandbox" } },
+      }),
+    );
+
+    const first = Effect.runPromise(
+      Effect.exit(harness.reactor.prepareThread(ThreadId.makeUnsafe("thread-1"))),
+    );
+    await Effect.runPromise(Deferred.await(started));
+    const second = Effect.runPromise(
+      Effect.exit(harness.reactor.prepareThread(ThreadId.makeUnsafe("thread-1"))),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await Effect.runPromise(Deferred.succeed(release, undefined));
+    const exits = await Promise.all([first, second]);
+
+    expect(exits.map((exit) => exit._tag)).toEqual(["Failure", "Failure"]);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+  });
 
   it("REL-01B gate: delivers intents committed before the reactor subscribes", async () => {
     const harness = await createHarness({ startReactor: false });

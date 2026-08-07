@@ -4,6 +4,49 @@ import { Deferred, Effect, Fiber } from "effect";
 import { makeKeyedSingleFlightCache } from "./KeyedSingleFlightCache";
 
 describe("KeyedSingleFlightCache", () => {
+  it("runs five independent keys concurrently", async () => {
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cache = yield* makeKeyedSingleFlightCache<string, never>({
+            maxEntries: 8,
+            ttlMs: 0,
+          });
+          const allStarted = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let started = 0;
+          const fibers = yield* Effect.forEach(
+            ["project-1", "project-2", "project-3", "project-4", "project-5"],
+            (key) =>
+              cache
+                .get(
+                  key,
+                  Effect.gen(function* () {
+                    started += 1;
+                    if (started === 5) yield* Deferred.succeed(allStarted, undefined);
+                    yield* Deferred.await(release);
+                    return key;
+                  }),
+                )
+                .pipe(Effect.forkChild),
+          );
+
+          yield* Deferred.await(allStarted);
+          const sizeWhileBlocked = yield* cache.size;
+          yield* Deferred.succeed(release, undefined);
+          const values = yield* Effect.forEach(fibers, Fiber.join);
+          return { started, sizeWhileBlocked, values };
+        }),
+      ),
+    );
+
+    expect(result).toEqual({
+      started: 5,
+      sizeWhileBlocked: { cached: 0, inFlight: 5 },
+      values: ["project-1", "project-2", "project-3", "project-4", "project-5"],
+    });
+  });
+
   it("keeps a healthy joiner alive when the first waiter is interrupted", async () => {
     const result = await Effect.runPromise(
       Effect.scoped(
