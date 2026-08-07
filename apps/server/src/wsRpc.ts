@@ -104,6 +104,7 @@ import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracke
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import { readWorkspaceFileWithRepositoryFallback } from "./workspace/readWorkspaceFile";
 import {
   MAX_STREAMS_PER_RPC_CLIENT,
   MAX_THREAD_STREAMS_PER_RPC_CLIENT,
@@ -1064,7 +1065,13 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.projectsSearchLocalEntries]: (input) =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
-          rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+          rpcEffect(
+            readWorkspaceFileWithRepositoryFallback(input, {
+              readLocal: workspaceFileSystem.readFile,
+              openRepositoryFile: giteaCompanyCatalog.openWorkspaceFile,
+            }),
+            "Failed to read workspace file",
+          ),
         [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
           rpcEffect(
             Effect.promise(async () => ({
