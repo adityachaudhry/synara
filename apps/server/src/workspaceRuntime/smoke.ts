@@ -39,7 +39,8 @@ const waitForTeardown = (runtime: WorkspaceRuntimeShape, runtimeId: string) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < teardownPollAttempts; attempt += 1) {
       const inventory = yield* runtime.list;
-      if (!inventory.some((record) => record.runtimeId === runtimeId)) return true;
+      const record = inventory.find((candidate) => candidate.runtimeId === runtimeId);
+      if (record === undefined || record.status === "destroyed") return true;
       if (attempt + 1 < teardownPollAttempts) yield* Effect.sleep(teardownPollInterval);
     }
     return false;

@@ -11,11 +11,13 @@ import { RailwaySandboxSmokePolicyError, runRailwaySandboxSmoke } from "./smoke"
 function makeFakeRuntime(options?: {
   readonly failCommand?: string;
   readonly destroyingListResponses?: number;
+  readonly retainDestroyedRecord?: boolean;
 }) {
   const active = new Set<string>();
   let createCount = 0;
   let destroyCount = 0;
   let destroyingListResponses = 0;
+  let destroyed = false;
   const binding: WorkspaceRuntimeBinding = {
     runtimeKind: "railway-sandbox",
     runtimeId: "sandbox-1",
@@ -51,14 +53,22 @@ function makeFakeRuntime(options?: {
     destroy: (value) =>
       Effect.sync(() => {
         destroyCount += 1;
+        destroyed = true;
         destroyingListResponses = options?.destroyingListResponses ?? 0;
-        if (destroyingListResponses === 0) active.delete(value.runtimeId);
+        if (destroyingListResponses === 0 && !options?.retainDestroyedRecord) {
+          active.delete(value.runtimeId);
+        }
       }),
     list: Effect.sync(() => {
       const result = Array.from(active, (runtimeId) => ({
         runtimeKind: "railway-sandbox" as const,
         runtimeId,
-        status: destroyingListResponses > 0 ? ("destroying" as const) : ("running" as const),
+        status:
+          destroyingListResponses > 0
+            ? ("destroying" as const)
+            : destroyed
+              ? ("destroyed" as const)
+              : ("running" as const),
         region: "us-east4-eqdc4a",
       }));
       if (destroyingListResponses > 0) {
@@ -111,6 +121,17 @@ describe("runRailwaySandboxSmoke", () => {
 
   it("waits for asynchronous Railway teardown to disappear from inventory", async () => {
     const fake = makeFakeRuntime({ destroyingListResponses: 1 });
+
+    const summary = await Effect.runPromise(
+      runRailwaySandboxSmoke({ guard: "1", runtime: fake.runtime }),
+    );
+
+    expect(summary.teardownVerified).toBe(true);
+    expect(fake.destroyCount).toBe(1);
+  });
+
+  it("accepts a terminal destroyed record retained by project-token inventory", async () => {
+    const fake = makeFakeRuntime({ retainDestroyedRecord: true });
 
     const summary = await Effect.runPromise(
       runRailwaySandboxSmoke({ guard: "1", runtime: fake.runtime }),
