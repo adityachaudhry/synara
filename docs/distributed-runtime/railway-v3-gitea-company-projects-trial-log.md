@@ -761,3 +761,54 @@ entered `DESTROYING`.
 - Every source upload and encrypted-variable change triggered a full Docker build, including a
   variable-only credential refresh. This is deployment latency, not Pi latency, but it reinforces
   the need for durable credentials and separately managed worker artifacts.
+
+## 2026-08-07 — Durable v3 identity and automatic dev deployment
+
+### The delayed Pi startup failure was the personal bearer again
+
+**Observation:** After the application had been idle, the browser reported that the Pi adapter
+could not start the selected execution target. The deployed service still used
+`SYNARA_RAILWAY_SANDBOX_AUTH_TYPE=bearer`. A guarded smoke using the exact encrypted service
+variables failed on its first Sandbox inventory request. The locally authenticated Railway CLI
+remained healthy, separating the deployed credential from the Railway environment itself.
+
+**Conclusion:** The refreshed 43-character Railway CLI OAuth bearer had expired again. It was a
+user-session credential copied from this computer, not service identity. Refreshing it a third time
+would only reset the same outage clock.
+
+### Replaced the bearer with one v3/dev project token
+
+**Correction:** Create project token `synara-dev-runtime-ci-2026-08-07`, scoped by Railway to only
+project `v3` environment `dev`. Install it as the encrypted
+`SYNARA_RAILWAY_SANDBOX_TOKEN`, change the runtime auth type to `project-token`, and store the same
+one-time value as GitHub repository secret `RAILWAY_TOKEN`. The temporary mode-`0600` transfer file
+was deleted immediately after GitHub accepted the secret. No token value entered Git, logs, the
+trial journal, or retained local storage.
+
+Railway variable deployment `052bf80d-927b-478f-b84a-6e8de5a88871` became `SUCCESS`. An exact-token
+SDK query then authenticated successfully against the v3/dev environment.
+
+### First project-token smoke exposed an inventory semantic difference
+
+**Attempt:** Run the existing create, command, reconnect, keepalive, destroy smoke with the new
+service credential.
+
+**Failure:** Every runtime operation succeeded, but the smoke timed out waiting for the destroyed
+sandbox to disappear. The account-authenticated CLI showed no active sandbox. Querying the SDK with
+the exact project token explained the mismatch: it retained 39 historical records, all in terminal
+`DESTROYED` state.
+
+**Correction:** Teardown verification now accepts either absence or the exact runtime reaching
+`destroyed`; it still rejects `running`, `destroying`, `stopped`, and `failed`. A focused regression
+retains a destroyed record indefinitely. The corrected live smoke created sandbox
+`d1bed6f8-9136-4222-8a76-4dbde60a5f91`, ran both commands, reconnected, kept it alive, destroyed it,
+and returned `teardownVerified: true`. Active CLI inventory was empty afterward.
+
+### Dev deployment workflow is explicit and fail closed
+
+The new `.github/workflows/deploy-railway-v3-dev.yml` runs only for pushes to
+`codex/v3-gitea-projects` or an explicit manual dispatch. It pins Railway CLI 5.15.0 and targets the
+exact v3 project, dev environment, and `synara-gitea-dev` service IDs. It consumes only the encrypted
+project token, waits for the deployment bearing the exact GitHub SHA to reach `SUCCESS`, and fails
+on a terminal error or timeout. A repository test rejects v4 IDs, production selectors, the generic
+`synara` service, detached upload-only behavior, or branch drift.

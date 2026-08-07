@@ -1,0 +1,106 @@
+name: Deploy Synara to Railway v3 dev
+
+on:
+  push:
+    branches:
+      - codex/v3-gitea-projects
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-v3-dev-synara-gitea-dev
+  cancel-in-progress: true
+
+env:
+  RAILWAY_PROJECT_ID: 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0
+  RAILWAY_ENVIRONMENT_ID: 51f1e0e3-5714-4b56-8214-03e69b0c6afc
+  RAILWAY_SERVICE_ID: ad3904fc-9b54-460d-b147-d87a4f0956c6
+
+jobs:
+  deploy:
+    name: Deploy v3 dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@5.15.0
+
+      - name: Require durable v3 credential
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [[ -z "$RAILWAY_TOKEN" ]]; then
+            echo "RAILWAY_TOKEN is not configured for the v3 dev deployment." >&2
+            exit 1
+          fi
+
+      - name: Upload and deploy exact commit
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          deploy_message="GitHub Actions ${GITHUB_SHA}"
+          railway up \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --service "$RAILWAY_SERVICE_ID" \
+            --ci \
+            --message "$deploy_message"
+
+          for attempt in $(seq 1 90); do
+            deployments="$(
+              railway deployment list \
+                --project "$RAILWAY_PROJECT_ID" \
+                --environment "$RAILWAY_ENVIRONMENT_ID" \
+                --service "$RAILWAY_SERVICE_ID" \
+                --limit 20 \
+                --json
+            )"
+            deployment="$(
+              printf '%s' "$deployments" | DEPLOY_MESSAGE="$deploy_message" node -e '
+                let input = "";
+                process.stdin.setEncoding("utf8");
+                process.stdin.on("data", (chunk) => { input += chunk; });
+                process.stdin.on("end", () => {
+                  const rows = JSON.parse(input);
+                  const match = rows.find((row) => row.meta?.cliMessage === process.env.DEPLOY_MESSAGE);
+                  if (match) process.stdout.write(`${match.id}\t${match.status}`);
+                });
+              '
+            )"
+
+            if [[ -z "$deployment" ]]; then
+              echo "Waiting for Railway to index the uploaded deployment ($attempt/90)."
+              sleep 10
+              continue
+            fi
+
+            deployment_id="${deployment%%$'\t'*}"
+            deployment_state="${deployment#*$'\t'}"
+            echo "Railway deployment $deployment_id is $deployment_state."
+
+            case "$deployment_state" in
+              SUCCESS)
+                exit 0
+                ;;
+              FAILED|CRASHED|REMOVED|SKIPPED)
+                echo "Railway deployment $deployment_id ended in $deployment_state." >&2
+                exit 1
+                ;;
+            esac
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for the exact Railway deployment to become healthy." >&2
+          exit 1
