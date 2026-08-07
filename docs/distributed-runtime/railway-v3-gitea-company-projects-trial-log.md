@@ -591,3 +591,33 @@ all existing thread environment fields, then invoke the same `provider.prepareTh
 first-send promotion remains idempotent if the user sends while preparation is still racing. This
 adds no draft/runtime primitive and lets the server continue deriving the repository binding from
 durable project state.
+
+### Chrome exposed provider-selection focus timing
+
+**Attempt:** After deploying draft promotion, select Pi from the provider menu and click the
+already visible composer to trigger preparation.
+
+**Failure:** The new-thread landing auto-focuses while the default provider is still Codex. The
+provider menu keeps the Lexical editor logically focused, so choosing Pi and returning to the
+composer does not reliably emit a second DOM focus event. The draft remained local and no provider
+preparation telemetry appeared.
+
+**Correction:** Keep focus preparation, and also invoke the same idempotent preparation callback
+when the selected provider transitions to Pi. This covers both initial-Pi and user-switches-to-Pi
+flows without adding a second preparation implementation; the per-thread guard and server-side
+lock continue to coalesce focus, selection, and first-send races.
+
+### Blobless fetch needed transient auth during materialization
+
+**Attempt:** Send the first real Cue Cloud Pi prompt through the checkpoint-backed Railway
+Sandbox worker.
+
+**Failure:** The authenticated `--filter=blob:none` fetch completed and reserved a sandbox in
+6.906 seconds, but sparse checkout triggered a lazy promisor-remote blob fetch without the
+transient Gitea header. Git failed with `could not read Username` and the first turn never reached
+Pi.
+
+**Correction:** Pass the same environment-backed `http.extraHeader` to the sparse checkout
+command. The credential remains absent from the repository URL and Git config, while the checkout
+subprocess can authenticate any lazy blob requests. A focused regression test now requires the
+header on both fetch and checkout.

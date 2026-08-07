@@ -39,7 +39,9 @@ describe("makeGiteaCheckoutPlan", () => {
     expect(plan.command).not.toContain("super-secret-token");
     expect(plan.command).not.toContain("remote add");
     expect(plan.command).not.toContain("config core.sparseCheckout");
-    expect(plan.command).toContain("-c core.sparseCheckout=true checkout --detach FETCH_HEAD");
+    expect(plan.command).toContain(
+      '-c http.extraHeader="Authorization: token $SYNARA_GITEA_CHECKOUT_TOKEN" -c core.sparseCheckout=true checkout --detach FETCH_HEAD',
+    );
     expect(plan.command).toContain("fetch --depth=1 --no-tags --filter=blob:none");
     expect(plan.command).toContain("fetch --depth=1 --no-tags");
     expect(plan.command).toContain("__SYNARA_CHECKOUT_MODE__=partial");

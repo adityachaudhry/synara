@@ -59,7 +59,7 @@ export function makeGiteaCheckoutPlan(input: {
     `mkdir -p ${shellQuote(path.posix.join(checkoutRoot, ".git/info"))}`,
     `printf '%s\\n' ${shellQuote(sparsePattern)} > ${shellQuote(path.posix.join(checkoutRoot, ".git/info/sparse-checkout"))}`,
     `if GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 --no-tags ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
-    `${git} -c core.sparseCheckout=true checkout --detach FETCH_HEAD`,
+    `GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader="Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}" -c core.sparseCheckout=true checkout --detach FETCH_HEAD`,
     `test -f ${shellQuote(path.posix.join(companyCwd, "company.json"))}`,
     `printf '${COMMIT_MARKER}%s\\n' \"$(${git} rev-parse HEAD)\"`,
   ].join(" && ");

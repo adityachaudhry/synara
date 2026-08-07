@@ -3287,6 +3287,15 @@ export default function ChatView({
     selectedProvider,
     threadNotes,
   ]);
+  // New-thread landing auto-focus happens before a user changes the default provider.
+  // Provider menus keep the Lexical editor logically focused, so choosing Pi does not
+  // reliably produce a second DOM focus event. Prepare on the Pi selection transition as
+  // well; the focus handler remains the fast path when Pi was already selected.
+  useEffect(() => {
+    if (selectedProvider === "pi") {
+      prepareFirstTurnRuntime();
+    }
+  }, [prepareFirstTurnRuntime, selectedProvider]);
   const pinnedMessageIds = useMemo(
     () => new Set(pinnedMessages.map((pin) => pin.messageId)),
     [pinnedMessages],
