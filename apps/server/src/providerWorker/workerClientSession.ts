@@ -5,7 +5,7 @@ import {
   type ProviderWorkerRegister,
   type ProviderWorkerResponse,
 } from "@synara/contracts";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Semaphore } from "effect";
 
 import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter";
 import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
@@ -45,17 +45,21 @@ export function makeProviderWorkerClientSession<TError>(input: {
   let registered = false;
   let retired = false;
 
-  const send = (frame: object) => input.socket.sendRaw(JSON.stringify(frame));
+  const sendLock = Semaphore.makeUnsafe(1);
+  const sendUnlocked = (frame: object) => input.socket.sendRaw(JSON.stringify(frame));
+  const send = (frame: object) => sendLock.withPermits(1)(sendUnlocked(frame));
 
   const publishEvent = (event: ProviderRuntimeEvent) =>
-    Effect.try({
-      try: () => input.outbox.push(event),
-      catch: (cause) =>
-        cause instanceof ProviderWorkerTransportError
-          ? cause
-          : clientError("event.outbox", "Failed to retain provider event.", cause),
-    }).pipe(
-      Effect.flatMap((frame) => (registered ? send(frame) : Effect.void)),
+    sendLock.withPermits(1)(
+      Effect.try({
+        try: () => input.outbox.push(event),
+        catch: (cause) =>
+          cause instanceof ProviderWorkerTransportError
+            ? cause
+            : clientError("event.outbox", "Failed to retain provider event.", cause),
+      }).pipe(
+        Effect.flatMap((frame) => (registered ? sendUnlocked(frame) : Effect.void)),
+      ),
     );
 
   const handleRequest = (frame: Extract<typeof ProviderWorkerServerFrame.Type, { type: "request" }>) =>
@@ -123,9 +127,16 @@ export function makeProviderWorkerClientSession<TError>(input: {
                 "The first control-plane frame must acknowledge registration.",
               );
             }
-            input.outbox.acknowledge(frame.acknowledgedSequence);
-            registered = true;
-            yield* Effect.forEach(input.outbox.pending(), send, { discard: true });
+            yield* sendLock.withPermits(1)(
+              Effect.sync(() => {
+                input.outbox.acknowledge(frame.acknowledgedSequence);
+                registered = true;
+              }).pipe(
+                Effect.andThen(
+                  Effect.forEach(input.outbox.pending(), sendUnlocked, { discard: true }),
+                ),
+              ),
+            );
             return;
           }
 

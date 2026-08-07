@@ -67,6 +67,23 @@ function makeSocket(frames: ReadonlyArray<string>) {
   return { socket, sent, closes };
 }
 
+function makeReorderingSocket(frames: ReadonlyArray<string>) {
+  const sent: unknown[] = [];
+  const socket: ProviderWorkerSocket = {
+    run: (handler, onOpen) =>
+      (onOpen ?? Effect.void).pipe(
+        Effect.andThen(Effect.forEach(frames, handler, { discard: true })),
+      ),
+    sendRaw: (raw) => {
+      const decoded = JSON.parse(raw) as { readonly type?: string; readonly sequence?: number };
+      const delayMs = decoded.type === "event" && decoded.sequence === 1 ? 20 : 0;
+      return Effect.sleep(delayMs).pipe(Effect.andThen(Effect.sync(() => sent.push(decoded))));
+    },
+    close: () => Effect.void,
+  };
+  return { socket, sent };
+}
+
 describe("ProviderWorkerClientSession", () => {
   it("registers, replays retained events, and dispatches adapter requests", async () => {
     const fake = makeSocket([
@@ -131,5 +148,35 @@ describe("ProviderWorkerClientSession", () => {
     expect(fake.closes).toEqual([
       { code: 4400, reason: "Provider worker server frame rejected" },
     ]);
+  });
+
+  it("serializes concurrent event writes in outbox sequence order", async () => {
+    const fake = makeReorderingSocket([frame({ type: "registered", acknowledgedSequence: 0 })]);
+    const session = makeProviderWorkerClientSession({
+      fence,
+      bootstrapCredential: "bootstrap-secret",
+      adapter: makeAdapter(),
+      outbox: makeProviderWorkerOutbox(fence),
+      socket: fake.socket,
+    });
+    await Effect.runPromise(session.run);
+
+    await Effect.runPromise(
+      Effect.all(
+        [
+          session.publishEvent(event),
+          session.publishEvent({ ...event, eventId: "event-2" as never }),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    );
+
+    expect(
+      fake.sent
+        .filter((sent): sent is { readonly type: "event"; readonly sequence: number } =>
+          typeof sent === "object" && sent !== null && (sent as { type?: string }).type === "event",
+        )
+        .map((sent) => sent.sequence),
+    ).toEqual([1, 2]);
   });
 });
