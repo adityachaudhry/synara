@@ -812,3 +812,22 @@ exact v3 project, dev environment, and `synara-gitea-dev` service IDs. It consum
 project token, waits for the deployment bearing the exact GitHub SHA to reach `SUCCESS`, and fails
 on a terminal error or timeout. A repository test rejects v4 IDs, production selectors, the generic
 `synara` service, detached upload-only behavior, or branch drift.
+
+### Push-triggered deployment and browser acceptance
+
+Branch `codex/v3-gitea-projects` was pushed to `origin` at commit
+`f29ad02af9aa2cb0eced9c01b3b587d49cad7a0f`. Push-triggered GitHub Actions run
+`31150613718` accepted the v3 project secret, uploaded that exact commit, and completed successfully
+in 5m08s. Railway deployment `f272999a-bf75-4147-a74c-a256b380efaf` recorded the exact SHA in its
+CLI message, reached `SUCCESS`, and activated image
+`sha256:a2db67f469e8c1c5f2b8fc1bd55c6e98ad6072b3695fc41d5f0b5acbe42429b5`. The public health endpoint
+returned HTTP 200, while the previous deployment moved to `REMOVED` only after the replacement was
+healthy.
+
+The original failed browser thread preserved the nested cause and confirmed the diagnosis:
+Railway GraphQL returned `Not Authorized` during `Sandbox.create`. A fresh Cue Cloud browser thread
+`1718def7-5a08-49b3-8d52-5c7eec975f28` then sent `Reply with exactly: durable v3 token works` through
+Pi and received exactly `durable v3 token works` after 11.4 seconds of total observation. It showed
+no provider-start or authorization error. The exact canary sandbox
+`faf37243-cb9f-4acb-a09e-69af948febde` was destroyed afterward and disappeared from active
+inventory.
