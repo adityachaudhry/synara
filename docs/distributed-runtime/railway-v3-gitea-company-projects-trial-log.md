@@ -657,3 +657,107 @@ either raise the Railway sandbox concurrency allocation, release idle thread wor
 bounded reusable worker pool while retaining the existing fenced session and durable-event
 primitives. Until then, an occupied sandbox can make another thread's apparent cold start
 unbounded, so this limitation must stay visible in telemetry and rollout notes.
+
+## 2026-08-06 — Five-project concurrency, background UX, and ordered worker events
+
+### Repeated `Creating sandbox` rows came from two independent behaviors
+
+**Observation:** An empty Pi thread briefly stopped looking empty as soon as preparation emitted a
+`runtime.stage` activity. The transcript work-log projection treated that infrastructure event as a
+normal timeline row, so the centered landing switched to the sent-message layout before the user
+had sent anything.
+
+At the same time, the server's per-thread preparation mutex serialized callers but did not share
+their result. When a preparation attempt failed, focus, provider selection, and first send could
+each acquire the mutex in turn and run another complete sandbox attempt. This made one logical
+preparation look like several `Creating sandbox` operations.
+
+**Correction:** Keep durable `runtime.stage` events for diagnostics, but exclude them from the
+user-message work log. They no longer make the empty landing nonempty. Replace the queuing mutex
+with the existing keyed single-flight cache: simultaneous preparation callers for one thread now
+observe one promise and one success or failure. Distinct thread keys remain concurrent. Focused
+tests first reproduced a visible stage-only row and two failed starts, then passed with zero
+timeline rows and one shared start.
+
+### Railway did not have a one-sandbox capacity limit
+
+**Attempt:** Create five clean sandboxes concurrently from the authenticated Railway CLI, then add
+a sixth sequentially.
+
+**Result:** Railway had six `RUNNING` sandboxes in about four seconds. Four concurrent CLI
+processes returned success. One process failed locally with `No such file or directory` while
+updating Railway's shared active-sandbox config, but remote reconciliation showed that its sandbox
+had been created successfully. A sixth sequential create also succeeded. All six exact sandbox IDs
+were destroyed afterward.
+
+**Learning:** The earlier apparent one-slot limit was an expired-credential/pending-request symptom,
+not a Railway allocation limit. Concurrent CLI processes can race on local bookkeeping even when
+the remote operations succeed, so cleanup and accounting must reconcile `railway sandbox list`
+rather than trusting individual CLI exit codes.
+
+### The first browser run found the expired bearer before testing concurrency
+
+**Attempt:** Deploy the hidden-stage and single-flight fixes, create three additional small public
+GitHub projects beside the two Gitea company projects, and start a Pi thread.
+
+**Failure:** The first real message failed with Railway GraphQL `Not Authorized`. The deployed
+`SYNARA_RAILWAY_SANDBOX_AUTH_TYPE` was still `bearer`; its 43-character personal OAuth access token
+had expired. This was the same unattended-runtime boundary identified by the earlier canary.
+
+**Correction:** Refresh the Railway CLI OAuth session and pipe the new access token directly into
+the encrypted service variable over stdin without printing it. Railway rebuilt the unchanged image
+for this variable-only update. This is acceptable for an acceptance run but is not a production
+credential strategy; a durable, revocable project token or workload identity remains required.
+
+### Five first turns passed, but warm turns exposed event-frame reordering
+
+With the refreshed bearer, five new Pi threads across five distinct projects produced five
+simultaneous `RUNNING` sandboxes. Every empty landing contained zero `Creating sandbox` rows, and all
+five first prompts returned their exact requested answers without provider failures.
+
+The warm round then exposed a transport bug. Two workers were rejected with `Expected worker event
+sequence 10, received 11`; one later repeated the problem as `Expected worker event sequence 12,
+received 13`. Their WebSockets closed and affected follow-ups returned to `Connecting`. The
+lossless outbox assigned sequences correctly, but concurrent Effect fibers called the socket writer
+without serialization, allowing sequence 11 to complete before sequence 10.
+
+**Correction:** Reuse an Effect semaphore inside the existing worker client session. Outbox push,
+registration replay, and the corresponding socket write now share one ordered critical section;
+responses use the same serialized writer. A regression socket deliberately delayed event 1. The
+test failed with observed completion order `[2, 1]` before the fix and passed with `[1, 2]` after it.
+
+### Corrected five-way result
+
+Deployment `fd38ab83-5d7d-477c-b871-e8e6b2fc3c76` ran image
+`sha256:45b7f762d034348aed3c845f561a2ea27d693b0effdc930ae7a524ac8b643417`.
+The second browser run created five new threads in Cue Cloud, High Loop Algorithms,
+`pressure-hello-world`, `pressure-spoon-knife`, and `pressure-git-consortium`. Railway reported these
+five sandboxes simultaneously:
+
+- `5d84375a-5da8-4125-b603-1cc23cb98ee2`
+- `9282043b-a323-4e97-8b06-922c1c966a89`
+- `9c262939-e1a6-4cde-892a-d86ee35e5713`
+- `11967eb5-55b0-40ce-af6e-aade8571b0ce`
+- `56e2f25e-883d-436e-b276-1436dadbdbd0`
+
+All five workers connected before send. First-answer observation times were 4.737s, 4.087s,
+5.350s, 4.087s, and 4.737s. Warm follow-ups were 4.238s, 4.501s, 4.238s, 3.616s, and 3.616s.
+Both rounds had zero provider failures, zero visible `Creating sandbox` rows, and the warm round had
+zero `Connecting` regressions. Post-fix Railway logs contained no worker event-sequence gaps and no
+worker WebSocket closes. The five exact disposable sandboxes were destroyed after the test and
+entered `DESTROYING`.
+
+### Operational tool failures and course corrections
+
+- The normal server build wrapper spawned `bun tsdown`, but Bun is absent locally. Direct tsdown
+  invocation with the bundled Node 24 runtime built both the server and provider-worker artifacts.
+- A zsh polling loop used `status`, which is read-only in zsh. Renaming it to `deploy_state`
+  corrected the local poll; the Railway deployment was unaffected.
+- `railway sandbox destroy --yes` is not supported by this CLI version. Re-running the exact-ID
+  destroys without that flag succeeded noninteractively.
+- A read-only SQLite telemetry query over `railway ssh` could not run because the local SSH agent
+  has no key. Browser-visible state, remote sandbox inventory, focused tests, and filtered Railway
+  logs supplied the acceptance evidence instead.
+- Every source upload and encrypted-variable change triggered a full Docker build, including a
+  variable-only credential refresh. This is deployment latency, not Pi latency, but it reinforces
+  the need for durable credentials and separately managed worker artifacts.
