@@ -51,8 +51,10 @@ state remains disposable execution state.
 - `GiteaCompanyCatalog` gains a repository-file open operation returning `Option.none` when a cwd
   is not catalog-bound and an authenticated Gitea response plus the canonical relative path when
   it is.
-- Its live layer caches/coalesces recursive tree snapshots for the same short catalog TTL used by
-  catalog metadata, then fetches only the selected file's contents.
+- Its live layer caches/coalesces directory traversal for only the bound company subtree, with a
+  bounded entry count and the same short TTL used by catalog metadata, then fetches only the
+  selected file's contents. It deliberately does not request a recursive tree for the full
+  multi-company repository because Gitea can truncate that response.
 - A small workspace read adapter composes the current local `WorkspaceFileSystem` text read with
   the catalog fallback, applies the existing text limits, and preserves the original local error
   for unbound workspaces.
@@ -73,7 +75,8 @@ state remains disposable execution state.
 ## Verification
 
 1. A red-green catalog test proves a bare `technical_diligence.md` reference resolves uniquely to
-   `analysis/technical_diligence.md`, respects truncation, and returns the resolved relative path.
+   `analysis/technical_diligence.md` from the bound company subtree and returns the resolved
+   relative path without depending on the repository-wide tree endpoint.
 2. A red-green adapter test proves local reads win, bound fallbacks recover missing local roots, and
    unbound workspaces preserve the local failure.
 3. A route regression proves a repository-bound image/PDF can use the authenticated preview route

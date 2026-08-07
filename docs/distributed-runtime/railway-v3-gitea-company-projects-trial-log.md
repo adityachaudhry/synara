@@ -831,3 +831,52 @@ Pi and received exactly `durable v3 token works` after 11.4 seconds of total obs
 no provider-start or authorization error. The exact canary sandbox
 `faf37243-cb9f-4acb-a09e-69af948febde` was destroyed afterward and disappeared from active
 inventory.
+
+## 2026-08-07 — Controller-independent Gitea file previews
+
+### The compatibility workspace path is identity, not controller storage
+
+**Observation:** Clicking `technical_diligence.md` in an Nth thread asked the controller to read
+`/data/gitea-company-projects/nth/technical_diligence.md`. That path identifies the canonical
+project and remains useful to existing Synara contracts, but no checkout lives there. The actual
+company checkout is sparse and disposable inside the Railway provider sandbox at
+`/workspace/repository`. `WorkspaceFileSystem.realpath` therefore failed before Preview could
+render.
+
+**Correction:** Keep local filesystem reads first, then map the unchanged cwd through the canonical
+Gitea company catalog and read from the existing project repository binding. Bare or partial
+references retain Synara's unique-suffix behavior, so `technical_diligence.md` resolves to
+`analysis/technical_diligence.md`. The same catalog adapter streams allowlisted image and PDF bytes
+through the existing authenticated preview route. This adds no new Project, Thread, artifact,
+sandbox, or browser protocol primitive, and it keeps provider sandboxes disposable.
+
+### A repository-wide recursive tree worked in the fixture and failed in the real repository
+
+**Attempt:** Cache `git/trees/main?recursive=true` for the full company-data repository, filter the
+result to the bound company prefix, then perform exact or unique-suffix selection. The catalog,
+text adapter, binary route, browser components, and production builds all passed locally. Railway
+deployment `1ddcc686-d3c9-4cf9-bbe1-7a243a26f533` became healthy.
+
+**Failure:** The original browser flow replaced the old `realpath` detail with a generic file-read
+failure. A guarded live adapter run with the v3 service configuration exposed the actual boundary:
+Gitea returned `truncated: true` for the large multi-company recursive tree. Rejecting that
+incomplete index was correct, but requesting unrelated companies was not.
+
+**Correction:** Traverse only the canonical bound company via the Gitea Contents API, with bounded
+parallel directory reads, a 50,000-entry safety limit, per-company single-flight coalescing, and the
+existing short catalog TTL. A revised red-green test rejects reliance on `/git/trees/`. The exact
+adapter then resolved Nth's bare reference to `analysis/technical_diligence.md` with HTTP 200
+against the live repository before redeployment.
+
+### A failed Railway upload was retried without changing source
+
+The first deployment attempt for corrected commit `c78699e1` failed in 28 seconds before Railway
+associated any build, so there were no application build logs to diagnose and the prior healthy
+deployment remained active. Retrying the exact GitHub Actions run without changing source produced
+Railway deployment `6f7eff41-2fae-42f8-bf71-c1e18bea3957`, which reached `SUCCESS`; `/health`
+reported every readiness flag true.
+
+The original Nth browser thread then rendered the complete `Technical Diligence` markdown in
+Preview mode. The final focused evidence was 39 passing server tests, 35 passing web RPC tests, six
+passing rendered-preview tests, successful server/web production builds, a live authenticated
+Gitea resolution, and the deployed original-flow screenshot.
