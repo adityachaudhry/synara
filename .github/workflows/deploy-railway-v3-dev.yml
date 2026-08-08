@@ -57,13 +57,13 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           set -euo pipefail
-          bun --filter @synara/cli run build:provider-worker
+          (cd apps/server && bun run build:provider-worker)
           railway run \
             --project "$RAILWAY_PROJECT_ID" \
             --environment "$RAILWAY_ENVIRONMENT_ID" \
             --service "$RAILWAY_SERVICE_ID" \
             --no-local \
-            -- bun --filter @synara/cli run prepare:railway-worker-checkpoint
+            -- node --experimental-strip-types apps/server/scripts/prepare-railway-worker-checkpoint.ts
 
       - name: Upload and deploy exact commit
         env:

@@ -917,3 +917,16 @@ original project-switch interaction without inventing a second thread primitive.
 large `ChatView.browser.tsx` Vitest browser harness launched Chromium but did not begin the selected
 tests within 90 seconds on two attempts, so it was terminated instead of being treated as evidence.
 The deployed behavior is verified separately in real Chrome.
+
+### The first workflow refresh used the wrong Bun filter seam
+
+**Attempt:** Run each server package script from the repository root with
+`bun --filter @synara/cli run …`.
+
+**Failure:** GitHub Actions stopped before checkpoint preparation or deployment with
+`No packages matched the filter`. The previous healthy Railway deployment remained active.
+
+**Correction:** Build from `apps/server` directly and run the TypeScript preparation script with the
+already-pinned Node runtime under Railway's injected service environment. This removes workspace
+filter discovery from the deployment-critical path while preserving the same package scripts and
+artifact.
