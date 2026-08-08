@@ -3682,8 +3682,45 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await expect.element(page.getByText("What should we do in")).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("empty-landing-heading-project-trigger"))
+        .toHaveTextContent("project");
       await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
       expect(document.body.textContent).toContain("main");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("lets a prewarmed empty thread change projects from the underlined heading", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withOpenProjectPickerFixtures(
+        addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+      ),
+    });
+
+    try {
+      const headingProjectTrigger = page.getByTestId("empty-landing-heading-project-trigger");
+      await expect.element(headingProjectTrigger).toHaveTextContent("project");
+      await headingProjectTrigger.click();
+      await page.getByText("other", { exact: true }).click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Changing the heading project should open a fresh draft in that project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      await vi.waitFor(() => {
+        expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+          projectId: OTHER_PROJECT_ID,
+          entryPoint: "chat",
+        });
+      });
+      await expect
+        .element(page.getByTestId("empty-landing-heading-project-trigger"))
+        .toHaveTextContent("other");
     } finally {
       await mounted.cleanup();
     }

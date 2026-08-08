@@ -11,6 +11,9 @@ import {
   makeProviderWorkerNodeRuntimeCommand,
   PROVIDER_WORKER_NODE_VERSION,
 } from "../src/providerWorker/workerNodeRuntime.ts";
+import {
+  planWorkerCheckpointPreparation,
+} from "../src/providerWorker/workerCheckpointPreparation.ts";
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 
@@ -43,9 +46,20 @@ async function main() {
     );
     return [];
   });
-  const replaced = existing.filter((checkpoint) => checkpoint.key === checkpointName);
-  for (const checkpoint of replaced) {
-    await Sandbox.deleteCheckpoint(checkpoint.id, connection);
+  const plan = planWorkerCheckpointPreparation(existing, checkpointName);
+  if (plan.kind === "reuse") {
+    process.stdout.write(
+      `${JSON.stringify({
+        checkpointId: plan.checkpoint.id,
+        checkpointName: plan.checkpoint.key,
+        artifactDigest: digest,
+        artifactBytes: artifact.byteLength,
+        nodeVersion: PROVIDER_WORKER_NODE_VERSION,
+        reused: true,
+        checkpointManagementAuthorized: canManageCheckpoints,
+      })}\n`,
+    );
+    return;
   }
 
   const seed = await Sandbox.create({
@@ -77,7 +91,7 @@ async function main() {
         artifactDigest: digest,
         artifactBytes: artifact.byteLength,
         nodeVersion: PROVIDER_WORKER_NODE_VERSION,
-        replacedCheckpointCount: replaced.length,
+        reused: false,
         checkpointManagementAuthorized: canManageCheckpoints,
       })}\n`,
     );

@@ -880,3 +880,40 @@ The original Nth browser thread then rendered the complete `Technical Diligence`
 Preview mode. The final focused evidence was 39 passing server tests, 35 passing web RPC tests, six
 passing rendered-preview tests, successful server/web production builds, a live authenticated
 Gitea resolution, and the deployed original-flow screenshot.
+
+## 2026-08-08 — Returned first-message delay and prewarmed landing control
+
+### `auto` checkpoint selection still falls back when the exact digest was never prepared
+
+**Observation:** An already-warm thread began answering in about 3.2 seconds, while a genuinely new
+thread took about 16.2 seconds. Railway logs accounted for the gap: the provider worker was reserved,
+then the controller uploaded the 14,081,891-byte worker artifact into a clean sandbox before the
+process could start. Two fresh trials repeated the same reserve, upload, configure, and connect path.
+
+**Failure:** `SYNARA_RAILWAY_SANDBOX_WORKER_CHECKPOINT=auto` correctly derived the current
+digest-specific name, but only an older worker checkpoint existed. The runtime intentionally fell
+back to a clean sandbox when Railway could not find the derived checkpoint. The deployment workflow
+uploaded application source without preparing the matching worker checkpoint, so every worker
+artifact change could silently reintroduce the cold upload.
+
+**Correction:** The v3 deployment workflow now builds the exact provider-worker artifact and
+prepares its digest-named Railway checkpoint before uploading the application commit. Preparation is
+idempotent: it reuses an exact checkpoint rather than deleting and recreating it, so repeated deploys
+do not introduce a checkpoint gap. A live idempotency check reused
+`synara-provider-worker-2bdce285e61dc122e7a9b534` for the 14,081,891-byte artifact.
+
+### Eager prewarming changed the landing-state representation
+
+**Observation:** The dotted project name in `What should we do in …?` existed only for local draft
+threads. Pi prewarming promotes the draft to an empty server thread so it can prepare the provider;
+the heading consequently became plain text even though the user had not sent a message.
+
+**Correction:** The project picker is now derived from user-visible landing state rather than draft
+storage representation. A local empty draft still moves in place. An empty prewarmed server thread
+opens a fresh draft in the selected project, preserving the additive prewarming optimization and the
+original project-switch interaction without inventing a second thread primitive.
+
+**Test harness note:** Focused pure regressions and the production Vite build completed locally. The
+large `ChatView.browser.tsx` Vitest browser harness launched Chromium but did not begin the selected
+tests within 90 seconds on two attempts, so it was terminated instead of being treated as evidence.
+The deployed behavior is verified separately in real Chrome.

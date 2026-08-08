@@ -590,6 +590,7 @@ import {
   isDuplicateProjectCreateError,
   waitForRecoverableProjectForDuplicateCreate,
 } from "../lib/projectCreateRecovery";
+import { resolveEmptyLandingProjectPickerMode } from "../lib/emptyLandingProjectPicker";
 
 // The terminal drawer drags in xterm plus its addons (~223 KB gzip). Both mount points
 // are conditional, so loading it lazily keeps the terminal stack out of the initial
@@ -9560,24 +9561,40 @@ export default function ChatView({
 
   const handleSelectProjectForEmptyDraft = useCallback(
     (projectId: ProjectId) => {
-      if (!isLocalDraftThread) {
-        return;
-      }
       const project = useStore
         .getState()
         .projects.find((candidate) => candidate.id === projectId && candidate.kind === "project");
       if (!project) {
         throw new Error("Selected project is not available.");
       }
-      if (draftThread?.projectId === projectId) {
+      if (isLocalDraftThread) {
+        if (draftThread?.projectId === projectId) {
+          scheduleComposerFocus();
+          return;
+        }
+        moveEmptyDraftToLocalProject(projectId);
+        return;
+      }
+      if (
+        !isServerThread ||
+        !activeThread ||
+        activeThread.messages.length > 0 ||
+        activeThread.latestTurn !== null
+      ) {
+        return;
+      }
+      if (activeThread.projectId === projectId) {
         scheduleComposerFocus();
         return;
       }
-      moveEmptyDraftToLocalProject(projectId);
+      void handleNewThread(projectId, { entryPoint: "chat", fresh: true });
     },
     [
+      activeThread,
       draftThread?.projectId,
+      handleNewThread,
       isLocalDraftThread,
+      isServerThread,
       moveEmptyDraftToLocalProject,
       scheduleComposerFocus,
     ],
@@ -9585,7 +9602,7 @@ export default function ChatView({
 
   const handleCreateProjectFromPickerPath = useCallback(
     async (workspaceRoot: string) => {
-      if (!isLocalDraftThread) {
+      if (!isLocalDraftThread && !isServerThread) {
         return;
       }
       const api = readNativeApi();
@@ -9619,12 +9636,12 @@ export default function ChatView({
       if (!creationResult.project) {
         throw new Error(PROJECT_CREATE_SYNC_ERROR);
       }
-      moveEmptyDraftToLocalProject(creationResult.project.id);
+      handleSelectProjectForEmptyDraft(creationResult.project.id);
     },
     [
       handleSelectProjectForEmptyDraft,
       isLocalDraftThread,
-      moveEmptyDraftToLocalProject,
+      isServerThread,
       syncServerShellSnapshot,
     ],
   );
@@ -10676,8 +10693,15 @@ export default function ChatView({
       clearTemporaryThread(threadId);
     }
   };
-  const showEmptyLandingProjectPicker =
-    isCenteredEmptyLanding && isLocalDraftThread && activeProject?.kind === "project";
+  const emptyLandingProjectPickerMode = resolveEmptyLandingProjectPickerMode({
+    isCenteredEmptyLanding,
+    isLocalDraftThread,
+    isServerThread,
+    hasMessages: activeThread.messages.length > 0,
+    hasLatestTurn: activeThread.latestTurn !== null,
+    projectKind: activeProject?.kind,
+  });
+  const showEmptyLandingProjectPicker = emptyLandingProjectPickerMode !== "hidden";
   const showContainerChatWorkspacePicker =
     isEmptyChatLanding && (isHomeChatContainer || isStudioContainer);
   const emptyLandingProjectChip =
