@@ -320,6 +320,7 @@ const ServerConfigLive = (input: CliInput) =>
         staticDir,
         devUrl,
         publicUrl,
+        trustedAppOrigins,
         allowInsecureRemote,
         noBrowser,
         authToken,

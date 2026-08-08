@@ -173,7 +173,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
   readonly publicUrl: URL | undefined;
-  readonly trustedAppOrigins?: ReadonlySet<string>;
+  readonly trustedAppOrigins: ReadonlySet<string>;
   readonly allowInsecureRemote: boolean;
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;

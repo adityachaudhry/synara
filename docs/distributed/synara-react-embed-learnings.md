@@ -71,6 +71,25 @@ Glasswing's public tree. The package may reference the stable `/brand/glasswing-
 Glasswing supplies those files. A checksum-before/after sync check confirmed that refreshing the
 package leaves all six existing host brand assets byte-for-byte unchanged.
 
+## Trial 5: Parsed trusted origins did not reach the runtime service
+
+The first live cross-origin negotiation probe still returned `403` for the configured Glasswing
+origin even though Railway showed the expected `SYNARA_TRUSTED_APP_ORIGINS` value.
+
+**Why it failed:** the environment parser correctly built the trusted-origin set, but the parsed
+value was not copied into the final `ServerConfig` object. The optional property allowed that
+omission to compile.
+
+**Correction:** copy the set into the runtime configuration and make `trustedAppOrigins` required,
+so every future `ServerConfig` constructor must make an explicit choice (normally an empty set).
+The acceptance check now probes both the allowed Glasswing origin and an unrelated rejected origin.
+
+The first direct Railway redeploy attempt also failed while `bun install` was applying the Effect
+language-service patch (`UnableToFindPositionToPatchError`). Re-running the repository's pinned,
+exact-commit GitHub deployment workflow succeeded on the same source. This reinforced using the
+checked-in deployment path and live behavior probes instead of treating a successful variable write
+as proof that the running process consumed it.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,
