@@ -39,10 +39,33 @@ function requireValue(name, value) {
   return value.trim();
 }
 
+async function assertNoDynamicPeerReactRequire(directory) {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await assertNoDynamicPeerReactRequire(entryPath);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
+    const source = await fs.readFile(entryPath, "utf8");
+    if (
+      source.includes("rolldown-runtime") &&
+      /\b[A-Za-z_$][\w$]*\(["']react["']\)/.test(source)
+    ) {
+      throw new Error(
+        `Embed chunk ${entry.name} dynamically requires peer React; alias the CommonJS dependency to an ESM adapter.`,
+      );
+    }
+  }
+}
+
 export async function writeEmbedPackage(input) {
   const version = requireValue("PACKAGE_VERSION", input.version);
   const synaraCommit = requireValue("SYNARA_COMMIT", input.synaraCommit);
   const upstreamCommit = requireValue("SYNARA_UPSTREAM_COMMIT", input.upstreamCommit);
+
+  await assertNoDynamicPeerReactRequire(input.buildDir);
 
   await fs.rm(input.outputDir, { recursive: true, force: true });
   await fs.mkdir(input.outputDir, { recursive: true });

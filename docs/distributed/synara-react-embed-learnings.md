@@ -90,6 +90,20 @@ exact-commit GitHub deployment workflow succeeded on the same source. This reinf
 checked-in deployment path and live behavior probes instead of treating a successful variable write
 as proof that the running process consumed it.
 
+## Trial 6: A successful Next build did not prove browser-safe module evaluation
+
+The first authenticated Edge load reached the native company route, displayed the lazy loading
+state, and then fell into the route error boundary with `dynamic usage of require is not supported`.
+Next/Turbopack had compiled successfully, but a CommonJS `use-sync-external-store` compatibility
+module inside the Vite library still attempted to load peer React through Rolldown's runtime
+`require` shim in the browser.
+
+**Correction:** the embed-only Vite configuration aliases the CommonJS selector shim to a small ESM
+adapter built directly on React's `useSyncExternalStore`. React remains a peer dependency, so the
+host still owns the single React instance. The package writer now rejects any generated chunk that
+combines the Rolldown runtime with a dynamic call for peer React, turning this browser-only failure
+into a deterministic build failure.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

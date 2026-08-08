@@ -79,4 +79,21 @@ describe("writeEmbedPackage", () => {
       }),
     ).rejects.toThrow("SYNARA_COMMIT");
   });
+
+  it("rejects bundled CommonJS modules that dynamically require peer React", async () => {
+    const fixture = await makeFixture();
+    await fs.writeFile(
+      path.join(fixture.buildDir, "with-selector.js"),
+      'import { r as load } from "./rolldown-runtime.js";\nload("react");\n',
+    );
+
+    await expect(
+      writeEmbedPackage({
+        ...fixture,
+        version: "0.6.6",
+        synaraCommit: "synara-sha",
+        upstreamCommit: "upstream-sha",
+      }),
+    ).rejects.toThrow("dynamically requires peer React");
+  });
 });
