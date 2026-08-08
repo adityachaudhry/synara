@@ -24,7 +24,7 @@ const buildSourcemap =
       ? "hidden"
       : false;
 
-const CENTRAL_ICON_DIR = "central-icons-reversed";
+const CENTRAL_ICON_DIRS = ["central-icons-reversed", "central-icons-fill"] as const;
 const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 
@@ -43,7 +43,7 @@ async function listFiles(root: string): Promise<string[]> {
 }
 
 // Finds literal icon basenames in source, then prunes the copied public icon set after build.
-function centralIconPrunePlugin(): Plugin {
+export function centralIconPrunePlugin(): Plugin {
   let resolvedRoot = process.cwd();
   let resolvedOutDir = "dist";
   return {
@@ -54,14 +54,17 @@ function centralIconPrunePlugin(): Plugin {
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
     async closeBundle() {
-      const publicIconDir = path.join(resolvedRoot, "public", CENTRAL_ICON_DIR);
-      const distIconDir = path.join(resolvedOutDir, CENTRAL_ICON_DIR);
-      const iconFiles = await fs.readdir(publicIconDir).catch(() => []);
-      const availableIcons = new Set(
-        iconFiles
-          .filter((name) => name.endsWith(".svg"))
-          .map((name) => name.slice(0, -".svg".length)),
-      );
+      const availableIcons = new Set<string>();
+      for (const iconDir of CENTRAL_ICON_DIRS) {
+        const iconFiles = await fs
+          .readdir(path.join(resolvedRoot, "public", iconDir))
+          .catch(() => []);
+        for (const fileName of iconFiles) {
+          if (fileName.endsWith(".svg")) {
+            availableIcons.add(fileName.slice(0, -".svg".length));
+          }
+        }
+      }
       if (availableIcons.size === 0) return;
 
       const sourceFiles = (await listFiles(path.join(resolvedRoot, "src"))).filter((file) =>
@@ -84,19 +87,22 @@ function centralIconPrunePlugin(): Plugin {
       }
 
       if (requiredIcons.size === 0) return;
-      const copiedIconFiles = await fs.readdir(distIconDir).catch(() => []);
       let removedCount = 0;
-      await Promise.all(
-        copiedIconFiles.map(async (fileName) => {
-          if (!fileName.endsWith(".svg")) return;
-          const iconName = fileName.slice(0, -".svg".length);
-          if (requiredIcons.has(iconName)) return;
-          removedCount += 1;
-          await fs.rm(path.join(distIconDir, fileName), { force: true });
-        }),
-      );
+      for (const iconDir of CENTRAL_ICON_DIRS) {
+        const distIconDir = path.join(resolvedOutDir, iconDir);
+        const copiedIconFiles = await fs.readdir(distIconDir).catch(() => []);
+        await Promise.all(
+          copiedIconFiles.map(async (fileName) => {
+            if (!fileName.endsWith(".svg")) return;
+            const iconName = fileName.slice(0, -".svg".length);
+            if (requiredIcons.has(iconName)) return;
+            removedCount += 1;
+            await fs.rm(path.join(distIconDir, fileName), { force: true });
+          }),
+        );
+      }
       console.info(
-        `[central-icons] kept ${requiredIcons.size}/${availableIcons.size} referenced SVGs, pruned ${removedCount}.`,
+        `[central-icons] kept ${requiredIcons.size}/${availableIcons.size} referenced names in ${CENTRAL_ICON_DIRS.length} sets, pruned ${removedCount}.`,
       );
     },
   };

@@ -6,6 +6,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_IMPORT_BYTES,
 } from "@synara/contracts";
+import ComposerImagePreparationWorker from "./composerImagePreparation.worker?worker&inline";
 
 const MEBIBYTE = 1024 * 1024;
 const JPEG_HEADER_READ_BYTES = 1024 * 1024;
@@ -335,9 +336,7 @@ function optimizeInWorker(
   mimeType: "image/jpeg" | "image/webp",
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./composerImagePreparation.worker.ts", import.meta.url), {
-      type: "module",
-    });
+    const worker = new ComposerImagePreparationWorker();
     const finish = () => worker.terminate();
     worker.addEventListener(
       "message",

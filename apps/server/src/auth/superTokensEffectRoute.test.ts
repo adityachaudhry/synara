@@ -34,11 +34,11 @@ async function withServer(run: (origin: string) => Promise<void>) {
   };
   const sessions = {
     cookieName: "synara_session",
-    issue: () =>
+    issue: (input) =>
       Effect.succeed({
         sessionId: AuthSessionId.makeUnsafe("11111111-1111-4111-8111-111111111111"),
         token: "synara-token",
-        method: "browser-session-cookie" as const,
+        method: input?.method ?? "browser-session-cookie",
         role: "owner" as const,
         client: { deviceType: "unknown" as const },
         expiresAt,
@@ -111,6 +111,7 @@ describe("superTokensEffectRouteLayer", () => {
         authenticated: true,
         role: "owner",
         subject: "person@glasswing.vc",
+        subject: "person@glasswing.vc",
       });
     });
   });
@@ -125,6 +126,24 @@ describe("superTokensEffectRouteLayer", () => {
         },
       });
       expect(response.status).toBe(403);
+    });
+  });
+
+  it("exchanges a verified SuperTokens session for a bearer session without setting a cookie", async () => {
+    await withServer(async (origin) => {
+      const response = await fetch(`${origin}/api/supertokens/exchange/bearer`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: "sAccessToken=valid" },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.getSetCookie()).toEqual([]);
+      expect(await response.json()).toMatchObject({
+        authenticated: true,
+        role: "owner",
+        sessionMethod: "bearer-session-token",
+        sessionToken: "synara-token",
+      });
     });
   });
 });

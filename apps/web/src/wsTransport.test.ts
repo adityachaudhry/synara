@@ -975,6 +975,30 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
+  it("resolves a fresh one-time WebSocket URL for every feature connection", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
+    vi.stubGlobal("fetch", fetchMock);
+    const resolveUrl = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("ws://localhost:3020/?wsToken=first")
+      .mockResolvedValueOnce("ws://localhost:3020/?wsToken=second");
+
+    const transport = new WsTransport(resolveUrl);
+    const internals = transport as unknown as {
+      createSession(): { clientPromise: Promise<unknown> };
+      probeFeatureConnection: (...args: unknown[]) => Promise<void>;
+    };
+    await waitForSockets(1);
+    internals.probeFeatureConnection = vi.fn(async () => undefined);
+    await internals.createSession().clientPromise;
+
+    expect(resolveUrl).toHaveBeenCalledTimes(2);
+    expect(new URL(sockets[0]!.url).searchParams.get("wsToken")).toBe("first");
+    expect(new URL(sockets[1]!.url).searchParams.get("wsToken")).toBe("second");
+
+    await transport.dispose();
+  });
+
   it("renegotiates and resets replayed push state when the server instance changed", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
     vi.stubGlobal("fetch", fetchMock);

@@ -21,7 +21,11 @@ export const superTokensEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    if (request.method === "POST" && url.pathname === "/api/supertokens/exchange") {
+    const isCookieExchange =
+      request.method === "POST" && url.pathname === "/api/supertokens/exchange";
+    const isBearerExchange =
+      request.method === "POST" && url.pathname === "/api/supertokens/exchange/bearer";
+    if (isCookieExchange || isBearerExchange) {
       if (
         shouldRejectAuthMutationOrigin({
           rawOrigin: request.headers.origin,
@@ -39,7 +43,7 @@ export const superTokensEffectRouteLayer = HttpRouter.add(
       const identity = yield* superTokens.verifyRequestSession(request);
       const sessions = yield* SessionCredentialService;
       const issued = yield* sessions.issue({
-        method: "browser-session-cookie",
+        method: isBearerExchange ? "bearer-session-token" : "browser-session-cookie",
         subject: identity.email,
         role: "owner",
         client: deriveAuthClientMetadata({
@@ -47,6 +51,16 @@ export const superTokensEffectRouteLayer = HttpRouter.add(
           remoteAddress: request.remoteAddress ?? null,
         }),
       });
+      if (isBearerExchange) {
+        return HttpServerResponse.jsonUnsafe({
+          authenticated: true,
+          role: "owner",
+          subject: identity.email,
+          sessionMethod: "bearer-session-token",
+          expiresAt: DateTime.toUtc(issued.expiresAt),
+          sessionToken: issued.token,
+        });
+      }
       const response = HttpServerResponse.jsonUnsafe({
         authenticated: true,
         role: "owner",

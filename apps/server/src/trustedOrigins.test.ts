@@ -66,6 +66,28 @@ describe("trustedOrigins", () => {
     ).toBe(true);
   });
 
+  it("trusts exact configured embedding origins", () => {
+    const embeddingConfig = {
+      ...config,
+      trustedAppOrigins: new Set(["https://app.glasswing.vc"]),
+    } as ServerConfigShape;
+
+    expect(
+      isTrustedAppOrigin({
+        origin: "https://app.glasswing.vc",
+        requestOrigin: "https://synara.example.test",
+        config: embeddingConfig,
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedAppOrigin({
+        origin: "https://subdomain.app.glasswing.vc",
+        requestOrigin: "https://synara.example.test",
+        config: embeddingConfig,
+      }),
+    ).toBe(false);
+  });
+
   it("trusts same-origin hosts only when local, configured, or wildcard-bound", () => {
     expect(
       isTrustedAppOrigin({

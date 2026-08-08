@@ -1,5 +1,5 @@
 import { WorkerPoolContextProvider, useWorkerPool } from "@pierre/diffs/react";
-import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
+import DiffsWorker from "@pierre/diffs/worker/worker.js?worker&inline";
 import { useEffect, type ReactNode } from "react";
 import { useTheme } from "../hooks/useTheme";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";

@@ -25,6 +25,7 @@ import {
   remoteAccessPolicyError,
   resolveCanonicalWorkspaceRoots,
   resolveSuperTokensRuntimeConfig,
+  resolveTrustedAppOrigins,
   resolveStaticDir,
   ServerConfig,
   type RuntimeMode,
@@ -153,6 +154,10 @@ const CliEnvConfig = Config.all({
   synaraHome: Config.string("SYNARA_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   publicUrl: Config.url("SYNARA_PUBLIC_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  trustedAppOrigins: Config.string("SYNARA_TRUSTED_APP_ORIGINS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   allowInsecureRemote: optionalBooleanEnvironmentConfig("SYNARA_ALLOW_INSECURE_REMOTE"),
   noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
   authToken: Config.string("SYNARA_AUTH_TOKEN").pipe(
@@ -222,6 +227,11 @@ const ServerConfigLive = (input: CliInput) =>
       const publicUrl = configuredPublicUrl
         ? (normalizeHttpsPublicOrigin(configuredPublicUrl) ?? undefined)
         : undefined;
+      const trustedAppOrigins = yield* Effect.try({
+        try: () => resolveTrustedAppOrigins(env.trustedAppOrigins),
+        catch: (cause) =>
+          new StartupError({ message: "Failed to configure trusted app origins", cause }),
+      });
       if (configuredPublicUrl && publicUrl === undefined) {
         return yield* new StartupError({
           message:
@@ -285,6 +295,7 @@ const ServerConfigLive = (input: CliInput) =>
         authToken,
         devUrl,
         publicUrl,
+        trustedAppOrigins,
         allowInsecureRemote,
       });
       if (remotePolicyError) {

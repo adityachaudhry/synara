@@ -7,6 +7,7 @@ import {
   goBackInAppHistory,
   goForwardInAppHistory,
   resolveAppNavigationState,
+  useAppHistory,
 } from "../appNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
@@ -202,6 +203,7 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 }
 
 function ChatRouteGlobalShortcuts() {
+  const history = useAppHistory();
   const navigate = useNavigate();
   const isStudioRoute = useLocation({
     select: (location) => location.pathname.startsWith("/studio"),
@@ -360,12 +362,12 @@ function ChatRouteGlobalShortcuts() {
       if (appNavigationShortcut) {
         event.preventDefault();
         event.stopPropagation();
-        const navigationState = resolveAppNavigationState();
+        const navigationState = resolveAppNavigationState(history);
         if (appNavigationShortcut === "back" && navigationState.canGoBack) {
-          goBackInAppHistory();
+          goBackInAppHistory(history);
         }
         if (appNavigationShortcut === "forward" && navigationState.canGoForward) {
-          goForwardInAppHistory();
+          goForwardInAppHistory(history);
         }
         return;
       }
@@ -492,6 +494,7 @@ function ChatRouteGlobalShortcuts() {
     currentProjectId,
     handleNewChatForActiveSurface,
     handleNewThread,
+    history,
     keybindings,
     latestUsableProjectId,
     openOrAdvanceRecentSwitcher,

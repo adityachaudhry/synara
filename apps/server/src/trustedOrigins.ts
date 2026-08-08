@@ -77,6 +77,7 @@ export function isTrustedAppOrigin(input: {
     (input.origin === input.requestOrigin &&
       isTrustedRequestOriginHost(input.requestOrigin, input.config)) ||
     input.origin === input.config.devUrl?.origin ||
+    input.config.trustedAppOrigins?.has(input.origin) === true ||
     DESKTOP_APP_CORS_ORIGINS.has(input.origin)
   );
 }

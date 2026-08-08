@@ -68,6 +68,7 @@ function makeWorkerServerConfig(
     staticDir: undefined,
     devUrl: undefined,
     publicUrl: undefined,
+    trustedAppOrigins: new Set(),
     allowInsecureRemote: false,
     noBrowser: true,
     authToken: undefined,

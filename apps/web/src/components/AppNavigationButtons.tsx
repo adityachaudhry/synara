@@ -3,7 +3,12 @@
 // Layer: Shared web shell chrome
 // Depends on: appNavigation history helpers, header Button/Tooltip primitives
 
-import { goBackInAppHistory, goForwardInAppHistory, useAppNavigationState } from "~/appNavigation";
+import {
+  goBackInAppHistory,
+  goForwardInAppHistory,
+  useAppHistory,
+  useAppNavigationState,
+} from "~/appNavigation";
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io";
@@ -11,6 +16,7 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export function AppNavigationButtons({ className }: { className?: string }) {
+  const history = useAppHistory();
   const { canGoBack, canGoForward } = useAppNavigationState();
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
@@ -38,7 +44,7 @@ export function AppNavigationButtons({ className }: { className?: string }) {
               className="size-8 rounded-lg"
               aria-label="Back"
               disabled={!canGoBack}
-              onClick={() => goBackInAppHistory()}
+              onClick={() => goBackInAppHistory(history)}
             />
           }
         >
@@ -56,7 +62,7 @@ export function AppNavigationButtons({ className }: { className?: string }) {
               className="size-8 rounded-lg"
               aria-label="Forward"
               disabled={!canGoForward}
-              onClick={() => goForwardInAppHistory()}
+              onClick={() => goForwardInAppHistory(history)}
             />
           }
         >

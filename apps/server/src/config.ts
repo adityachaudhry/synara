@@ -36,6 +36,31 @@ export type SuperTokensRuntimeConfig =
       readonly websiteDomain: string;
     };
 
+export function resolveTrustedAppOrigins(rawValue?: string): ReadonlySet<string> {
+  if (!rawValue?.trim()) return new Set();
+  const origins = new Set<string>();
+  for (const entry of rawValue.split(",")) {
+    const value = entry.trim();
+    if (!value) continue;
+    const url = new URL(value);
+    if (
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.hostname.includes("*") ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw new Error(
+        `Invalid trusted app origin ${JSON.stringify(value)}; expected an HTTP(S) root origin.`,
+      );
+    }
+    origins.add(url.origin);
+  }
+  return origins;
+}
+
 export function describeSuperTokensRuntimeConfig(config: SuperTokensRuntimeConfig) {
   if (!config.enabled) return config;
   const { apiKey: _apiKey, ...safeConfig } = config;
@@ -148,6 +173,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
   readonly publicUrl: URL | undefined;
+  readonly trustedAppOrigins?: ReadonlySet<string>;
   readonly allowInsecureRemote: boolean;
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
@@ -313,6 +339,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           staticDir: undefined,
           devUrl,
           publicUrl: undefined,
+          trustedAppOrigins: new Set(),
           allowInsecureRemote: false,
           noBrowser: false,
           superTokens: { enabled: false },

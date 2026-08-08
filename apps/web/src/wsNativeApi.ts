@@ -53,6 +53,7 @@ import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import { readSynaraRuntimeConfig } from "./synaraRuntimeConfig";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
 
@@ -206,7 +207,7 @@ async function requestAuthJson<T>(
   } = {},
 ): Promise<T> {
   const hasBody = options.body !== undefined;
-  const response = await fetch(path, {
+  const response = await fetch(resolveWsHttpUrl(path), {
     method: options.method ?? "GET",
     credentials: "same-origin",
     ...(hasBody
@@ -422,7 +423,7 @@ export function createWsNativeApi(): NativeApi {
     instance = null;
   }
 
-  const transport = new WsTransport();
+  const transport = new WsTransport(readSynaraRuntimeConfig().resolveWebSocketUrl);
   let unsubscribeDomainEventTransport: (() => void) | null = null;
   transport.onStateChange((state) => emitWsTransportState(state));
   transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
