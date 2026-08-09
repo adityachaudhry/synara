@@ -297,3 +297,13 @@ uses `position: absolute` and `h-full`; the default remains fixed viewport posit
 chat route opts its thread sidebar into container mode, and the embedded right dock derives the same
 choice from `hostProject`. Focused static-render tests cover both modes before rebuilding the package
 and repeating the live boundary measurements.
+
+**Second measurement:** The left footer then ended at 941px inside the 949px host, but the right
+dock still measured to 1013px. Ancestor geometry showed why: `SingleChatSurface` and its
+`RouteInsetSurface` still used `h-dvh`, so the dock's new `h-full` correctly inherited the wrong
+949px content height.
+
+**Correction:** Extend the existing embedded shell resolver to override the single-chat, editor,
+split-chat, and route-inset content heights to `h-full`. Standalone leaves those overrides undefined
+and retains the original `h-dvh` classes. This completes the height chain from Glasswing host to
+Synara route, content card, left rail, right dock, transcript, and composers.

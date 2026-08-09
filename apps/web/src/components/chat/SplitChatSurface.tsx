@@ -33,6 +33,7 @@ import {
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
+import { resolveChatRouteShellClassNames } from "../../lib/chatRouteLayout";
 import { resolveActiveSplitView } from "../../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
 import {
@@ -51,6 +52,7 @@ import {
   useSplitViewStore,
 } from "../../splitViewStore";
 import { useStore } from "../../store";
+import { readSynaraRuntimeConfig } from "../../synaraRuntimeConfig";
 import { createAllThreadsSelector } from "../../storeSelectors";
 import {
   normalizeSingleSearchFromPane,
@@ -582,6 +584,9 @@ function SplitPaneSurface(props: {
 
 export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: ThreadId }) {
   const navigate = useNavigate();
+  const shellClassNames = resolveChatRouteShellClassNames(
+    readSynaraRuntimeConfig().hostProject != null,
+  );
   const { handleNewChat } = useHandleNewChat();
   const selectAllThreads = createAllThreadsSelector();
   const threads = useStore(selectAllThreads);
@@ -977,7 +982,11 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   return (
     <>
       <div
-        className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
+        className={cn(
+          CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+          CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
+          shellClassNames.contentViewportHeight,
+        )}
       >
         <PaneRenderer
           pane={activeSplitView.root}

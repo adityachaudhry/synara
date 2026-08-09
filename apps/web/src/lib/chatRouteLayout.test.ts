@@ -11,6 +11,9 @@ describe("resolveChatRouteShellClassNames", () => {
     expect(classes.sidebarProvider).not.toContain("min-h-svh");
     expect(classes.mainContent).toContain("h-full");
     expect(classes.mainContent).not.toContain("h-svh");
+    expect(classes.contentViewportHeight).toBe("h-full");
+    expect(classes.routeInset).toContain("h-full");
+    expect(classes.routeInset).not.toContain("h-dvh");
   });
 
   it("keeps viewport sizing in standalone mode", () => {
@@ -18,5 +21,7 @@ describe("resolveChatRouteShellClassNames", () => {
 
     expect(classes.sidebarProvider).toContain("min-h-svh");
     expect(classes.mainContent).toContain("h-svh");
+    expect(classes.contentViewportHeight).toBeUndefined();
+    expect(classes.routeInset).toBeUndefined();
   });
 });

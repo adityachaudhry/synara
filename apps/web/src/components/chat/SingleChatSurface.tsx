@@ -40,6 +40,7 @@ import type { DockPaneRuntimeMode } from "../../lib/dockPaneActivation";
 import type { FileCommentSelection } from "../../lib/fileComments";
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
+import { resolveChatRouteShellClassNames } from "../../lib/chatRouteLayout";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
 import { getSidechatCreator } from "../../lib/sidechatCreatorRegistry";
 import {
@@ -62,6 +63,7 @@ import {
   useSplitViewStore,
 } from "../../splitViewStore";
 import { useStore } from "../../store";
+import { readSynaraRuntimeConfig } from "../../synaraRuntimeConfig";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
@@ -173,6 +175,9 @@ export function SingleChatSurface(props: {
   projectId: ProjectId | null;
 }) {
   const navigate = useNavigate();
+  const shellClassNames = resolveChatRouteShellClassNames(
+    readSynaraRuntimeConfig().hostProject != null,
+  );
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const dockState = useRightDockStore(
@@ -866,7 +871,11 @@ export function SingleChatSurface(props: {
     return (
       <WorkspaceFileOpenerContext.Provider value={editorFileOpener}>
         <div
-          className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
+          className={cn(
+            CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+            CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
+            shellClassNames.contentViewportHeight,
+          )}
         >
           <Suspense fallback={<ChatMountLoader />}>
             <EditorWorkspaceView
@@ -935,7 +944,11 @@ export function SingleChatSurface(props: {
   return (
     <WorkspaceFileOpenerContext.Provider value={dockFileOpener}>
       <div
-        className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
+        className={cn(
+          CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+          CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
+          shellClassNames.contentViewportHeight,
+        )}
       >
         <ChatPaneDropOverlay
           canDropInDirection={allowAnySplitDirection}
@@ -943,7 +956,10 @@ export function SingleChatSurface(props: {
           onDrop={handleDropThread}
           className="flex h-full min-h-0 min-w-0 flex-1"
         >
-          <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
+          <RouteInsetSurface
+            className={shellClassNames.routeInset}
+            surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+          >
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
