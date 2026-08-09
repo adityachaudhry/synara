@@ -45,6 +45,7 @@ export interface SynaraRuntimeConfig {
   readonly resolveWebSocketUrl?: SynaraWebSocketUrlResolver;
   readonly hostProject?: SynaraHostProject;
   readonly hostNavigation?: SynaraHostNavigation;
+  readonly displayScale?: number;
 }
 
 export interface SynaraAppProps extends SynaraRuntimeConfig {

@@ -8,6 +8,7 @@ import { RouterProvider, type RouterHistory } from "@tanstack/react-router";
 import { useMemo } from "react";
 
 import { AppHistoryProvider, appHistory } from "./appNavigation";
+import { createEmbeddedDisplayScaleStyle } from "./lib/embeddedDisplayScale";
 import { getRouter } from "./router";
 import {
   configureSynaraRuntime,
@@ -28,18 +29,32 @@ export function SynaraApp({
   resolveWebSocketUrl,
   hostProject,
   hostNavigation,
+  displayScale,
 }: SynaraAppProps) {
   configureSynaraRuntime({
     ...(httpBaseUrl ? { httpBaseUrl } : {}),
     ...(resolveWebSocketUrl ? { resolveWebSocketUrl } : {}),
     ...(hostProject ? { hostProject } : {}),
     ...(hostNavigation ? { hostNavigation } : {}),
+    ...(displayScale === undefined ? {} : { displayScale }),
   });
   const router = useMemo(() => getRouter(history), [history]);
-
-  return (
+  const app = (
     <AppHistoryProvider history={history}>
       <RouterProvider router={router} />
     </AppHistoryProvider>
+  );
+  const displayScaleStyle = createEmbeddedDisplayScaleStyle(displayScale);
+
+  if (!displayScaleStyle) return app;
+
+  return (
+    <div
+      className="relative min-h-0 min-w-0"
+      data-synara-display-scale={displayScaleStyle.zoom}
+      style={displayScaleStyle}
+    >
+      {app}
+    </div>
   );
 }

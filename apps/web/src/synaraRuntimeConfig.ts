@@ -3,6 +3,8 @@
 // Layer: Web runtime adapter
 // Exports: configuration and HTTP URL resolution used by the shared React app
 
+import { normalizeEmbeddedDisplayScale } from "./lib/embeddedDisplayScale";
+
 export type SynaraWebSocketUrlResolver = () => string | Promise<string>;
 
 export interface SynaraHostProjectSelection {
@@ -35,6 +37,8 @@ export interface SynaraRuntimeConfig {
   readonly hostProject?: SynaraHostProject;
   /** Optional host-owned destinations rendered by the embedded Synara shell. */
   readonly hostNavigation?: SynaraHostNavigation;
+  /** Optional host-selected visual scale for the complete embedded app surface. */
+  readonly displayScale?: number;
 }
 
 let runtimeConfig: SynaraRuntimeConfig = {};
@@ -47,6 +51,9 @@ export function configureSynaraRuntime(config: SynaraRuntimeConfig): void {
       : {}),
     ...(config.hostProject ? { hostProject: config.hostProject } : {}),
     ...(config.hostNavigation ? { hostNavigation: config.hostNavigation } : {}),
+    ...(config.displayScale === undefined
+      ? {}
+      : { displayScale: normalizeEmbeddedDisplayScale(config.displayScale) }),
   };
 }
 

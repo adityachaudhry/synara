@@ -57,4 +57,14 @@ describe("Synara runtime configuration", () => {
       },
     });
   });
+
+  it("normalizes an optional embedded display scale without changing standalone defaults", () => {
+    expect(readSynaraRuntimeConfig().displayScale).toBeUndefined();
+
+    configureSynaraRuntime({ displayScale: 1.296 });
+    expect(readSynaraRuntimeConfig().displayScale).toBe(1.3);
+
+    configureSynaraRuntime({ displayScale: Number.POSITIVE_INFINITY });
+    expect(readSynaraRuntimeConfig().displayScale).toBe(1);
+  });
 });
