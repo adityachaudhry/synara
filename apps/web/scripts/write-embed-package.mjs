@@ -19,9 +19,21 @@ export interface SynaraHistory {
 
 export type SynaraWebSocketUrlResolver = () => string | Promise<string>;
 
+export interface SynaraHostProjectSelection {
+  readonly name: string;
+  readonly cwd: string;
+}
+
+export interface SynaraHostProject {
+  readonly name: string;
+  readonly slug: string;
+  readonly onSelectProject?: (project: SynaraHostProjectSelection) => void;
+}
+
 export interface SynaraRuntimeConfig {
   readonly httpBaseUrl?: string;
   readonly resolveWebSocketUrl?: SynaraWebSocketUrlResolver;
+  readonly hostProject?: SynaraHostProject;
 }
 
 export interface SynaraAppProps extends SynaraRuntimeConfig {

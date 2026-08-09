@@ -141,6 +141,11 @@ the local draft in `useComposerDraftStore`, then mounts the real chat route. Tha
 intended RED (the Environment button was still present) and the subsequent semantic-gating change
 turned the same real-browser case GREEN.
 
+The first package write then exposed a second adapter-boundary failure: the Vite runtime build
+accepted `hostProject`, but the package writer generated declarations from a manual string that did
+not include it. The writer now emits the host-project types and its deterministic package test
+asserts that the public declaration contains the new contract, preventing runtime/type drift.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

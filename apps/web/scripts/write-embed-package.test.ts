@@ -49,6 +49,10 @@ describe("writeEmbedPackage", () => {
     const provenance = JSON.parse(
       await fs.readFile(path.join(fixture.outputDir, "synara-provenance.json"), "utf8"),
     );
+    const declarations = await fs.readFile(
+      path.join(fixture.outputDir, "index.d.ts"),
+      "utf8",
+    );
 
     expect(manifest).toMatchObject({
       name: "@glasswing/synara-react",
@@ -65,6 +69,8 @@ describe("writeEmbedPackage", () => {
       synaraCommit: "synara-sha",
       upstreamCommit: "upstream-sha",
     });
+    expect(declarations).toContain("export interface SynaraHostProjectSelection");
+    expect(declarations).toContain("readonly hostProject?: SynaraHostProject;");
     await expect(fs.stat(path.join(fixture.outputDir, "route-chunk.js"))).resolves.toBeDefined();
   });
 
