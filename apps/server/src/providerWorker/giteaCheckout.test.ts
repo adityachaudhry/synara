@@ -42,12 +42,14 @@ describe("makeGiteaCheckoutPlan", () => {
 
     expect(plan.cwd).toBe("/workspace/repository/companies/cue-cloud");
     expect(plan.command).toContain("https://glasswing-gitea-dev.up.railway.app/glasswing-admin/glasswing-company-data.git");
-    expect(plan.command).toContain("sparse-checkout init --cone");
-    expect(plan.command).toContain("sparse-checkout set 'companies/cue-cloud'");
+    expect(plan.command).not.toContain(" sparse-checkout init");
+    expect(plan.command).not.toContain(" sparse-checkout set");
+    expect(plan.command).toContain(".git/info/sparse-checkout");
+    expect(plan.command).toContain("-c core.sparseCheckout=true");
+    expect(plan.command).toContain("-c core.sparseCheckoutCone=true");
     expect(plan.command).toContain("$SYNARA_GITEA_CHECKOUT_TOKEN");
     expect(plan.command).not.toContain("super-secret-token");
     expect(plan.command).not.toContain("remote add");
-    expect(plan.command).not.toContain("core.sparseCheckout=true");
     expect(plan.command).toContain("checkout --detach FETCH_HEAD");
     expect(plan.command).toContain("fetch --depth=1 --no-tags --filter=blob:none");
     expect(plan.command).toContain("fetch --depth=1 --no-tags");

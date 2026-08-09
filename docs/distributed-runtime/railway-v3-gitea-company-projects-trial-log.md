@@ -968,19 +968,29 @@ commit or damaged materialization fetches and checks out files. The routed adapt
 immutable commit before provider dispatch and derives a missing restart binding from the persisted
 `repositoryCheckout.binding`. Non-Gitea threads return from the same seam without a repository call.
 
-### Explicit cone checkout makes recursive company scope testable
+### Cone patterns make recursive company scope testable, but the sandbox wrapper rejects the porcelain command
 
 **Attempt:** The original checkout wrote `/companies/<slug>/` directly to Git's sparse-checkout
 file. A real fixture showed nested files happened to materialize, but that relied on hand-authored
 pattern semantics and did not reassert scope during an update.
 
-**Correction:** Both initial checkout and changed-commit refresh now use `git sparse-checkout
+**First correction:** Both initial checkout and changed-commit refresh used `git sparse-checkout
 init --cone` plus `git sparse-checkout set companies/<slug>`. A real local bare-repository test
 proved a nested diligence file appeared initially, a later deeply nested financial file appeared
 after refresh, another company's directory remained absent, and a second refresh reported
-`unchanged` without a fetch-mode marker. The first red run failed on the old sparse pattern and the
-missing refresh function; the final focused run passed all 27 checkout, provisioner, routed-adapter,
-and embedded-layout tests.
+`unchanged` without a fetch-mode marker.
+
+**Live failure:** The first deployed Chrome turn streamed `Working…` while provisioning and then
+failed before provider dispatch. Railway's sandbox `safe-git` wrapper allows the required plumbing
+commands but rejected the `sparse-checkout` subcommand as outside its allowlist. Local Git alone
+could not reveal that platform boundary.
+
+**Final correction:** Generate the exact cone-mode pattern file under `.git/info/sparse-checkout`
+and enable `core.sparseCheckout` plus `core.sparseCheckoutCone` on the already-allowlisted checkout
+command with per-invocation `-c` flags. This preserves recursive materialization and company
+isolation without changing sandbox policy or adding a new primitive. The command-plan regression
+now rejects both `git sparse-checkout init` and `git sparse-checkout set`, while the real repository
+fixture still proves nested initial hydration, nested updates, isolation, and the unchanged path.
 
 ### Build wrappers were more restrictive than the underlying build tools
 

@@ -57,20 +57,40 @@ function resolveCheckout(input: {
   } as const;
 }
 
+function makeConeSparseCheckoutPattern(bindingPath: string): string {
+  const segments = bindingPath.split("/");
+  const patterns = ["/*", "!/*/"];
+  for (let index = 0; index < segments.length; index += 1) {
+    const prefix = `/${segments.slice(0, index + 1).join("/")}`;
+    patterns.push(`${prefix}/`);
+    if (index < segments.length - 1) patterns.push(`!${prefix}/*/`);
+  }
+  return `${patterns.join("\n")}\n`;
+}
+
+function makeSparseCheckoutPreparation(checkoutRoot: string, bindingPath: string) {
+  const infoRoot = path.posix.join(checkoutRoot, ".git", "info");
+  const patternPath = path.posix.join(infoRoot, "sparse-checkout");
+  return [
+    `mkdir -p ${shellQuote(infoRoot)}`,
+    `printf '%s' ${shellQuote(makeConeSparseCheckoutPattern(bindingPath))} > ${shellQuote(patternPath)}`,
+  ] as const;
+}
+
 export function makeGiteaCheckoutPlan(input: {
   readonly binding: ProjectRepositoryBinding;
   readonly repository: GiteaCheckoutRepositoryConfig;
   readonly checkoutRoot?: string;
 }): GiteaCheckoutPlan {
   const { checkoutRoot, companyCwd, repositoryUrl, git } = resolveCheckout(input);
+  const sparseGit = `${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true`;
   const command = [
     "set -eu",
     `mkdir -p ${shellQuote(checkoutRoot)}`,
     `${git} init`,
-    `${git} sparse-checkout init --cone`,
-    `${git} sparse-checkout set ${shellQuote(input.binding.path)}`,
+    ...makeSparseCheckoutPreparation(checkoutRoot, input.binding.path),
     `if GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader=\"Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}\" fetch --depth=1 --no-tags ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
-    `GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader="Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}" checkout --detach FETCH_HEAD`,
+    `GIT_TERMINAL_PROMPT=0 ${sparseGit} -c http.extraHeader="Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}" checkout --detach FETCH_HEAD`,
     `test -f ${shellQuote(path.posix.join(companyCwd, "company.json"))}`,
     `printf '${COMMIT_MARKER}%s\\n' \"$(${git} rev-parse HEAD)\"`,
   ].join(" && ");
@@ -88,6 +108,7 @@ export function makeGiteaCheckoutRefreshPlan(input: {
   readonly checkoutRoot?: string;
 }): GiteaCheckoutPlan {
   const { checkoutRoot, companyCwd, repositoryUrl, git } = resolveCheckout(input);
+  const sparseGit = `${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true`;
   const companySentinel = path.posix.join(companyCwd, "company.json");
   const authenticatedGit = `GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader="Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}"`;
   const command = [
@@ -97,10 +118,9 @@ export function makeGiteaCheckoutRefreshPlan(input: {
     `printf '%s' "$remote_commit" | grep -Eq '^[0-9a-f]{40}$'`,
     `local_commit="$(${git} rev-parse HEAD)"`,
     `if [ "$remote_commit" = "$local_commit" ] && [ -f ${shellQuote(companySentinel)} ]; then printf '${REFRESH_OUTCOME_MARKER}unchanged\\n${COMMIT_MARKER}%s\\n' "$local_commit"; exit 0; fi`,
-    `${git} sparse-checkout init --cone`,
-    `${git} sparse-checkout set ${shellQuote(input.binding.path)}`,
+    ...makeSparseCheckoutPreparation(checkoutRoot, input.binding.path),
     `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
-    `${authenticatedGit} checkout --detach FETCH_HEAD`,
+    `GIT_TERMINAL_PROMPT=0 ${sparseGit} -c http.extraHeader="Authorization: token $${GITEA_CHECKOUT_TOKEN_ENV_KEY}" checkout --detach FETCH_HEAD`,
     `test -f ${shellQuote(companySentinel)}`,
     `printf '${REFRESH_OUTCOME_MARKER}updated\\n${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
   ].join(" && ");
