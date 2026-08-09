@@ -22,7 +22,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
+import { ProviderIcon } from "../ProviderIcon";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
@@ -93,7 +93,6 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
   };
 
   const activeProvider = props.lockedProvider ?? props.provider;
-  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
   const modelLabel = resolveProviderModelLabel({
     provider: props.provider,
     lockedProvider: props.lockedProvider,
@@ -148,6 +147,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
   const triggerContent = (
     <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
       <ProviderIcon
+        provider={activeProvider}
         aria-hidden="true"
         className={cn(
           // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
@@ -237,6 +237,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         <MenuSub>
           <MenuSubTrigger>
             <ProviderIcon
+              provider={activeProvider}
               aria-hidden="true"
               className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
             />

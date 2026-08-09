@@ -7,6 +7,7 @@
 import { type ProviderKind } from "@synara/contracts";
 import type { ReactNode, SVGProps } from "react";
 
+import { getGlasswingModeForCurrentPage } from "../glasswingMode";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
@@ -92,12 +93,14 @@ export type ProviderIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
   readonly provider: ProviderKind | null | undefined;
   readonly fallback?: ReactNode;
   readonly tone?: ProviderIconTone;
+  readonly glasswingMode?: boolean;
 };
 
 export function ProviderIcon({
   provider,
   fallback: fallbackProp,
   tone: toneProp,
+  glasswingMode: glasswingModeProp,
   className,
   "aria-hidden": ariaHiddenProp,
   ...svgProps
@@ -109,7 +112,9 @@ export function ProviderIcon({
     return fallback;
   }
 
-  const Icon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[provider];
+  const glasswingMode = glasswingModeProp ?? getGlasswingModeForCurrentPage();
+  const presentationProvider = glasswingMode && provider === "pi" ? "claudeAgent" : provider;
+  const Icon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[presentationProvider];
   return (
     <Icon
       aria-hidden={ariaHidden}

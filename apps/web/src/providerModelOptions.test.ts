@@ -13,6 +13,7 @@ import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
   mergeDynamicModelOptions,
+  projectProviderModelOptionsForGlasswing,
   providerModelCostMultiplierLabel,
   providerModelOptionProvenanceLabel,
   resolveModelGroupDefaultOpen,
@@ -103,6 +104,43 @@ describe("mergeDynamicModelOptions", () => {
         ],
       }).map((option) => option.slug),
     ).toEqual(["anthropic/claude-fable-5", "anthropic/claude-opus-4-8"]);
+  });
+
+  it("projects the Glasswing Pi catalog to the four supported Claude models in product order", () => {
+    const options = projectProviderModelOptionsForGlasswing({
+      enabled: true,
+      provider: "pi",
+      options: [
+        { slug: "openai/gpt-5.6-sol", name: "GPT-5.6 Sol" },
+        { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+        { slug: "anthropic/claude-opus-5", name: "Claude Opus 5" },
+        { slug: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" },
+        { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
+        { slug: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+      ],
+    });
+
+    expect(options.map((option) => option.slug)).toEqual([
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-opus-4-8",
+      "anthropic/claude-opus-5",
+      "anthropic/claude-fable-5",
+    ]);
+  });
+
+  it("leaves the native Pi catalog unchanged outside Glasswing mode", () => {
+    const options = [
+      { slug: "openai/gpt-5.6-sol", name: "GPT-5.6 Sol" },
+      { slug: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" },
+    ];
+
+    expect(
+      projectProviderModelOptionsForGlasswing({
+        enabled: false,
+        provider: "pi",
+        options,
+      }),
+    ).toBe(options);
   });
 
   it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {

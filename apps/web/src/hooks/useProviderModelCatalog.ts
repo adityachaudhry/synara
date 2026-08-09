@@ -15,12 +15,17 @@ import { useMemo } from "react";
 import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
+import { getGlasswingModeForCurrentPage } from "../glasswingMode";
 import {
   isInitialModelDiscoveryPending,
   providerAgentsQueryOptions,
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
-import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerModelOptions";
+import {
+  mergeDynamicModelOptions,
+  projectProviderModelOptionsForGlasswing,
+  type ProviderModelOption,
+} from "../providerModelOptions";
 
 export interface ProviderModelCatalog {
   customModelsByProvider: ReturnType<typeof getCustomModelsByProvider>;
@@ -73,6 +78,7 @@ export function useProviderModelCatalog(input: {
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
+  const glasswingMode = getGlasswingModeForCurrentPage();
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
@@ -334,6 +340,11 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
+    result.pi = projectProviderModelOptionsForGlasswing({
+      enabled: glasswingMode,
+      provider: "pi",
+      options: result.pi,
+    });
     return result;
   }, [
     antigravityModelsQuery.data,
@@ -344,6 +355,7 @@ export function useProviderModelCatalog(input: {
     customModelsByProvider,
     droidDynamicModelsQuery.data,
     grokDynamicModelsQuery.data,
+    glasswingMode,
     kiloDynamicModelsQuery.data,
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,

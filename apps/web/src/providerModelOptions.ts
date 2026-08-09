@@ -44,6 +44,36 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
+const GLASSWING_PI_MODEL_SLUGS = [
+  "anthropic/claude-sonnet-5",
+  "anthropic/claude-opus-4-8",
+  "anthropic/claude-opus-5",
+  "anthropic/claude-fable-5",
+] as const;
+
+/**
+ * Keeps Glasswing's curated Claude product surface independent from Pi's much
+ * larger runtime catalog. The selected values remain Pi model slugs, so this
+ * changes presentation only and does not introduce a second provider path.
+ */
+export function projectProviderModelOptionsForGlasswing<
+  T extends ProviderModelOption & { isCustom?: boolean },
+>(input: {
+  enabled: boolean;
+  provider: ProviderKind;
+  options: ReadonlyArray<T>;
+}): ReadonlyArray<T> {
+  if (!input.enabled || input.provider !== "pi") {
+    return input.options;
+  }
+
+  const optionBySlug = new Map(input.options.map((option) => [option.slug, option]));
+  return GLASSWING_PI_MODEL_SLUGS.flatMap((slug) => {
+    const option = optionBySlug.get(slug);
+    return option ? [option] : [];
+  });
+}
+
 /**
  * Returns the provider provenance shown when a model is detached from its
  * normal upstream-provider group (for example, inside Favourites).

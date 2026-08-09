@@ -331,7 +331,7 @@ describe("getPiDiscoverableModels", () => {
     }
   });
 
-  it("restores Fable 5 and Opus 4.8 after an extension replaces the Anthropic catalog", async () => {
+  it("restores the Glasswing Claude catalog after an extension replaces Anthropic models", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-anthropic-"));
     const modelsPath = path.join(agentDir, "models.json");
     const authPath = path.join(agentDir, "auth.json");
@@ -382,11 +382,14 @@ describe("getPiDiscoverableModels", () => {
       const models = getPiDiscoverableModels(registry);
 
       expect(
-        models.some((model) => model.provider === "anthropic" && model.id === "claude-fable-5"),
-      ).toBe(true);
-      expect(
-        models.some((model) => model.provider === "anthropic" && model.id === "claude-opus-4-8"),
-      ).toBe(true);
+        models.filter((model) => model.provider === "anthropic").map((model) => model.id),
+      ).toEqual([
+        "claude-opus-4-7",
+        "claude-sonnet-5",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-fable-5",
+      ]);
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
@@ -413,7 +416,7 @@ describe("ensurePiAnthropicCatalogModels", () => {
     expect(models.every((model) => model.provider !== "anthropic")).toBe(true);
   });
 
-  it("restores Fable 5 and Opus 4.8 when an oauth catalog omitted them", () => {
+  it("restores the Glasswing Claude catalog when an oauth catalog omitted it", () => {
     const peer = {
       id: "claude-opus-4-7",
       name: "Claude Opus 4.7",
@@ -430,8 +433,10 @@ describe("ensurePiAnthropicCatalogModels", () => {
 
     expect(models.map((model) => model.id)).toEqual([
       "claude-opus-4-7",
-      "claude-fable-5",
+      "claude-sonnet-5",
       "claude-opus-4-8",
+      "claude-opus-5",
+      "claude-fable-5",
     ]);
     expect(models.find((model) => model.id === "claude-fable-5")).toMatchObject({
       provider: "anthropic",
@@ -442,6 +447,14 @@ describe("ensurePiAnthropicCatalogModels", () => {
       provider: "anthropic",
       name: "Claude Opus 4.8",
       reasoning: true,
+    });
+    expect(models.find((model) => model.id === "claude-opus-5")).toMatchObject({
+      provider: "anthropic",
+      name: "Claude Opus 5",
+      reasoning: true,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
     });
   });
 });

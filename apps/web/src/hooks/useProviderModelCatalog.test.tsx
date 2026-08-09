@@ -272,4 +272,36 @@ describe("useProviderModelCatalog", () => {
       { slug: "composer-2", name: "Composer 2" },
     ]);
   });
+
+  it("exposes only the curated Claude models through Pi in Glasswing mode", () => {
+    modelQueries.set("pi", {
+      data: {
+        models: [
+          { slug: "openai/gpt-5.6-sol", name: "GPT-5.6 Sol" },
+          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+          { slug: "anthropic/claude-opus-5", name: "Claude Opus 5" },
+          { slug: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" },
+          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
+          { slug: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+        ],
+        source: "pi.sdk",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "pi",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.pi.map((model) => model.slug)).toEqual([
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-opus-4-8",
+      "anthropic/claude-opus-5",
+      "anthropic/claude-fable-5",
+    ]);
+  });
 });

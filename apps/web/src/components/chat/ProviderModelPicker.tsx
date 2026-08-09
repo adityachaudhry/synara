@@ -19,7 +19,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
+import { ProviderIcon } from "../ProviderIcon";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -376,13 +376,13 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   return (
     <>
       {visibleAvailableProviderOptions.map((option) => {
-        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
         const liveProvider = props.providers?.find((entry) => entry.provider === option.value);
         const availability = resolveLiveProviderAvailability(liveProvider);
         if (availability.disabled) {
           return (
             <MenuItem key={option.value} disabled>
-              <OptionIcon
+              <ProviderIcon
+                provider={option.value}
                 aria-hidden="true"
                 className={cn(
                   "size-3 shrink-0 opacity-80",
@@ -399,7 +399,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         return (
           <MenuSub key={option.value}>
             <MenuSubTrigger>
-              <OptionIcon
+              <ProviderIcon
+                provider={option.value}
                 aria-hidden="true"
                 className={cn(
                   "size-3 shrink-0",
@@ -419,10 +420,10 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       })}
       {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
       {visibleUnavailableProviderOptions.map((option) => {
-        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
         return (
           <MenuItem key={option.value} disabled>
-            <OptionIcon
+            <ProviderIcon
+              provider={option.value}
               aria-hidden="true"
               className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
             />
@@ -490,7 +491,6 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
-  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
@@ -530,6 +530,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
       className="text-[var(--color-text-foreground)]"
       icon={
         <ProviderIcon
+          provider={activeProvider}
           aria-hidden="true"
           className={cn(
             // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.

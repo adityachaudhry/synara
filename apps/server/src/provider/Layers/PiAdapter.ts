@@ -111,12 +111,18 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
-const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
+  "claude-sonnet-5",
+  "claude-opus-4-8",
+  "claude-opus-5",
+  "claude-fable-5",
+] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
 /**
  * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
- * and omitted Fable / Opus 4.8. Values mirror `@earendil-works/pi-ai` Anthropic models.
+ * and omitted Glasswing's curated Claude models. Existing values mirror
+ * `@earendil-works/pi-ai`; Opus 5 uses Anthropic's published API metadata.
  */
 const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   PiAnthropicEnsuredModelId,
@@ -132,14 +138,14 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     readonly maxTokens: number;
   }
 > = {
-  "claude-fable-5": {
-    id: "claude-fable-5",
-    name: "Claude Fable 5",
+  "claude-sonnet-5": {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
     reasoning: true,
-    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     compat: { forceAdaptiveThinking: true },
     input: ["text", "image"],
-    cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
     contextWindow: 1_000_000,
     maxTokens: 128_000,
   },
@@ -151,6 +157,28 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     compat: { forceAdaptiveThinking: true, supportsTemperature: false },
     input: ["text", "image"],
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  "claude-opus-5": {
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true, supportsTemperature: false },
+    input: ["text", "image"],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  "claude-fable-5": {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
     contextWindow: 1_000_000,
     maxTokens: 128_000,
   },
@@ -539,8 +567,8 @@ export function getPiSupportedThinkingOptions(
 }
 
 /**
- * When Anthropic is already authenticated, ensure Fable 5 and Opus 4.8 appear even
- * if an older pi-anthropic-oauth extension replaced the built-in Anthropic catalog.
+ * When Anthropic is already authenticated, ensure Glasswing's curated Claude
+ * catalog appears even if an older extension replaced Pi's built-in models.
  */
 export function ensurePiAnthropicCatalogModels(
   available: ReadonlyArray<Model<Api>>,

@@ -190,6 +190,25 @@ inside the helper, keeps native draft activation mandatory and outer host naviga
 regression test covers both the null-host standalone path and the embedded activation-before-host
 ordering.
 
+## Trial 10: Product identity and runtime identity should not be conflated
+
+Glasswing uses Pi as its provider harness, but presenting the Pi glyph and Pi's complete discovered
+catalog exposed an implementation detail and made the product surface inconsistent with the
+Claude-native experience users expect. Renaming the provider itself would have been the wrong seam:
+persisted selections, WebSocket contracts, session routing, and the distributed worker all rely on
+`pi` as the real provider identity.
+
+**Correction:** keep `pi` unchanged through selection, persistence, orchestration, and execution.
+In Glasswing mode only, the shared icon renderer maps Pi to the Claude glyph, and the catalog
+projection orders and filters Pi's discovered models to Sonnet 5, Opus 4.8, Opus 5, and Fable 5.
+Native Synara mode still renders Pi and its full catalog.
+
+The installed Pi model bundle already contained Sonnet 5, Opus 4.8, and Fable 5 but predated Opus
+5. Simply filtering the client catalog would therefore have hidden Opus 5 permanently. The existing
+authenticated-Anthropic catalog repair seam was extended with Anthropic's published `claude-opus-5`
+metadata. It only synthesizes the entry after Anthropic authentication is present; it does not
+invent an unavailable provider or create a parallel execution primitive.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

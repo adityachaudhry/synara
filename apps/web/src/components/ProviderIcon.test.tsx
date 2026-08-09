@@ -27,4 +27,17 @@ describe("ProviderIcon", () => {
     expect(markup).toContain("dark:text-foreground/90");
     expect(markup).toContain("/central-icons-reversed/opencode.svg");
   });
+
+  it("presents the Pi harness with Claude branding only in Glasswing mode", () => {
+    const glasswingMarkup = renderToStaticMarkup(
+      <ProviderIcon provider="pi" glasswingMode={true} />,
+    );
+    const synaraMarkup = renderToStaticMarkup(
+      <ProviderIcon provider="pi" glasswingMode={false} />,
+    );
+
+    expect(glasswingMarkup).toContain('viewBox="0 0 256 257"');
+    expect(glasswingMarkup).not.toContain('viewBox="0 0 800 800"');
+    expect(synaraMarkup).toContain('viewBox="0 0 800 800"');
+  });
 });
