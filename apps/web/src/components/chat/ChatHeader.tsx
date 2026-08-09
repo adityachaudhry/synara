@@ -85,6 +85,7 @@ interface ChatHeaderProps {
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
   hideHandoffAction?: boolean;
+  hideEnvironmentControls?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -508,6 +509,7 @@ export function ChatHeader({
   hideSidebarControls: hideSidebarControlsProp,
   hideHandoffControls: hideHandoffControlsProp,
   hideHandoffAction: hideHandoffActionProp,
+  hideEnvironmentControls: hideEnvironmentControlsProp,
   isGitRepo,
   openInTarget,
   activeProjectScripts,
@@ -550,6 +552,7 @@ export function ChatHeader({
   const hideSidebarControls = hideSidebarControlsProp ?? false;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
   const hideHandoffAction = hideHandoffActionProp ?? false;
+  const hideEnvironmentControls = hideEnvironmentControlsProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
   const showDiffToggle = showDiffToggleProp ?? true;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
@@ -816,7 +819,7 @@ export function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        {!hideHandoffControls && !environment ? (
+        {!hideEnvironmentControls && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
         {!hideHandoffControls && !hideHandoffAction ? (
@@ -905,7 +908,7 @@ export function ChatHeader({
             Environment panel. The right-side panel control stays beside it, acting as the
             multi-pane dock toggle on single chats and the legacy diff toggle in split hosts.
             Falls back to the legacy controls when no environment is resolved. */}
-        {environment ? (
+        {hideEnvironmentControls ? null : environment ? (
           <>
             <EnvironmentToggle environment={environment} />
             {dockLauncherControl ?? rightPanelToggleControl}

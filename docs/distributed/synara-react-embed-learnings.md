@@ -122,6 +122,25 @@ stable working row in place. Glasswing mode shows provider-neutral phase copy an
 `Working…`; standalone Synara retains its existing behavior. Completed turns ignore any stale
 unresolved telemetry, and prewarming an untouched draft stays invisible.
 
+## Trial 8: Project scoping belongs at the host/state boundary, not in CSS
+
+The first design temptation was to hide the general Synara rail and composer controls with selectors
+on the Glasswing host wrapper. That would have been visually fast but semantically incomplete:
+keyboard shortcuts could still open hidden surfaces, `New thread` could still target the latest
+unrelated project, and the sidebar would continue computing and exposing cross-project rows.
+
+**Correction:** Glasswing now passes an explicit `hostProject` context through the React package.
+The host owns cross-company URL navigation, while Synara's existing Glasswing-mode projection
+matches that company to one project and renders only its threads. The more opinionated control
+removals require both Glasswing mode and this host-project context, so standalone GlasswingOS keeps
+its existing general-purpose tools and upstream Synara is unchanged.
+
+The first rendered regression-test attempt also failed before reaching an assertion because an
+empty server snapshot did not create a client draft automatically. The corrected fixture registers
+the local draft in `useComposerDraftStore`, then mounts the real chat route. That produced the
+intended RED (the Environment button was still present) and the subsequent semantic-gating change
+turned the same real-browser case GREEN.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

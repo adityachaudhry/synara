@@ -10,17 +10,50 @@ import { DEFAULT_THEME_STATE, GLASSWING_THEME_STATE } from "./theme/theme.logic"
 
 describe("Glasswing Mode", () => {
   it("hides Synara-only chrome while preserving it outside Glasswing mode", () => {
-    expect(resolveGlasswingChromePresentation(true)).toEqual({
+    expect(resolveGlasswingChromePresentation(true, true)).toEqual({
       sidebarThreadsTitle: "GlasswingOS",
       showKanbanNavigation: false,
       showPullRequestNavigation: false,
       showHandoffAction: false,
+      showSearchAction: false,
+      showActivityAction: false,
+      showAutomationsAction: false,
+      showProjectActions: false,
+      showEnvironmentControls: false,
+      showComposerRuntimeMode: false,
+      showComposerWorkspaceTray: false,
+      showComposerVoiceInput: false,
     });
-    expect(resolveGlasswingChromePresentation(false)).toEqual({
+    expect(resolveGlasswingChromePresentation(false, false)).toEqual({
       sidebarThreadsTitle: "Synara",
       showKanbanNavigation: true,
       showPullRequestNavigation: true,
       showHandoffAction: true,
+      showSearchAction: true,
+      showActivityAction: true,
+      showAutomationsAction: true,
+      showProjectActions: true,
+      showEnvironmentControls: true,
+      showComposerRuntimeMode: true,
+      showComposerWorkspaceTray: true,
+      showComposerVoiceInput: true,
+    });
+  });
+
+  it("keeps general-purpose controls in standalone Glasswing mode", () => {
+    expect(resolveGlasswingChromePresentation(true, false)).toMatchObject({
+      sidebarThreadsTitle: "GlasswingOS",
+      showKanbanNavigation: false,
+      showPullRequestNavigation: false,
+      showHandoffAction: false,
+      showSearchAction: true,
+      showActivityAction: true,
+      showAutomationsAction: true,
+      showProjectActions: true,
+      showEnvironmentControls: true,
+      showComposerRuntimeMode: true,
+      showComposerWorkspaceTray: true,
+      showComposerVoiceInput: true,
     });
   });
 

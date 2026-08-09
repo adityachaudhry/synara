@@ -107,6 +107,12 @@ import {
   getGlasswingModeForCurrentPage,
   resolveGlasswingChromePresentation,
 } from "../glasswingMode";
+import {
+  resolveGlasswingHostProject,
+  toGlasswingProjectOptions,
+  type GlasswingProjectCandidate,
+} from "../glasswingProjectContext";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
 import { isOrdinarySpaceProject } from "../lib/spaces";
@@ -454,6 +460,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
+const EMPTY_THREAD_IDS: readonly ThreadId[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
@@ -1313,9 +1320,75 @@ export function SidebarSurfacePicker({
   );
 }
 
+function GlasswingProjectPicker({
+  projects,
+  selectedProjectId,
+  selectedProjectName,
+  onSelectProject,
+}: {
+  projects: readonly GlasswingProjectCandidate[];
+  selectedProjectId: string | null;
+  selectedProjectName: string;
+  onSelectProject: (project: GlasswingProjectCandidate) => void;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Switch project"
+            className={cn(
+              "flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5",
+              SIDEBAR_ROW_FOCUS_CLASS_NAME,
+              SIDEBAR_ROW_HOVER_CLASS_NAME,
+            )}
+          />
+        }
+      >
+        <span className="font-display min-w-0 truncate text-[17px] text-foreground">
+          {selectedProjectName}
+        </span>
+        <DisclosureChevron open className="text-muted-foreground/70" />
+      </MenuTrigger>
+      <ComposerPickerMenuPopup
+        align="start"
+        side="bottom"
+        className="sidebar-surface-picker-menu min-w-64"
+      >
+        <MenuRadioGroup
+          className="flex flex-col gap-0.5"
+          value={selectedProjectId ?? ""}
+          onValueChange={(value) => {
+            const project = projects.find((candidate) => candidate.id === value);
+            if (project) onSelectProject(project);
+          }}
+        >
+          {projects.map((project) => (
+            <MenuRadioItem
+              key={project.id}
+              value={project.id}
+              closeOnClick
+              className="items-center rounded-[10px] data-checked:bg-[var(--color-background-button-secondary-hover)]"
+            >
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+                {project.name}
+              </span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
+
 export default function Sidebar() {
+  const glasswingMode = getGlasswingModeForCurrentPage();
+  const hostProject = readSynaraRuntimeConfig().hostProject ?? null;
+  const projectScopedGlasswingEmbed = glasswingMode && hostProject !== null;
   const glasswingChrome = resolveGlasswingChromePresentation(
-    getGlasswingModeForCurrentPage(),
+    glasswingMode,
+    projectScopedGlasswingEmbed,
   );
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
@@ -3871,6 +3944,42 @@ export default function Sidebar() {
       resolveThreadStatusForSidebar,
     ],
   );
+  const glasswingProjectOptions = useMemo(
+    () => toGlasswingProjectOptions(allStandardProjectsBase),
+    [allStandardProjectsBase],
+  );
+  const glasswingSelectedProject = useMemo(
+    () =>
+      hostProject
+        ? resolveGlasswingHostProject(allStandardProjectsBase, hostProject)
+        : null,
+    [allStandardProjectsBase, hostProject],
+  );
+  const glasswingProjectSidebarDataById = useMemo<
+    ReadonlyMap<ProjectId, SidebarDerivedProjectData>
+  >(
+    () =>
+      glasswingSelectedProject
+        ? deriveSidebarProjectData({
+            projects: [glasswingSelectedProject],
+            sortedSidebarThreadsByProjectId,
+            pinnedThreadIds: EMPTY_THREAD_IDS,
+            threadListExtraPagesByProjectCwd,
+            normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+            activeSidebarThreadId: activeSidebarThreadId ?? undefined,
+            previewLimit: THREAD_PREVIEW_LIMIT,
+            previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+            resolveThreadStatus: resolveThreadStatusForSidebar,
+          })
+        : EMPTY_PROJECT_SIDEBAR_DATA,
+    [
+      activeSidebarThreadId,
+      glasswingSelectedProject,
+      resolveThreadStatusForSidebar,
+      sortedSidebarThreadsByProjectId,
+      threadListExtraPagesByProjectCwd,
+    ],
+  );
   const studioProjectSidebarDataById = useMemo<
     ReadonlyMap<ProjectId, SidebarDerivedProjectData>
   >(() => {
@@ -5079,6 +5188,82 @@ export default function Sidebar() {
     );
   }
 
+  function renderGlasswingProjectThreads() {
+    if (!glasswingSelectedProject) {
+      return (
+        <div className="px-3 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+          {threadsHydrated
+            ? `${hostProject?.name ?? "This project"} is not available yet.`
+            : `Loading ${hostProject?.name ?? "project"}...`}
+        </div>
+      );
+    }
+
+    const projectData = glasswingProjectSidebarDataById.get(glasswingSelectedProject.id);
+    if (!projectData) return null;
+    const {
+      orderedProjectThreadIds,
+      visibleEntries,
+      threadListExtraPages,
+      canShowMoreThreads,
+      canShowLessThreads,
+    } = projectData;
+
+    return (
+      <SidebarMenu className="gap-0.5">
+        {visibleEntries.length > 0 ? (
+          visibleEntries.map((entry) =>
+            renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, true),
+          )
+        ) : (
+          <div className="px-3 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+            {threadsHydrated ? "No threads yet" : "Loading threads..."}
+          </div>
+        )}
+        {canShowMoreThreads || canShowLessThreads ? (
+          <SidebarMenuItem className="w-full">
+            <div className="flex w-full items-center gap-1">
+              {canShowMoreThreads ? (
+                <SidebarMenuButton
+                  render={<button type="button" />}
+                  data-thread-selection-safe
+                  size="sm"
+                  className="h-7 flex-1 justify-start rounded-lg px-2 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground"
+                  onMouseDown={preventFocusOnMouseDown}
+                  onClick={() => {
+                    showMoreThreadsForProject(
+                      glasswingSelectedProject.cwd,
+                      threadListExtraPages,
+                    );
+                  }}
+                >
+                  <span>Show more</span>
+                </SidebarMenuButton>
+              ) : null}
+              {canShowLessThreads ? (
+                <SidebarMenuButton
+                  render={<button type="button" />}
+                  data-thread-selection-safe
+                  size="sm"
+                  className="h-7 flex-none justify-start rounded-lg px-2 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground"
+                  onMouseDown={preventFocusOnMouseDown}
+                  onClick={() => {
+                    showLessThreadsForProject(
+                      glasswingSelectedProject.cwd,
+                      threadListExtraPages,
+                    );
+                  }}
+                >
+                  <span>Show less</span>
+                </SidebarMenuButton>
+              ) : null}
+            </div>
+          </SidebarMenuItem>
+        ) : null}
+      </SidebarMenu>
+    );
+  }
+
   const handleProjectTitleClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>, projectId: ProjectId) => {
       if (dragInProgressRef.current) {
@@ -5913,26 +6098,39 @@ export default function Sidebar() {
         ) : (
           <>
             <div className="flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5">
-              <SidebarSurfacePicker
-                views={["threads", ...(studioSectionVisible ? (["studio"] as const) : [])]}
-                activeView={isOnStudio ? "studio" : "threads"}
-                threadsTitle={glasswingChrome.sidebarThreadsTitle}
-                onSelectView={handleSidebarViewChange}
-                onPrewarmView={prewarmSidebarViewTarget}
-              />
-              <div className="ml-auto flex items-center gap-1.5">
-                <SidebarIconButton
-                  icon={SearchIcon}
-                  label="Search"
-                  glyph="leading"
-                  size="header"
-                  tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
-                  tooltipSide="bottom"
-                  onClick={() => {
-                    setSearchPaletteOpen(true);
+              {projectScopedGlasswingEmbed && hostProject ? (
+                <GlasswingProjectPicker
+                  projects={glasswingProjectOptions}
+                  selectedProjectId={glasswingSelectedProject?.id ?? null}
+                  selectedProjectName={glasswingSelectedProject?.name ?? hostProject.name}
+                  onSelectProject={(project) => {
+                    hostProject.onSelectProject?.({ name: project.name, cwd: project.cwd });
                   }}
                 />
-                {!isOnStudio ? (
+              ) : (
+                <SidebarSurfacePicker
+                  views={["threads", ...(studioSectionVisible ? (["studio"] as const) : [])]}
+                  activeView={isOnStudio ? "studio" : "threads"}
+                  threadsTitle={glasswingChrome.sidebarThreadsTitle}
+                  onSelectView={handleSidebarViewChange}
+                  onPrewarmView={prewarmSidebarViewTarget}
+                />
+              )}
+              <div className="ml-auto flex items-center gap-1.5">
+                {glasswingChrome.showSearchAction ? (
+                  <SidebarIconButton
+                    icon={SearchIcon}
+                    label="Search"
+                    glyph="leading"
+                    size="header"
+                    tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
+                    tooltipSide="bottom"
+                    onClick={() => {
+                      setSearchPaletteOpen(true);
+                    }}
+                  />
+                ) : null}
+                {glasswingChrome.showActivityAction && !isOnStudio ? (
                   <SidebarActivityBellButton
                     active={activityViewEnabled}
                     showUnreadDot={hasUnreadActivity}
@@ -5951,7 +6149,36 @@ export default function Sidebar() {
               {/* Primary sidebar actions stay limited to features we currently ship. */}
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <SidebarMenu className="gap-0.5">
-                  {isOnStudio ? (
+                  {projectScopedGlasswingEmbed ? (
+                    <SidebarPrimaryAction
+                      icon={NewThreadIcon}
+                      iconClassName="size-3.5"
+                      label="New thread"
+                      onClick={() => {
+                        if (!glasswingSelectedProject) return;
+                        prefetchModelsForProjectNewThread(glasswingSelectedProject.id, {
+                          includeDroid: true,
+                        });
+                        void handleNewThread(glasswingSelectedProject.id, {
+                          envMode: resolveSidebarNewThreadEnvMode({
+                            defaultEnvMode: appSettings.defaultThreadEnvMode,
+                          }),
+                        });
+                      }}
+                      onMouseEnter={() => {
+                        if (!glasswingSelectedProject) return;
+                        prefetchModelsForProjectNewThread(glasswingSelectedProject.id, {
+                          includeDroid: true,
+                        });
+                      }}
+                      onFocus={() => {
+                        if (!glasswingSelectedProject) return;
+                        prefetchModelsForProjectNewThread(glasswingSelectedProject.id, {
+                          includeDroid: true,
+                        });
+                      }}
+                    />
+                  ) : isOnStudio ? (
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
@@ -5994,21 +6221,27 @@ export default function Sidebar() {
                           }}
                         />
                       ) : null}
-                      <SidebarPrimaryAction
-                        icon={ClockIcon}
-                        label="Automations"
-                        active={isOnAutomations}
-                        badge={automationAttentionBadge}
-                        onClick={() => {
-                          void navigate({ to: "/automations" });
-                        }}
-                      />
+                      {glasswingChrome.showAutomationsAction ? (
+                        <SidebarPrimaryAction
+                          icon={ClockIcon}
+                          label="Automations"
+                          active={isOnAutomations}
+                          badge={automationAttentionBadge}
+                          onClick={() => {
+                            void navigate({ to: "/automations" });
+                          }}
+                        />
+                      ) : null}
                     </>
                   )}
                 </SidebarMenu>
               </SidebarGroup>
 
-              {isOnStudio ? (
+              {projectScopedGlasswingEmbed ? (
+                <SidebarGroup className="px-1.5 py-1.5">
+                  {renderGlasswingProjectThreads()}
+                </SidebarGroup>
+              ) : isOnStudio ? (
                 // Studio is "just chats": a labeled Studio block holding a flat list of threads
                 // rooted at the Studio workspace (no project-folder chrome).
                 <SidebarGroup className="px-1.5 py-1.5">
@@ -6207,7 +6440,11 @@ export default function Sidebar() {
             </div>
           </>
         )}
-        {!isOnSettings && !isOnStudio && !activityViewEnabled && chatsSectionVisible ? (
+        {!projectScopedGlasswingEmbed &&
+        !isOnSettings &&
+        !isOnStudio &&
+        !activityViewEnabled &&
+        chatsSectionVisible ? (
           // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it
           // animates in step with the keyed surface wrapper above.
           <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">

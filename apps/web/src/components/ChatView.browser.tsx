@@ -63,6 +63,10 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+import {
+  configureSynaraRuntime,
+  resetSynaraRuntimeConfigForTest,
+} from "../synaraRuntimeConfig";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -1976,6 +1980,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   beforeEach(async () => {
+    resetSynaraRuntimeConfigForTest();
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
@@ -2308,6 +2313,56 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("removes project, environment, access, workspace, and voice controls in a project-scoped Glasswing embed", async () => {
+    configureSynaraRuntime({
+      hostProject: {
+        name: "project",
+        slug: "project",
+      },
+    });
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: THREAD_ID,
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
+      snapshot: withProjectScripts(createDraftOnlySnapshot(), [
+        {
+          id: "lint",
+          name: "Lint",
+          command: "bun run lint",
+          icon: "lint",
+          runOnWorktreeCreate: false,
+        },
+      ]),
+    });
+
+    try {
+      await waitForComposerEditor();
+      expect(document.querySelector('button[aria-label="Add action"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Toggle environment panel"]')).toBeNull();
+      expect(document.querySelector('button[title^="Full access"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Temporary chat"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Record voice note"]')).toBeNull();
+      expect(document.querySelector('[data-empty-landing-composer-block] button[title="Local"]')).toBeNull();
     } finally {
       await mounted.cleanup();
     }

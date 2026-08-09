@@ -13,6 +13,14 @@ export interface GlasswingChromePresentation {
   readonly showKanbanNavigation: boolean;
   readonly showPullRequestNavigation: boolean;
   readonly showHandoffAction: boolean;
+  readonly showSearchAction: boolean;
+  readonly showActivityAction: boolean;
+  readonly showAutomationsAction: boolean;
+  readonly showProjectActions: boolean;
+  readonly showEnvironmentControls: boolean;
+  readonly showComposerRuntimeMode: boolean;
+  readonly showComposerWorkspaceTray: boolean;
+  readonly showComposerVoiceInput: boolean;
 }
 
 const GLASSWING_CHROME_PRESENTATION: GlasswingChromePresentation = {
@@ -20,6 +28,14 @@ const GLASSWING_CHROME_PRESENTATION: GlasswingChromePresentation = {
   showKanbanNavigation: false,
   showPullRequestNavigation: false,
   showHandoffAction: false,
+  showSearchAction: true,
+  showActivityAction: true,
+  showAutomationsAction: true,
+  showProjectActions: true,
+  showEnvironmentControls: true,
+  showComposerRuntimeMode: true,
+  showComposerWorkspaceTray: true,
+  showComposerVoiceInput: true,
 };
 
 const SYNARA_CHROME_PRESENTATION: GlasswingChromePresentation = {
@@ -27,6 +43,14 @@ const SYNARA_CHROME_PRESENTATION: GlasswingChromePresentation = {
   showKanbanNavigation: true,
   showPullRequestNavigation: true,
   showHandoffAction: true,
+  showSearchAction: true,
+  showActivityAction: true,
+  showAutomationsAction: true,
+  showProjectActions: true,
+  showEnvironmentControls: true,
+  showComposerRuntimeMode: true,
+  showComposerWorkspaceTray: true,
+  showComposerVoiceInput: true,
 };
 
 type SettingsStorageReader = Pick<Storage, "getItem">;
@@ -59,8 +83,22 @@ export function getGlasswingModeForCurrentPage(): boolean {
 
 export function resolveGlasswingChromePresentation(
   enabled: boolean,
+  projectScopedEmbed = false,
 ): GlasswingChromePresentation {
-  return enabled ? GLASSWING_CHROME_PRESENTATION : SYNARA_CHROME_PRESENTATION;
+  const base = enabled ? GLASSWING_CHROME_PRESENTATION : SYNARA_CHROME_PRESENTATION;
+  if (!enabled || !projectScopedEmbed) return base;
+
+  return {
+    ...base,
+    showSearchAction: false,
+    showActivityAction: false,
+    showAutomationsAction: false,
+    showProjectActions: false,
+    showEnvironmentControls: false,
+    showComposerRuntimeMode: false,
+    showComposerWorkspaceTray: false,
+    showComposerVoiceInput: false,
+  };
 }
 
 export function applyGlasswingModeAttribute(root: AttributeTarget, enabled: boolean): void {

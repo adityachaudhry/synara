@@ -259,6 +259,7 @@ import {
   getGlasswingModeForCurrentPage,
   resolveGlasswingChromePresentation,
 } from "../glasswingMode";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import {
   deriveGlasswingRuntimeSetupProgress,
   resolveGlasswingTranscriptWorkingPresentation,
@@ -1203,7 +1204,12 @@ export default function ChatView({
   );
   const isEditorRail = presentationMode === "editor";
   const glasswingMode = getGlasswingModeForCurrentPage();
-  const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
+  const projectScopedGlasswingEmbed =
+    glasswingMode && readSynaraRuntimeConfig().hostProject !== undefined;
+  const glasswingChrome = resolveGlasswingChromePresentation(
+    glasswingMode,
+    projectScopedGlasswingEmbed,
+  );
   const usesGlasswingDockLauncher =
     glasswingMode && surfaceMode === "single" && !isEditorRail;
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
@@ -10683,7 +10689,9 @@ export default function ChatView({
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />
-      {!isVoiceRecording && !isVoiceTranscribing ? (
+      {glasswingChrome.showComposerRuntimeMode &&
+      !isVoiceRecording &&
+      !isVoiceTranscribing ? (
         <RuntimeUsageControls
           {...runtimeUsageControlsProps}
           className="shrink-0"
@@ -10745,7 +10753,8 @@ export default function ChatView({
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
       showEmptyLandingBranchToolbar);
-  const emptyLandingControls = showEmptyLandingControls ? (
+  const emptyLandingControls =
+    glasswingChrome.showComposerWorkspaceTray && showEmptyLandingControls ? (
     <div
       className={cn(
         // Full-width tray under the composer that reads as UNITED but not fused: it carries extra
@@ -10837,7 +10846,7 @@ export default function ChatView({
         </Button>
       ) : null}
     </div>
-  ) : null;
+    ) : null;
 
   const threadAutomationItems = automationsForThread(
     automationData.definitions,
@@ -11282,7 +11291,9 @@ export default function ChatView({
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
-                      {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
+                      {glasswingChrome.showComposerVoiceInput &&
+                      showVoiceNotesControl &&
+                      (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
                           disabled={isComposerApprovalState || isConnecting || isSendBusy}
                           isRecording={isVoiceRecording}
@@ -11378,7 +11389,7 @@ export default function ChatView({
                           )
                         ) : (
                           <>
-                            {showVoiceNotesControl ? (
+                            {glasswingChrome.showComposerVoiceInput && showVoiceNotesControl ? (
                               <ComposerVoiceButton
                                 disabled={isComposerApprovalState || isConnecting || isSendBusy}
                                 isRecording={isVoiceRecording}
@@ -11515,9 +11526,14 @@ export default function ChatView({
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
           hideHandoffAction={!glasswingChrome.showHandoffAction}
+          hideEnvironmentControls={!glasswingChrome.showEnvironmentControls}
           isGitRepo={isGitRepo}
           openInTarget={threadWorkspaceCwd}
-          activeProjectScripts={isEditorRail ? undefined : activeProjectScripts}
+          activeProjectScripts={
+            isEditorRail || !glasswingChrome.showProjectActions
+              ? undefined
+              : activeProjectScripts
+          }
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
