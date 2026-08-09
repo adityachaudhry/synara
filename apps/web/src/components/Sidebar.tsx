@@ -33,6 +33,7 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { createCentralIconComponent } from "~/lib/central-icons";
+import { useSynaraHostSidebar } from "~/hostSidebar";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
@@ -1451,6 +1452,7 @@ export default function Sidebar() {
   const runtimeConfig = readSynaraRuntimeConfig();
   const hostProject = runtimeConfig.hostProject ?? null;
   const embeddedMode = hostProject !== null;
+  const hostSidebar = useSynaraHostSidebar();
   const projectScopedGlasswingShell = glasswingMode;
   const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
   const githubProvisioningAvailable = useSyncExternalStore(
@@ -6094,7 +6096,9 @@ export default function Sidebar() {
 
   return (
     <>
-      {isElectron ? (
+      {hostSidebar?.header ? (
+        hostSidebar.header
+      ) : isElectron ? (
         <>
           <SidebarHeader
             className={cn(
@@ -6646,7 +6650,9 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
-        {embeddedMode && runtimeConfig.hostNavigation ? (
+        {hostSidebar?.footer ? (
+          hostSidebar.footer
+        ) : embeddedMode && runtimeConfig.hostNavigation ? (
           <EmbeddedHostNavigationFooter />
         ) : (
         <SidebarMenu>

@@ -7,6 +7,7 @@ import "./index.css";
 
 export { SynaraApp, type SynaraAppProps } from "./SynaraApp";
 export { createEmbeddedAppHistory } from "./appNavigation";
+export type { SynaraHostSidebar } from "./hostSidebar";
 export type {
   SynaraRuntimeConfig,
   SynaraWebSocketUrlResolver,

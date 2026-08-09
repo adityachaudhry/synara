@@ -8,6 +8,10 @@ import { RouterProvider, type RouterHistory } from "@tanstack/react-router";
 import { useMemo } from "react";
 
 import { AppHistoryProvider, appHistory } from "./appNavigation";
+import {
+  SynaraHostSidebarProvider,
+  type SynaraHostSidebar,
+} from "./hostSidebar";
 import { createEmbeddedDisplayScaleStyle } from "./lib/embeddedDisplayScale";
 import { getRouter } from "./router";
 import {
@@ -21,6 +25,8 @@ export interface SynaraAppProps extends SynaraRuntimeConfig {
    * their React surface. The standalone app defaults to its browser/hash history.
    */
   readonly history?: RouterHistory;
+  /** Optional React-only chrome supplied by an embedding host. */
+  readonly hostSidebar?: SynaraHostSidebar;
 }
 
 export function SynaraApp({
@@ -29,6 +35,7 @@ export function SynaraApp({
   resolveWebSocketUrl,
   hostProject,
   hostNavigation,
+  hostSidebar,
   displayScale,
 }: SynaraAppProps) {
   configureSynaraRuntime({
@@ -40,9 +47,11 @@ export function SynaraApp({
   });
   const router = useMemo(() => getRouter(history), [history]);
   const app = (
-    <AppHistoryProvider history={history}>
-      <RouterProvider router={router} />
-    </AppHistoryProvider>
+    <SynaraHostSidebarProvider value={hostSidebar ?? null}>
+      <AppHistoryProvider history={history}>
+        <RouterProvider router={router} />
+      </AppHistoryProvider>
+    </SynaraHostSidebarProvider>
   );
   const displayScaleStyle = createEmbeddedDisplayScaleStyle(displayScale);
 
