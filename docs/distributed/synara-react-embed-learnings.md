@@ -245,6 +245,14 @@ inside the Environment conditional, so hiding Environment also hid the panel con
 the launcher on the hidden-environment branch restores it without re-enabling Add action or
 Environment.
 
+The first deployed navigation pass exposed one more ownership leak. GlasswingOS correctly showed
+the three embedded footer destinations, but the existing Workspace route replaced `Workspace`
+with `Back to diligence`. That made the same navigation position change meaning when crossing the
+adapter boundary. The host rail now keeps GlasswingOS, Workspace, and Profile stable on both
+routes; only the active destination changes. Live Chrome verification then covered both directions:
+Workspace opened the existing company repository, and GlasswingOS returned to the embedded Synara
+thread experience without introducing a second workspace implementation.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,
