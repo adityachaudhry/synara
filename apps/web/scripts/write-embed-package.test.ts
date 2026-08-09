@@ -73,6 +73,9 @@ describe("writeEmbedPackage", () => {
     expect(declarations).toContain("readonly hostProject?: SynaraHostProject;");
     expect(declarations).toContain("export interface SynaraHostNavigation");
     expect(declarations).toContain("readonly hostNavigation?: SynaraHostNavigation;");
+    expect(declarations).toContain("export interface SynaraHostSidebar");
+    expect(declarations).toContain("readonly header?: ReactNode;");
+    expect(declarations).toContain("readonly hostSidebar?: SynaraHostSidebar;");
     expect(declarations).toContain("readonly displayScale?: number;");
     await expect(fs.stat(path.join(fixture.outputDir, "route-chunk.js"))).resolves.toBeDefined();
   });

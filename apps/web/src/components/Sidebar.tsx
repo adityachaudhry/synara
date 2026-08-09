@@ -6649,10 +6649,11 @@ export default function Sidebar() {
         ) : null}
       </SidebarContent>
 
+      {hostSidebar?.footer ? (
+        hostSidebar.footer
+      ) : (
       <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
-        {hostSidebar?.footer ? (
-          hostSidebar.footer
-        ) : embeddedMode && runtimeConfig.hostNavigation ? (
+        {embeddedMode && runtimeConfig.hostNavigation ? (
           <EmbeddedHostNavigationFooter />
         ) : (
         <SidebarMenu>
@@ -6727,6 +6728,7 @@ export default function Sidebar() {
         </SidebarMenu>
         )}
       </SidebarFooter>
+      )}
 
       <CreateProjectDialog
         open={createProjectDialogOpen}

@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const DECLARATIONS = `import type { ReactElement } from "react";
+const DECLARATIONS = `import type { ReactElement, ReactNode } from "react";
 
 export interface SynaraHistory {
   readonly location: { readonly pathname: string };
@@ -40,6 +40,13 @@ export interface SynaraHostNavigation {
   readonly profile: SynaraHostProfile;
 }
 
+export interface SynaraHostSidebar {
+  readonly widthPx: number;
+  readonly lockedOpen?: boolean;
+  readonly header?: ReactNode;
+  readonly footer?: ReactNode;
+}
+
 export interface SynaraRuntimeConfig {
   readonly httpBaseUrl?: string;
   readonly resolveWebSocketUrl?: SynaraWebSocketUrlResolver;
@@ -50,6 +57,7 @@ export interface SynaraRuntimeConfig {
 
 export interface SynaraAppProps extends SynaraRuntimeConfig {
   readonly history?: SynaraHistory;
+  readonly hostSidebar?: SynaraHostSidebar;
 }
 
 export declare function SynaraApp(props: SynaraAppProps): ReactElement;
