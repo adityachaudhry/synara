@@ -361,6 +361,8 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
+  /** Optional transient status copy; the row identity remains stable as phases change. */
+  workingLabel?: string;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
@@ -449,6 +451,7 @@ interface MessagesTimelineProps {
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
   isWorking,
+  workingLabel,
   activeTurnInProgress,
   activeTurnStartedAt,
   worktreeSetup: worktreeSetupProp,
@@ -660,6 +663,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       deriveMessagesTimelineRows({
         timelineEntries,
         isWorking,
+        ...(workingLabel === undefined ? {} : { workingLabel }),
         worktreeSetup: presentedWorktreeSetup?.snapshot ?? null,
         worktreeSetupOpen: presentedWorktreeSetup?.open ?? false,
         activeTurnInProgress,
@@ -671,6 +675,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timelineEntries,
       isWorking,
+      workingLabel,
       presentedWorktreeSetup,
       activeTurnInProgress,
       activeTurnId,
@@ -2145,7 +2150,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          Thinking
+          {row.label}
         </div>
       )}
 

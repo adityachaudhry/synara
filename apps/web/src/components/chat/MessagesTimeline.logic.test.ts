@@ -858,6 +858,25 @@ describe("deriveMessagesTimelineRows", () => {
     revertTurnCountByUserMessageId: new Map(),
   };
 
+  it("keeps one stable working row while its setup label changes", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      workingLabel: "Connecting agent",
+      activeTurnInProgress: true,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    expect(rows.filter((row) => row.kind === "working")).toEqual([
+      {
+        kind: "working",
+        id: "working-indicator-row",
+        createdAt: null,
+        label: "Connecting agent",
+      },
+    ]);
+  });
+
   const userEntry = (id: string, createdAt: string): TimelineEntry => ({
     id: `entry-${id}`,
     kind: "message",

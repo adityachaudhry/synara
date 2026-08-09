@@ -930,3 +930,23 @@ The deployed behavior is verified separately in real Chrome.
 already-pinned Node runtime under Railway's injected service environment. This removes workspace
 filter discovery from the deployment-critical path while preserving the same package scripts and
 artifact.
+
+## 2026-08-09 — Embedded setup progress without a second lifecycle
+
+### Reusing `runtime.stage` solved the silent first-turn gap
+
+**Observation:** The distributed runtime already emitted, journaled, projected, and streamed every
+Railway setup phase, but the web work log intentionally discarded `runtime.stage` activities and
+`ChatTranscriptPane` received only `hasLiveTurn`. The user therefore saw no movement after send
+until Pi formally started the turn.
+
+**Correction:** Add a Glasswing-mode presentation adapter over the existing projected activities.
+It considers only the newest lifecycle generation, reconciles overlapping started/completed phases,
+stays hidden until a user message exists, and updates the existing transient working row instead of
+appending setup history. No contract, SQLite table, WebSocket method, provider primitive, or Railway
+operation changed.
+
+**Test-first evidence:** New derivation and mode-policy tests first failed because the adapter did
+not exist, and the timeline test first failed because its stable working row carried no phase label.
+After the correction, 128 focused transcript tests passed and the standalone production Vite build
+completed. Deployment and real Chrome timings are recorded below when available.

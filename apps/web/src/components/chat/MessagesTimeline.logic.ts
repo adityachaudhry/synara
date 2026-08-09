@@ -247,7 +247,7 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null }
+  | { kind: "working"; id: string; createdAt: string | null; label: string }
   | {
       // Live-turn header that mirrors the settled "Worked for Xs" disclosure
       // (label + full-width divider), but is non-collapsible and counts up while
@@ -481,6 +481,7 @@ export function deriveTerminalAssistantMessageIds(
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
+  workingLabel?: string;
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
@@ -636,6 +637,7 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
+      label: input.workingLabel ?? "Thinking",
     });
   }
 

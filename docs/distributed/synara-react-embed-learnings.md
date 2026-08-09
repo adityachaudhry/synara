@@ -104,6 +104,24 @@ host still owns the single React instance. The package writer now rejects any ge
 combines the Rolldown runtime with a dynamic call for peer React, turning this browser-only failure
 into a deterministic build failure.
 
+## Trial 7: Durable setup telemetry was intentionally invisible at the wrong time
+
+The first-message path could spend seconds preparing a Railway sandbox after the user had already
+submitted a message, while the transcript did not become active until the provider emitted a formal
+turn start. The runtime was healthy and already streaming `runtime.stage` events, but the React
+work-log projection intentionally excluded them after an earlier version had polluted empty draft
+threads with infrastructure rows.
+
+**Why it failed:** filtering durable setup telemetry from conversation history was correct, but the
+working indicator used only `hasLiveTurn`. That coupled perceived activity to provider turn start
+and created a silent interval during real pre-turn work.
+
+**Correction:** keep `runtime.stage` out of the durable transcript, derive the latest unresolved
+stage as transient presentation state only after a user message exists, and update the existing
+stable working row in place. Glasswing mode shows provider-neutral phase copy and falls back to
+`Working…`; standalone Synara retains its existing behavior. Completed turns ignore any stale
+unresolved telemetry, and prewarming an untouched draft stays invisible.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

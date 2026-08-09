@@ -259,6 +259,10 @@ import {
   getGlasswingModeForCurrentPage,
   resolveGlasswingChromePresentation,
 } from "../glasswingMode";
+import {
+  deriveGlasswingRuntimeSetupProgress,
+  resolveGlasswingTranscriptWorkingPresentation,
+} from "../glasswingRuntimeSetup";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
@@ -2931,6 +2935,28 @@ export default function ChatView({
     hasLiveTurn,
     promptRef,
     setComposerDraftPrompt,
+  });
+  const hasSubmittedUserMessage =
+    optimisticUserMessages.length > 0 ||
+    (activeThread?.messages.some((message) => message.role === "user") ?? false);
+  const glasswingRuntimeSetupProgress = useMemo(
+    () =>
+      glasswingMode
+        ? deriveGlasswingRuntimeSetupProgress({
+            activities: threadActivities,
+            hasSubmittedMessage: hasSubmittedUserMessage,
+          })
+        : null,
+    [glasswingMode, hasSubmittedUserMessage, threadActivities],
+  );
+  const transcriptWorkingPresentation = resolveGlasswingTranscriptWorkingPresentation({
+    enabled: glasswingMode,
+    hasLiveTurn,
+    hasSubmittedMessage: hasSubmittedUserMessage,
+    isSendBusy,
+    isConnecting,
+    latestTurnSettled,
+    setupProgress: glasswingRuntimeSetupProgress,
   });
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
   const hasStreamingAssistantText =
@@ -11715,7 +11741,10 @@ export default function ChatView({
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
-                    isWorking={hasLiveTurn}
+                    isWorking={transcriptWorkingPresentation.isWorking}
+                    {...(transcriptWorkingPresentation.label === undefined
+                      ? {}
+                      : { workingLabel: transcriptWorkingPresentation.label })}
                     worktreeSetup={activeWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
