@@ -4,7 +4,7 @@
 
 **Goal:** Make embedded Synara render at a normal, cohesive 1.30x visual scale inside Glasswing while preserving standalone Synara at scale 1.
 
-**Architecture:** Add a small pure scale-normalization module to the Synara React adapter, expose an optional `displayScale` host prop, and conditionally wrap only scaled mounts in an inverse-sized CSS layout-zoom viewport. The Glasswing adapter selects `1.3`; standalone entrypoints omit the prop and retain their current route tree and geometry.
+**Architecture:** Add a small pure scale-normalization module to the Synara React adapter, expose an optional `displayScale` host prop, and conditionally wrap only scaled mounts in a host-filling CSS layout-zoom viewport. CSS zoom supplies the smaller logical viewport itself; the Glasswing adapter selects `1.3`, while standalone entrypoints omit the prop and retain their current route tree and geometry.
 
 **Tech Stack:** React 19, TypeScript, TanStack Router, Vite embed library build, Next.js 16, Vitest, Chrome browser verification.
 
@@ -51,11 +51,11 @@ describe("embedded display scale", () => {
     expect(normalizeEmbeddedDisplayScale(1.8)).toBe(1.5);
   });
 
-  it("creates an inverse-sized layout viewport for scaled mounts", () => {
+  it("creates a host-filling layout viewport for scaled mounts", () => {
     expect(createEmbeddedDisplayScaleStyle(1)).toBeUndefined();
     expect(createEmbeddedDisplayScaleStyle(1.3)).toEqual({
-      width: "76.923%",
-      height: "76.923%",
+      width: "100%",
+      height: "100%",
       zoom: 1.3,
     });
   });
@@ -72,7 +72,7 @@ Run:
 
 Expected: FAIL because `./embeddedDisplayScale` does not exist.
 
-- [ ] **Step 3: Implement bounded normalization and reciprocal viewport dimensions**
+- [ ] **Step 3: Implement bounded normalization and host-filling viewport dimensions**
 
 ```ts
 export const MIN_EMBEDDED_DISPLAY_SCALE = 1;
@@ -98,8 +98,7 @@ export function createEmbeddedDisplayScaleStyle(
 ): EmbeddedDisplayScaleStyle | undefined {
   const zoom = normalizeEmbeddedDisplayScale(value);
   if (zoom === 1) return undefined;
-  const reciprocalPercent = `${Number((100 / zoom).toFixed(3))}%`;
-  return { width: reciprocalPercent, height: reciprocalPercent, zoom };
+  return { width: "100%", height: "100%", zoom };
 }
 ```
 

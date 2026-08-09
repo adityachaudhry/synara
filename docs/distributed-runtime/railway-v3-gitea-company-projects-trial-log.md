@@ -1020,11 +1020,18 @@ app.
 
 **Correction:** Add an optional, bounded `displayScale` to the existing reusable `SynaraApp` host
 adapter. Values normalize to `1` through `1.5`; Glasswing selects `1.3`, while standalone Synara
-omits the prop and preserves its original element tree. The opt-in wrapper uses CSS layout zoom and
-reciprocal `76.923%` logical dimensions, so the full app grows and reflows while its visual edges
-remain exactly inside the existing host. The model picker portals to `body` and already inherits
+omits the prop and preserves its original element tree. The opt-in wrapper uses CSS layout zoom so
+the full app grows and reflows. The model picker portals to `body` and already inherits
 Glasswing's 16px base, which aligns closely with the main surface's rendered 15.6px type after the
 scale correction.
+
+**Live correction:** The first deployed wrapper also set reciprocal `76.923%` dimensions, assuming
+zoom would otherwise overflow the host. Chrome showed that assumption double-inverted the layout:
+controls grew by the intended 30%, but the root occupied only 1384 by 724 pixels inside its 1800 by
+941 host. CSS layout zoom already reduces the logical percentage basis. Switching the wrapper to
+`100%` width and height preserves the smaller logical viewport while aligning its rendered edges
+with the host. The focused style test was changed first and failed against the reciprocal output
+before the implementation was corrected.
 
 ### Package-build assumptions were corrected instead of hidden
 

@@ -21,11 +21,11 @@ describe("embedded display scale", () => {
     expect(normalizeEmbeddedDisplayScale(1.8)).toBe(1.5);
   });
 
-  it("creates an inverse-sized layout viewport for scaled mounts", () => {
+  it("creates a host-filling layout viewport for scaled mounts", () => {
     expect(createEmbeddedDisplayScaleStyle(1)).toBeUndefined();
     expect(createEmbeddedDisplayScaleStyle(1.3)).toEqual({
-      width: "76.923%",
-      height: "76.923%",
+      width: "100%",
+      height: "100%",
       zoom: 1.3,
     });
   });

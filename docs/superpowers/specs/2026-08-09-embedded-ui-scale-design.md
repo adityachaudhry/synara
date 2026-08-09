@@ -16,10 +16,11 @@ between browser zoom 125% and 150%. Standalone Synara will omit the option and
 continue rendering at scale `1`.
 
 The React app will wrap its route provider in one positioned viewport shell.
-For scales above `1`, the shell uses CSS layout zoom while its logical width and
-height are divided by the same factor. The visual result still occupies exactly
-the host rectangle, while Synara reflows against a smaller logical viewport and
-all descendants—type, spacing, icons, fixed widths, and controls—grow together.
+For scales above `1`, the shell uses CSS layout zoom with `100%` width and
+height. CSS zoom already reduces the logical percentage basis by the same
+factor, so the rendered result occupies exactly the host rectangle while Synara
+reflows against a smaller logical viewport and all descendants—type, spacing,
+icons, fixed widths, and controls—grow together.
 
 The public value is normalized to a conservative `1` through `1.5` range and
 rounded to two decimals. Invalid values fall back to `1`. This keeps a malformed
@@ -47,7 +48,7 @@ embedding host from making the app unusable.
 ## Verification
 
 1. Unit tests first prove invalid values normalize to `1`, valid values are
-   rounded/clamped, and scale `1.3` produces reciprocal `76.923%` dimensions.
+   rounded/clamped, and scale `1.3` produces host-filling `100%` dimensions.
 2. Existing runtime-config tests prove the option survives configuration and is
    absent in standalone defaults.
 3. Production package and Glasswing builds must pass.

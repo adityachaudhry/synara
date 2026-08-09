@@ -25,6 +25,8 @@ export function createEmbeddedDisplayScaleStyle(
 ): EmbeddedDisplayScaleStyle | undefined {
   const zoom = normalizeEmbeddedDisplayScale(value);
   if (zoom === 1) return undefined;
-  const reciprocalPercent = `${Number((100 / zoom).toFixed(3))}%`;
-  return { width: reciprocalPercent, height: reciprocalPercent, zoom };
+  // CSS layout zoom already reduces the element's logical percentage basis.
+  // Full percentage dimensions therefore reflow at 1 / zoom while their
+  // rendered edges remain exactly aligned with the embedding host.
+  return { width: "100%", height: "100%", zoom };
 }
