@@ -50,6 +50,7 @@ import {
   resolveRightDockPaneLabel,
 } from "./rightDockPaneMeta";
 import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { readSynaraRuntimeConfig } from "~/synaraRuntimeConfig";
 
 // Shared sizing defaults for dock hosts: the resize floor for a single readable pane and the
 // "half the shell, but never cramped" opening width. The thread route tunes its own values
@@ -204,6 +205,7 @@ export function RightDock(props: RightDockProps) {
   const chromeMotionClass = shouldSuppressChromeMotion
     ? SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS
     : SIDEBAR_OFFCANVAS_MOTION_CLASS;
+  const embeddedMode = readSynaraRuntimeConfig().hostProject != null;
 
   return (
     <SidebarProvider
@@ -216,6 +218,7 @@ export function RightDock(props: RightDockProps) {
       <Sidebar
         side="right"
         collapsible="offcanvas"
+        positioning={embeddedMode ? "container" : "viewport"}
         className={cn(
           "border-l border-[var(--app-surface-divider)] text-foreground",
           chromeMotionClass,

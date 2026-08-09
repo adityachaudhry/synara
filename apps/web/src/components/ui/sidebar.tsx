@@ -245,6 +245,7 @@ function Sidebar({
   className,
   gapClassName,
   innerClassName,
+  positioning: positioningProp,
   transparentSurface: transparentSurfaceProp,
   children,
   ...props
@@ -255,12 +256,14 @@ function Sidebar({
   resizable?: boolean | SidebarResizableOptions;
   gapClassName?: string;
   innerClassName?: string;
+  positioning?: "viewport" | "container";
   transparentSurface?: boolean;
 }) {
   const side = sideProp ?? "left";
   const variant = variantProp ?? "sidebar";
   const collapsible = collapsibleProp ?? "offcanvas";
   const resizable = resizableProp ?? false;
+  const positioning = positioningProp ?? "viewport";
   const transparentSurface = transparentSurfaceProp ?? false;
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
@@ -346,7 +349,8 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            "inset-y-0 z-0 hidden w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            positioning === "container" ? "absolute h-full" : "fixed h-svh",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",

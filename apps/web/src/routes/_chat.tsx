@@ -577,6 +577,7 @@ function ChatRouteLayout() {
     <Sidebar
       side="left"
       collapsible="offcanvas"
+      positioning={embeddedMode ? "container" : "viewport"}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
       className={cn("text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}

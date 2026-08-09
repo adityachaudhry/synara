@@ -286,3 +286,14 @@ The first focused test failed because no embedded/standalone shell resolver exis
 the resolver and wiring it to the existing runtime config, the test proved embedded classes contain
 no viewport height while standalone retains `svh`. Deployment verification measures the footer
 against the host boundary rather than relying only on a screenshot.
+
+**First deployment miss:** The route wrapper then measured exactly to the 885px host, but live
+Chrome geometry still put the Profile button at 1005px, below the host's 949px bottom. The shared
+desktop `Sidebar` primitive independently used `position: fixed` and `h-svh`; the open right dock
+used the same primitive, which explained the clipped sidechat composer too.
+
+**Correction:** Add an opt-in `container` positioning mode to the existing sidebar primitive. It
+uses `position: absolute` and `h-full`; the default remains fixed viewport positioning. The embedded
+chat route opts its thread sidebar into container mode, and the embedded right dock derives the same
+choice from `hostProject`. Focused static-render tests cover both modes before rebuilding the package
+and repeating the live boundary measurements.

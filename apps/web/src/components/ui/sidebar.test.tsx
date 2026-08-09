@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  Sidebar,
   SidebarHeaderTrigger,
   SidebarInset,
   SidebarMenuAction,
@@ -27,6 +28,35 @@ function renderWithQueryClient(node: ReactNode) {
 }
 
 describe("sidebar interactive cursors", () => {
+  it("positions an embedded desktop sidebar inside its host container", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <Sidebar positioning="container">Threads</Sidebar>
+      </SidebarProvider>,
+    );
+
+    const containerClasses = html.match(/data-slot="sidebar-container"[^>]*class="([^"]+)"/u)?.[1]
+      ?? html.match(/class="([^"]+)"[^>]*data-slot="sidebar-container"/u)?.[1];
+    expect(containerClasses).toContain("absolute");
+    expect(containerClasses).toContain("h-full");
+    expect(containerClasses).not.toContain("fixed");
+    expect(containerClasses).not.toContain("h-svh");
+  });
+
+  it("keeps viewport positioning as the desktop sidebar default", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <Sidebar>Threads</Sidebar>
+      </SidebarProvider>,
+    );
+
+    const containerClasses = html.match(/data-slot="sidebar-container"[^>]*class="([^"]+)"/u)?.[1]
+      ?? html.match(/class="([^"]+)"[^>]*data-slot="sidebar-container"/u)?.[1];
+    expect(containerClasses).toContain("fixed");
+    expect(containerClasses).toContain("h-svh");
+    expect(containerClasses).not.toContain("absolute");
+  });
+
   it("uses a pointer cursor for menu buttons by default", () => {
     const html = renderSidebarButton();
 
