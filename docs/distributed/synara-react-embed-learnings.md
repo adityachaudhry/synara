@@ -253,6 +253,36 @@ routes; only the active destination changes. Live Chrome verification then cover
 Workspace opened the existing company repository, and GlasswingOS returned to the embedded Synara
 thread experience without introducing a second workspace implementation.
 
+## Trial 12: Shared host chrome needs React slots and screen-pixel geometry
+
+The embedded rail had converged functionally but still looked like a nested product: Synara owned a
+logo, collapse control, resizable width, and an approximation of Glasswing's footer, while the
+Workspace route already had the canonical company identity and navigation components. Copying that
+markup again inside Synara would have made later Glasswing changes drift across two implementations.
+
+**Correction:** the React embed now accepts an optional `hostSidebar` with host-rendered header and
+footer slots plus a physical width and locked-open policy. The values travel through a React context,
+not the serializable runtime configuration. Glasswing extracts its existing company identity and
+footer into shared components and renders those exact components in both Workspace and GlasswingOS;
+Synara still owns only the scrolling thread section between them. A locked host sidebar disables
+collapse, resize persistence, and the seam rail while standalone Synara keeps all existing behavior.
+
+The first width implementation idea was to pass the Workspace's raw 320px width into Synara. That
+would have rendered as 416 physical pixels because the complete embedded surface is intentionally
+scaled to 1.3. The adapter instead treats the requested width as screen pixels and divides it by the
+active display scale before setting Synara's CSS width, preserving a 320px rail in both routes.
+
+The first testing plan also assumed the Glasswing repository had a component test runner. It does
+not; adding Vitest and a DOM environment solely for a markup extraction would have introduced
+unrelated infrastructure. The corrected verification keeps strict red/green tests around Synara's
+new presentation policy and package declaration, then uses Glasswing's existing Next production
+build and live Chrome DOM/geometry assertions for the shared host components.
+
+One more test-first failure caught a manual package-boundary hazard: the Vite runtime supported
+`hostSidebar`, but the generated `index.d.ts` still lacked it. The package-writer test failed before
+the declaration was updated, ensuring the vendored runtime and host-facing TypeScript contract now
+ship together.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,
