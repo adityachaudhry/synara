@@ -271,3 +271,18 @@ thread experience without introducing a second workspace implementation.
 4. Run Glasswing's `scripts/sync-synara-package.mjs` against `apps/web/dist-embed/package`.
 5. Inspect `synara-provenance.json`, run a Glasswing production build, and verify both the existing
    diligence views and the GlasswingOS view in Edge.
+
+## Trial 12: An embedded app must size to its host, not the browser viewport
+
+The Synara footer looked cut off even though Glasswing's host surface had the correct available
+height. Live geometry isolated the mismatch: the host began below Glasswing's 64px header and was
+885px tall, while Synara's route wrapper still applied a 949px viewport minimum and extended 64px
+below the host. The footer was present, but clipped by the host's intentional overflow boundary.
+
+**Correction:** Keep viewport units for standalone Synara, but when the existing React adapter has
+a `hostProject`, size the chat route's sidebar wrapper and main content to `h-full min-h-0`. This is
+an additive route-shell policy in Synara itself; Glasswing does not query or patch vendored DOM.
+The first focused test failed because no embedded/standalone shell resolver existed. After adding
+the resolver and wiring it to the existing runtime config, the test proved embedded classes contain
+no viewport height while standalone retains `svh`. Deployment verification measures the footer
+against the host boundary rather than relying only on a screenshot.

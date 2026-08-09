@@ -11,12 +11,15 @@ import { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerFence } from "../fence";
 import {
   makeGiteaCheckoutPlan,
+  makeGiteaCheckoutRefreshPlan,
+  parseGiteaCheckoutRefreshResult,
   parseGiteaCheckoutResult,
   type GiteaCheckoutPlan,
   type GiteaCheckoutRepositoryConfig,
 } from "../giteaCheckout";
 import {
   ProviderWorkerProvisioner,
+  type ProviderWorkerRefreshInput,
   type ProviderWorkerProvisionerShape,
 } from "../Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
@@ -59,13 +62,14 @@ function provisionError(operation: string, detail: string, cause: unknown, sandb
 }
 
 type ProvisionInput = Parameters<ProviderWorkerProvisionerShape["start"]>[0];
+type StageInput = ProvisionInput | ProviderWorkerRefreshInput;
 
-function reportStage(input: ProvisionInput, payload: RuntimeStagePayload) {
+function reportStage(input: StageInput, payload: RuntimeStagePayload) {
   return input.onStage?.(payload) ?? Effect.void;
 }
 
 function withStage<A, E, R>(input: {
-  readonly provision: ProvisionInput;
+  readonly provision: StageInput;
   readonly stage: RuntimeStage;
   readonly cold: boolean;
   readonly effect: Effect.Effect<A, E, R>;
@@ -475,6 +479,112 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const refresh: ProviderWorkerProvisionerShape["refresh"] = (binding, input) => {
+      const repositoryBinding = binding.repositoryCheckout?.binding;
+      if (repositoryBinding === undefined) return Effect.succeed(binding);
+      if (options.giteaCheckout === undefined) {
+        return Effect.fail(
+          provisionError(
+            "checkout.configure",
+            "A Gitea-bound project requires configured sandbox checkout credentials.",
+            undefined,
+            binding.workspace.runtimeId,
+          ),
+        );
+      }
+
+      const plan = Effect.try({
+        try: () =>
+          makeGiteaCheckoutRefreshPlan({
+            binding: repositoryBinding,
+            repository: options.giteaCheckout!,
+          }),
+        catch: (cause) =>
+          provisionError(
+            "checkout.validate",
+            "The project repository binding is not allowed by the sandbox checkout configuration.",
+            cause,
+            binding.workspace.runtimeId,
+          ),
+      });
+
+      return withStage({
+        provision: input,
+        stage: "workspace.checkout",
+        cold: false,
+        detail: { path: repositoryBinding.path },
+        effect: Effect.gen(function* () {
+          const refreshPlan = yield* plan;
+          const workspace = yield* workspaceRuntime.connect(binding.workspace).pipe(
+            Effect.mapError((cause) =>
+              provisionError(
+                "checkout.connect",
+                "Failed to reconnect the Gitea company workspace before refresh.",
+                cause,
+                binding.workspace.runtimeId,
+              ),
+            ),
+          );
+          const result = yield* workspaceRuntime.exec(workspace, {
+            command: refreshPlan.command,
+            timeoutSeconds: 120,
+          }).pipe(
+            Effect.mapError((cause) =>
+              provisionError(
+                "checkout.refresh",
+                "Failed to refresh the Gitea company checkout.",
+                cause,
+                workspace.runtimeId,
+              ),
+            ),
+          );
+          if (result.exitCode !== 0 || result.timedOut) {
+            return yield* provisionError(
+              "checkout.refresh",
+              `Gitea company refresh exited with ${String(result.exitCode)}${result.timedOut ? " after timing out" : ""}.`,
+              result.stderr,
+              workspace.runtimeId,
+            );
+          }
+          const refreshed = yield* Effect.try({
+            try: () => parseGiteaCheckoutRefreshResult(result.stdout),
+            catch: (cause) =>
+              provisionError(
+                "checkout.verify",
+                "The Gitea refresh did not report a verified immutable commit.",
+                cause,
+                workspace.runtimeId,
+              ),
+          });
+          return {
+            ...binding,
+            workspace,
+            cwd: refreshPlan.cwd,
+            repositoryCheckout: {
+              binding: repositoryBinding,
+              commit: refreshed.commit,
+              ...(refreshed.outcome === "updated"
+                ? { checkoutMode: refreshed.checkoutMode }
+                : binding.repositoryCheckout?.checkoutMode === undefined
+                  ? {}
+                  : { checkoutMode: binding.repositoryCheckout.checkoutMode }),
+            },
+          } satisfies ProviderWorkerRuntimeBinding;
+        }),
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError
+            ? cause
+            : provisionError(
+                "checkout.refresh",
+                "Failed to refresh the Gitea company checkout.",
+                cause,
+                binding.workspace.runtimeId,
+              ),
+        ),
+      );
+    };
+
     const stop: ProviderWorkerProvisionerShape["stop"] = (binding) =>
       broker.retire(binding.fence, "provider session stopped").pipe(
         Effect.catch(() => Effect.void),
@@ -495,7 +605,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
-    return { start, restart, stop } satisfies ProviderWorkerProvisionerShape;
+    return { start, restart, refresh, stop } satisfies ProviderWorkerProvisionerShape;
   });
 
 export function makeProviderWorkerProvisionerLive(options: ProviderWorkerProvisionerOptions) {
@@ -562,6 +672,14 @@ export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerPro
     Effect.fail(
       provisionError(
         "restart",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  refresh: () =>
+    Effect.fail(
+      provisionError(
+        "refresh",
         "Railway distributed Pi is selected but the sandbox runtime is not configured.",
         undefined,
       ),

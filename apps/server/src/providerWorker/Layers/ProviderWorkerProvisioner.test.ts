@@ -193,6 +193,88 @@ describe("ProviderWorkerProvisioner", () => {
     expect(harness.calls).toEqual(["expect", "retire", "revoke", "destroy"]);
   });
 
+  it("refreshes a bound workspace in place and reports a warm checkout stage", async () => {
+    const harness = makeHarness();
+    const repositoryBinding: ProjectRepositoryBinding = {
+      kind: "gitea-subdirectory",
+      origin: "https://glasswing-gitea-dev.up.railway.app",
+      owner: "glasswing-admin",
+      repository: "glasswing-company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+    const previous: ProviderWorkerRuntimeBinding = {
+      schemaVersion: 1,
+      runtimeKind: "railway-sandbox-pi",
+      workspace: workspaceBinding,
+      fence: {
+        sandboxId: workspaceBinding.runtimeId,
+        workerId: "b15c8b3e-50f7-474f-aef6-becf83ecae31",
+        lifecycleGeneration: "generation-1",
+      },
+      durableSessionName: "provider-worker-1",
+      processSupervision: "durable",
+      cwd: "/workspace/repository/companies/cue-cloud",
+      homeDir: "/workspace/.synara-provider-worker",
+      repositoryCheckout: {
+        binding: repositoryBinding,
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        checkoutMode: "partial",
+      },
+    };
+    harness.workspace.exec.mockReturnValue(
+      Effect.succeed({
+        exitCode: 0,
+        stdout:
+          "__SYNARA_CHECKOUT_REFRESH__=unchanged\n__SYNARA_CHECKOUT_COMMIT__=0123456789abcdef0123456789abcdef01234567\n",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+      }),
+    );
+    const stages: Array<{ readonly stage: string; readonly state: string; readonly cold: boolean }> = [];
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+        giteaCheckout: {
+          origin: repositoryBinding.origin,
+          owner: repositoryBinding.owner,
+          repository: repositoryBinding.repository,
+          ref: repositoryBinding.ref,
+          companiesRoot: "companies",
+          readToken: "gitea-secret",
+        },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    const refreshed = await Effect.runPromise(
+      provisioner.refresh(previous, {
+        onStage: (payload) =>
+          Effect.sync(() =>
+            stages.push({ stage: payload.stage, state: payload.state, cold: payload.cold }),
+          ),
+      }),
+    );
+
+    expect(harness.workspace.connect).toHaveBeenCalledWith(workspaceBinding);
+    expect(harness.workspace.create).not.toHaveBeenCalled();
+    expect(harness.workspace.exec).toHaveBeenCalledWith(
+      workspaceBinding,
+      expect.objectContaining({
+        command: expect.stringContaining("ls-remote --exit-code"),
+      }),
+    );
+    const refreshCommand = harness.workspace.exec.mock.calls[0]?.[1]?.command;
+    expect(refreshCommand).toContain("$SYNARA_GITEA_CHECKOUT_TOKEN");
+    expect(refreshCommand).not.toContain("gitea-secret");
+    expect(refreshed.repositoryCheckout).toEqual(previous.repositoryCheckout);
+    expect(stages).toEqual([
+      { stage: "workspace.checkout", state: "started", cold: false },
+      { stage: "workspace.checkout", state: "completed", cold: false },
+    ]);
+  });
+
   it("uploads an atomic worker and private config before waiting for its fenced connection", async () => {
     const harness = makeHarness();
     const provisioner = await Effect.runPromise(

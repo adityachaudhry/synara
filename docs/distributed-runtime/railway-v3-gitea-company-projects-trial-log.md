@@ -950,3 +950,47 @@ operation changed.
 not exist, and the timeline test first failed because its stable working row carried no phase label.
 After the correction, 128 focused transcript tests passed and the standalone production Vite build
 completed. Deployment and real Chrome timings are recorded below when available.
+
+## 2026-08-09 — Refresh company material before every distributed turn
+
+### Restart hydration was not a freshness contract
+
+**Observation:** Initial provisioning sparse-checked out the selected company, but an already-live
+thread sent later turns directly to the worker. A repository update made after the sandbox started
+was therefore invisible until the runtime happened to be replaced. Replacement had a second gap:
+controller recovery called `startSession` without the original project binding, so a persisted
+company runtime could be recreated as an unbound `/workspace` sandbox.
+
+**Correction:** Add a warm `refresh` operation to the existing provider-worker provisioner and call
+it before every remote turn. A bound sandbox authenticates `git ls-remote`, compares the configured
+ref with local `HEAD`, verifies `company.json`, and exits immediately when they match. Only a changed
+commit or damaged materialization fetches and checks out files. The routed adapter persists a new
+immutable commit before provider dispatch and derives a missing restart binding from the persisted
+`repositoryCheckout.binding`. Non-Gitea threads return from the same seam without a repository call.
+
+### Explicit cone checkout makes recursive company scope testable
+
+**Attempt:** The original checkout wrote `/companies/<slug>/` directly to Git's sparse-checkout
+file. A real fixture showed nested files happened to materialize, but that relied on hand-authored
+pattern semantics and did not reassert scope during an update.
+
+**Correction:** Both initial checkout and changed-commit refresh now use `git sparse-checkout
+init --cone` plus `git sparse-checkout set companies/<slug>`. A real local bare-repository test
+proved a nested diligence file appeared initially, a later deeply nested financial file appeared
+after refresh, another company's directory remained absent, and a second refresh reported
+`unchanged` without a fetch-mode marker. The first red run failed on the old sparse pattern and the
+missing refresh function; the final focused run passed all 27 checkout, provisioner, routed-adapter,
+and embedded-layout tests.
+
+### Build wrappers were more restrictive than the underlying build tools
+
+**Attempt:** Run the server's normal build wrapper and Vite from the monorepo root with the bundled
+Node runtime.
+
+**Failure:** The server wrapper shells out to `bun tsdown`, but Bun is not on this session's PATH.
+The first Vite path also pointed at a nonexistent root install while Vite is workspace-local.
+Neither failure changed source.
+
+**Correction:** Invoke the pinned `apps/server/node_modules/tsdown/dist/run.mjs` entrypoint directly
+for both controller and provider-worker bundles, and invoke `apps/web/node_modules/vite/bin/vite.js`
+from the web workspace. Both production artifacts then built with the same checked-in dependencies.

@@ -11,6 +11,7 @@ import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 import { makeRoutedPiAdapter } from "./RoutedPiAdapter";
 
 const threadId = "11111111-1111-4111-8111-111111111111" as never;
+const turnId = "22222222-2222-4222-8222-222222222222" as never;
 const runtimeBinding: ProviderWorkerRuntimeBinding = {
   schemaVersion: 1,
   runtimeKind: "railway-sandbox-pi",
@@ -78,6 +79,7 @@ function makeHarness(
     provider: "pi",
     capabilities: { sessionModelSwitch: "in-session" },
     startSession: localStart,
+    sendTurn: vi.fn(() => Effect.succeed({ threadId, turnId })),
     stopSession: vi.fn(() => Effect.void),
     stopAll: vi.fn(() => Effect.void),
     streamEvents: Stream.empty,
@@ -85,10 +87,15 @@ function makeHarness(
   const provisioner = {
     start: vi.fn(() => Effect.succeed(runtimeBinding)),
     restart: vi.fn(() => Effect.succeed(runtimeBinding)),
+    refresh: vi.fn((binding: ProviderWorkerRuntimeBinding) => Effect.succeed(binding)),
     stop: vi.fn(() => Effect.void),
   };
   const request = vi.fn((_fence, method: string) =>
-    method === "session.start" ? localStart(startInput()) : Effect.succeed(null),
+    method === "session.start"
+      ? localStart(startInput())
+      : method === "turn.send"
+        ? Effect.succeed({ threadId, turnId })
+        : Effect.succeed(null),
   );
   const broker = {
     request,
@@ -225,6 +232,81 @@ describe("RoutedPiAdapter", () => {
         adapterKey: "pi:railway-sandbox",
         runtimePayload: { distributedPiRuntime: runtimeBinding },
       }),
+    );
+  });
+
+  it("reuses the persisted repository binding when recreating a company sandbox", async () => {
+    const harness = makeHarness("railway-sandbox", repositoryRuntimeBinding);
+    harness.provisioner.restart.mockReturnValue(Effect.succeed(repositoryRuntimeBinding));
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+
+    await Effect.runPromise(adapter.startSession(startInput()));
+
+    expect(harness.provisioner.restart).toHaveBeenCalledWith(
+      repositoryRuntimeBinding,
+      expect.objectContaining({ repositoryBinding }),
+    );
+  });
+
+  it("refreshes every bound company thread before dispatching its turn", async () => {
+    const harness = makeHarness("railway-sandbox");
+    harness.provisioner.start.mockReturnValue(Effect.succeed(repositoryRuntimeBinding));
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    await Effect.runPromise(
+      adapter.startSession({ ...startInput(), repositoryBinding }),
+    );
+    harness.request.mockClear();
+    harness.upsert.mockClear();
+
+    await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "review the latest materials", attachments: [] }),
+    );
+
+    expect(harness.provisioner.refresh).toHaveBeenCalledWith(
+      repositoryRuntimeBinding,
+      expect.objectContaining({ onStage: expect.any(Function) }),
+    );
+    expect(harness.request).toHaveBeenCalledWith(
+      repositoryRuntimeBinding.fence,
+      "turn.send",
+      expect.objectContaining({ threadId, input: "review the latest materials" }),
+    );
+    expect(harness.provisioner.refresh.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.request.mock.invocationCallOrder[0]!,
+    );
+    expect(harness.upsert).not.toHaveBeenCalled();
+  });
+
+  it("persists an updated repository commit before dispatching the turn", async () => {
+    const refreshedBinding: ProviderWorkerRuntimeBinding = {
+      ...repositoryRuntimeBinding,
+      repositoryCheckout: {
+        ...repositoryRuntimeBinding.repositoryCheckout!,
+        commit: "89abcdef0123456789abcdef0123456789abcdef",
+      },
+    };
+    const harness = makeHarness("railway-sandbox");
+    harness.provisioner.start.mockReturnValue(Effect.succeed(repositoryRuntimeBinding));
+    harness.provisioner.refresh.mockReturnValue(Effect.succeed(refreshedBinding));
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    await Effect.runPromise(
+      adapter.startSession({ ...startInput(), repositoryBinding }),
+    );
+    harness.request.mockClear();
+    harness.upsert.mockClear();
+
+    await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "use the new files", attachments: [] }),
+    );
+
+    expect(harness.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId,
+        runtimePayload: { distributedPiRuntime: refreshedBinding },
+      }),
+    );
+    expect(harness.upsert.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.request.mock.invocationCallOrder[0]!,
     );
   });
 

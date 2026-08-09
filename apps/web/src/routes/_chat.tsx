@@ -27,6 +27,7 @@ import {
   resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
 import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
+import { resolveChatRouteShellClassNames } from "../lib/chatRouteLayout";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
@@ -39,6 +40,7 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
@@ -567,6 +569,8 @@ function ChatRouteLayout() {
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const resolvedSidebarOpen = isEditorView ? false : sidebarOpen;
+  const embeddedMode = readSynaraRuntimeConfig().hostProject != null;
+  const shellClassNames = resolveChatRouteShellClassNames(embeddedMode);
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
   const sidebarElement = (
@@ -592,7 +596,7 @@ function ChatRouteLayout() {
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
-    <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
+    <div className={shellClassNames.mainContent}>
       {isEditorView ? null : (
         <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
           <SidebarRail placement="content-seam" />
@@ -607,7 +611,7 @@ function ChatRouteLayout() {
       defaultOpen
       open={resolvedSidebarOpen}
       onOpenChange={setSidebarOpen}
-      className="bg-[var(--app-shell-background)]"
+      className={shellClassNames.sidebarProvider}
       data-sidebar-side="left"
     >
       <ThreadRetentionMaintenanceToast />

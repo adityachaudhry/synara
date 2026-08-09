@@ -15,6 +15,11 @@ export interface ProviderWorkerProvisionInput {
   readonly onStage?: (payload: RuntimeStagePayload) => Effect.Effect<void, never>;
 }
 
+export interface ProviderWorkerRefreshInput {
+  /** Best-effort progress sink used to expose a warm repository refresh in the transcript. */
+  readonly onStage?: (payload: RuntimeStagePayload) => Effect.Effect<void, never>;
+}
+
 export interface ProviderWorkerProvisionerShape {
   readonly start: (
     input: ProviderWorkerProvisionInput,
@@ -22,6 +27,10 @@ export interface ProviderWorkerProvisionerShape {
   readonly restart: (
     binding: ProviderWorkerRuntimeBinding,
     input: ProviderWorkerProvisionInput,
+  ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
+  readonly refresh: (
+    binding: ProviderWorkerRuntimeBinding,
+    input: ProviderWorkerRefreshInput,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,

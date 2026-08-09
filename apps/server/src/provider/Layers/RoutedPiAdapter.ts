@@ -178,6 +178,7 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     readonly threadId: Parameters<PiAdapterShape["hasSession"]>[0];
     readonly lifecycleGeneration: string;
     readonly binding: ProviderWorkerRuntimeBinding;
+    readonly operation?: "session.start" | "workspace.refresh";
   }) =>
     directory
       .upsert({
@@ -189,7 +190,11 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       })
       .pipe(
         Effect.mapError((cause) =>
-          adapterError("session.start", "Failed to persist the remote Pi runtime binding.", cause),
+          adapterError(
+            input.operation ?? "session.start",
+            "Failed to persist the remote Pi runtime binding.",
+            cause,
+          ),
         ),
       );
 
@@ -221,24 +226,26 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
       const previous = activeRemote ?? persistedRemote;
+      const repositoryBinding =
+        input.repositoryBinding ?? previous?.repositoryCheckout?.binding;
       const binding = previous
         ? yield* provisioner.restart(previous, {
             lifecycleGeneration,
             onStage: (payload) =>
               publishRuntimeStage({ threadId: input.threadId, lifecycleGeneration, payload }),
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-            ...(input.repositoryBinding === undefined
+            ...(repositoryBinding === undefined
               ? {}
-              : { repositoryBinding: input.repositoryBinding }),
+              : { repositoryBinding }),
           })
         : yield* provisioner.start({
             lifecycleGeneration,
             onStage: (payload) =>
               publishRuntimeStage({ threadId: input.threadId, lifecycleGeneration, payload }),
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-            ...(input.repositoryBinding === undefined
+            ...(repositoryBinding === undefined
               ? {}
-              : { repositoryBinding: input.repositoryBinding }),
+              : { repositoryBinding }),
           });
       const { repositoryBinding: _repositoryBinding, ...workerSessionInput } = input;
       const session = yield* withAdapterStage({
@@ -271,12 +278,44 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     route(
       input.threadId,
       (binding) =>
-        withAdapterStage({
-          threadId: input.threadId,
-          lifecycleGeneration: binding.fence.lifecycleGeneration,
-          stage: "turn.dispatch",
-          cold: false,
-          effect: requestDecoded(binding, "turn.send", input, ProviderTurnStartResult),
+        Effect.gen(function* () {
+          const refreshed = yield* provisioner.refresh(binding, {
+            onStage: (payload) =>
+              publishRuntimeStage({
+                threadId: input.threadId,
+                lifecycleGeneration: binding.fence.lifecycleGeneration,
+                payload,
+              }),
+          }).pipe(
+            Effect.mapError((cause) =>
+              adapterError(
+                "workspace.refresh",
+                "Failed to refresh the company workspace before the Pi turn.",
+                cause,
+              ),
+            ),
+          );
+          remoteByThread.set(input.threadId, refreshed);
+          const previousCheckout = binding.repositoryCheckout;
+          const refreshedCheckout = refreshed.repositoryCheckout;
+          const checkoutChanged =
+            previousCheckout?.commit !== refreshedCheckout?.commit ||
+            previousCheckout?.checkoutMode !== refreshedCheckout?.checkoutMode;
+          if (checkoutChanged) {
+            yield* persistRemoteBinding({
+              threadId: input.threadId,
+              lifecycleGeneration: refreshed.fence.lifecycleGeneration,
+              binding: refreshed,
+              operation: "workspace.refresh",
+            });
+          }
+          return yield* withAdapterStage({
+            threadId: input.threadId,
+            lifecycleGeneration: refreshed.fence.lifecycleGeneration,
+            stage: "turn.dispatch",
+            cold: false,
+            effect: requestDecoded(refreshed, "turn.send", input, ProviderTurnStartResult),
+          });
         }),
       local.sendTurn(input),
     );
