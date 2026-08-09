@@ -99,7 +99,16 @@ export interface DraftReusePlanFresh {
   kind: "fresh";
 }
 
-export type ThreadBootstrapPlan = DraftReusePlanStored | DraftReusePlanRoute | DraftReusePlanFresh;
+export interface DraftReusePlanActiveUnstarted {
+  kind: "active-unstarted";
+  threadId: ThreadId;
+}
+
+export type ThreadBootstrapPlan =
+  | DraftReusePlanStored
+  | DraftReusePlanRoute
+  | DraftReusePlanActiveUnstarted
+  | DraftReusePlanFresh;
 
 interface ResolveTerminalThreadCreationStateInput {
   activeDraftThread: DraftThreadState | null;
@@ -176,6 +185,7 @@ export function createActiveDraftThreadSnapshot(
 
 // Decide whether we should reuse a stored draft, the current route draft, or create a fresh one.
 export function resolveThreadBootstrapPlan(input: {
+  activeUnstartedThreadId?: ThreadId | null;
   entryPoint: ThreadPrimarySurface;
   latestActiveDraftThread: DraftThreadState | null;
   projectId: ProjectId;
@@ -195,6 +205,9 @@ export function resolveThreadBootstrapPlan(input: {
       threadId: input.routeThreadId!,
       draftThread: input.latestActiveDraftThread!,
     };
+  }
+  if (input.activeUnstartedThreadId) {
+    return { kind: "active-unstarted", threadId: input.activeUnstartedThreadId };
   }
   if (input.storedDraftThread) {
     return {

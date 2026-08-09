@@ -34,4 +34,27 @@ describe("Synara runtime configuration", () => {
     );
     expect(resolveWebSocketUrl).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves optional embedded shell navigation and profile adapters", () => {
+    const onSelectWorkspace = vi.fn();
+    const onSignOut = vi.fn();
+
+    configureSynaraRuntime({
+      hostNavigation: {
+        onSelectWorkspace,
+        profile: {
+          email: "jane.doe@glasswing.vc",
+          onSignOut,
+        },
+      },
+    });
+
+    expect(readSynaraRuntimeConfig().hostNavigation).toEqual({
+      onSelectWorkspace,
+      profile: {
+        email: "jane.doe@glasswing.vc",
+        onSignOut,
+      },
+    });
+  });
 });

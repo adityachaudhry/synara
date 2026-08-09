@@ -32,7 +32,8 @@ export const PROJECT_CREATE_SYNC_ERROR =
 // this Anthropic entry whenever Anthropic credentials are available.
 export const GITEA_COMPANY_DEFAULT_MODEL_SELECTION = {
   provider: "pi",
-  model: "anthropic/claude-fable-5",
+  model: "anthropic/claude-opus-5",
+  options: { thinkingLevel: "high" },
 } as const satisfies ModelSelection;
 
 function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {

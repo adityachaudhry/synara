@@ -214,6 +214,37 @@ The first host-package refresh was run from the Glasswing repository root and fa
 `web/scripts`. Re-running from `web` succeeded without cleanup because the failed command had not
 changed any files. Keep the host working directory explicit in future refresh automation.
 
+## Trial 11: Embedded navigation needs an explicit adapter, not duplicated host UI
+
+The existing host rail already owned GlasswingOS, Workspace, and Profile, while the embedded
+Synara rail owned threads. Keeping both rails on the agent route made the integration feel nested;
+copying the Workspace implementation into Synara would have created a second workspace primitive
+and a long-term synchronization problem.
+
+**Correction:** the optional React embed contract now carries only host navigation callbacks and
+profile identity. On the GlasswingOS route the host suppresses its duplicate left rail and Synara
+renders GlasswingOS, Workspace, and Profile beneath the project-scoped thread list. Workspace still
+navigates to the existing host route, where the original host rail and Workspace implementation
+remain intact. Standalone Synara receives no adapter and retains its existing picker and Settings
+footer.
+
+The first empty-thread design reused only local composer drafts. That missed prewarmed threads
+after they had already been promoted to durable orchestration state, because promotion removes the
+draft mapping. The bootstrap plan now recognizes the active same-project thread as reusable until
+it contains a user message; explicit `fresh` and temporary-thread requests still bypass reuse.
+
+Two focused browser attempts failed for test-fixture reasons while validating this correction.
+The embedded heading fixture expected lowercase `project`, while the actual catalog title is
+`Project`; matching the real title fixed the assertion. The durable-thread regression then found
+the visible Glasswing `New thread` button by role but still called an old helper that waited for a
+standalone-only test id. Removing that stale helper made the regression exercise the actual
+embedded control.
+
+The right-panel regression confirmed a separate presentation coupling: the launcher was nested
+inside the Environment conditional, so hiding Environment also hid the panel control. Rendering
+the launcher on the hidden-environment branch restores it without re-enabling Add action or
+Environment.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

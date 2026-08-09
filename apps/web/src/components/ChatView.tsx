@@ -129,6 +129,7 @@ import { resolveFirstSendTarget } from "../lib/chatFirstSend";
 import { readActiveSpaceId } from "../spacesUiStore";
 import {
   createOrRecoverProjectFromPath,
+  GITEA_COMPANY_DEFAULT_MODEL_SELECTION,
   PROJECT_CREATE_EXISTING_SYNC_ERROR,
   PROJECT_CREATE_SYNC_ERROR,
 } from "../lib/projectCreation";
@@ -268,6 +269,7 @@ import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -1203,6 +1205,7 @@ export default function ChatView({
   );
   const isEditorRail = presentationMode === "editor";
   const glasswingMode = getGlasswingModeForCurrentPage();
+  const embeddedHostProject = readSynaraRuntimeConfig().hostProject ?? null;
   const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
   const usesGlasswingDockLauncher =
     glasswingMode && surfaceMode === "single" && !isEditorRail;
@@ -2164,8 +2167,18 @@ export default function ChatView({
 
   const sessionProvider = activeThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
+  const glasswingUnstartedThread =
+    glasswingMode &&
+    activeThread?.latestUserMessageAt == null &&
+    !(activeThread?.messages.some((message) => message.role === "user") ?? false);
+  const effectiveThreadModelSelection = glasswingUnstartedThread
+    ? null
+    : (activeThread?.modelSelection ?? null);
+  const effectiveProjectModelSelection = glasswingMode
+    ? GITEA_COMPANY_DEFAULT_MODEL_SELECTION
+    : (activeProject?.defaultModelSelection ?? null);
   const threadProvider =
-    activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
+    effectiveThreadModelSelection?.provider ?? effectiveProjectModelSelection?.provider ?? null;
   const hasThreadStarted = Boolean(
     activeThread &&
     (activeThread.latestTurn !== null ||
@@ -2185,8 +2198,8 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
-    const threadModelSelection = activeThread?.modelSelection ?? null;
-    const projectModelSelection = activeProject?.defaultModelSelection ?? null;
+    const threadModelSelection = effectiveThreadModelSelection;
+    const projectModelSelection = effectiveProjectModelSelection;
     const draftSelections = composerDraft.modelSelectionByProvider;
 
     const resolveHint = (provider: ProviderKind): string | null =>
@@ -2206,8 +2219,8 @@ export default function ChatView({
       pi: resolveHint("pi"),
     };
   }, [
-    activeProject?.defaultModelSelection,
-    activeThread?.modelSelection,
+    effectiveProjectModelSelection,
+    effectiveThreadModelSelection,
     composerDraft.modelSelectionByProvider,
   ]);
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
@@ -2233,8 +2246,8 @@ export default function ChatView({
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
     selectedProvider,
-    threadModelSelection: activeThread?.modelSelection,
-    projectModelSelection: activeProject?.defaultModelSelection,
+    threadModelSelection: effectiveThreadModelSelection,
+    projectModelSelection: effectiveProjectModelSelection,
     customModelsByProvider,
     availableModelOptionsByProvider: modelOptionsByProvider,
   });
@@ -10729,7 +10742,8 @@ export default function ChatView({
     hasLatestTurn: activeThread.latestTurn !== null,
     projectKind: activeProject?.kind,
   });
-  const showEmptyLandingProjectPicker = emptyLandingProjectPickerMode !== "hidden";
+  const showEmptyLandingProjectPicker =
+    embeddedHostProject === null && emptyLandingProjectPickerMode !== "hidden";
   const showContainerChatWorkspacePicker =
     isEmptyChatLanding && (isHomeChatContainer || isStudioContainer);
   const emptyLandingProjectChip =
@@ -11714,7 +11728,15 @@ export default function ChatView({
                               }
                             />
                           ) : (
-                            <span className="text-inherit">
+                            <span
+                              data-testid="empty-landing-heading-project-name"
+                              className={cn(
+                                "text-inherit",
+                                embeddedHostProject
+                                  ? "underline decoration-destructive decoration-[1.5px] underline-offset-[6px]"
+                                  : "",
+                              )}
+                            >
                               {activeProjectDisplayName ?? "this folder"}
                             </span>
                           )}

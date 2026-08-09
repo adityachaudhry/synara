@@ -128,7 +128,8 @@ describe("createOrRecoverProjectFromPath", () => {
         title: "Cue Cloud",
         defaultModelSelection: {
           provider: "pi",
-          model: "anthropic/claude-fable-5",
+          model: "anthropic/claude-opus-5",
+          options: { thinkingLevel: "high" },
         },
         repositoryBinding,
       }),

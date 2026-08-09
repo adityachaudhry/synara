@@ -29,6 +29,8 @@ import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { getGlasswingModeForCurrentPage } from "../glasswingMode";
+import { GITEA_COMPANY_DEFAULT_MODEL_SELECTION } from "../lib/projectCreation";
 
 export interface NewThreadNavigationOptions {
   /**
@@ -127,6 +129,15 @@ export function useHandleNewThread() {
         ? latestActiveDraftThreadCandidate
         : null;
     const bootstrapPlan = resolveThreadBootstrapPlan({
+      activeUnstartedThreadId:
+        !shouldForceFreshThread &&
+        !wantsTemporaryThread &&
+        entryPoint === "chat" &&
+        activeThread?.projectId === projectId &&
+        activeThread.latestUserMessageAt == null &&
+        !activeThread.messages.some((message) => message.role === "user")
+          ? activeThread.id
+          : null,
       storedDraftThread,
       latestActiveDraftThread,
       entryPoint,
@@ -135,8 +146,10 @@ export function useHandleNewThread() {
     });
     // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
     const projectDefaultModelSelection =
-      useStore.getState().projects.find((project) => project.id === projectId)
-        ?.defaultModelSelection ?? null;
+      getGlasswingModeForCurrentPage()
+        ? GITEA_COMPANY_DEFAULT_MODEL_SELECTION
+        : (useStore.getState().projects.find((project) => project.id === projectId)
+            ?.defaultModelSelection ?? null);
     const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
     const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(activeDraftThread, projectId);
     const resolveCreationState = (
@@ -265,6 +278,18 @@ export function useHandleNewThread() {
         }
         return bootstrapPlan.threadId;
       })();
+    }
+
+    if (bootstrapPlan.kind === "active-unstarted") {
+      activateThreadEntryPoint(bootstrapPlan.threadId);
+      if (focusedThreadId !== bootstrapPlan.threadId) {
+        return navigate({
+          to: "/$threadId",
+          params: { threadId: bootstrapPlan.threadId },
+          ...(navigation?.search ? { search: navigation.search } : {}),
+        }).then(() => bootstrapPlan.threadId);
+      }
+      return Promise.resolve(bootstrapPlan.threadId);
     }
 
     return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async () => {

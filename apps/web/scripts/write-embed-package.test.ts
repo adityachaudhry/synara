@@ -71,6 +71,8 @@ describe("writeEmbedPackage", () => {
     });
     expect(declarations).toContain("export interface SynaraHostProjectSelection");
     expect(declarations).toContain("readonly hostProject?: SynaraHostProject;");
+    expect(declarations).toContain("export interface SynaraHostNavigation");
+    expect(declarations).toContain("readonly hostNavigation?: SynaraHostNavigation;");
     await expect(fs.stat(path.join(fixture.outputDir, "route-chunk.js"))).resolves.toBeDefined();
   });
 

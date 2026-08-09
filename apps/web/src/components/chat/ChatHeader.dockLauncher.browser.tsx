@@ -71,6 +71,55 @@ describe("ChatHeader right-dock launcher", () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
+  it("keeps the panels toggle when embedded chrome hides environment controls", async () => {
+    const onToggle = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <SidebarProvider>
+          <ChatHeader
+            activeThreadId={ThreadId.makeUnsafe("thread-hidden-environment")}
+            activeThreadTitle="Embedded header"
+            activeThreadEntryPoint="chat"
+            activeProvider="pi"
+            activeProjectName="Cue Cloud"
+            threadBreadcrumbs={[]}
+            isGitRepo
+            openInTarget={null}
+            activeProjectScripts={undefined}
+            preferredScriptId={null}
+            keybindings={[]}
+            availableEditors={[]}
+            diffToggleShortcutLabel={null}
+            handoffBadgeLabel={null}
+            handoffActionLabel="Hand off"
+            handoffDisabled
+            handoffActionTargetProviders={[]}
+            handoffBadgeSourceProvider={null}
+            handoffBadgeTargetProvider={null}
+            gitCwd={null}
+            diffTotals={{ additions: 0, deletions: 0, hasChanges: false }}
+            diffOpen={false}
+            onRunProjectScript={vi.fn()}
+            onAddProjectScript={vi.fn()}
+            onUpdateProjectScript={vi.fn()}
+            onDeleteProjectScript={vi.fn()}
+            onToggleDiff={vi.fn()}
+            onCreateHandoff={vi.fn()}
+            onNavigateToThread={vi.fn()}
+            onRenameThread={vi.fn()}
+            hideEnvironmentControls
+            dockLauncherAction={{ open: false, onToggle }}
+          />
+        </SidebarProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(page.getByRole("button", { name: "Open panels" })).toBeVisible();
+    expect(page.getByRole("button", { name: /Environment/i }).query()).toBeNull();
+  });
+
   it("omits the Handoff action when the host requests Glasswing chrome", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 

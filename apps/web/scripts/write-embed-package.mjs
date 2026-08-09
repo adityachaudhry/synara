@@ -30,10 +30,21 @@ export interface SynaraHostProject {
   readonly onSelectProject?: (project: SynaraHostProjectSelection) => void;
 }
 
+export interface SynaraHostProfile {
+  readonly email: string;
+  readonly onSignOut: () => void | Promise<void>;
+}
+
+export interface SynaraHostNavigation {
+  readonly onSelectWorkspace: () => void;
+  readonly profile: SynaraHostProfile;
+}
+
 export interface SynaraRuntimeConfig {
   readonly httpBaseUrl?: string;
   readonly resolveWebSocketUrl?: SynaraWebSocketUrlResolver;
   readonly hostProject?: SynaraHostProject;
+  readonly hostNavigation?: SynaraHostNavigation;
 }
 
 export interface SynaraAppProps extends SynaraRuntimeConfig {

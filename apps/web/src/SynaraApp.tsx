@@ -27,11 +27,13 @@ export function SynaraApp({
   httpBaseUrl,
   resolveWebSocketUrl,
   hostProject,
+  hostNavigation,
 }: SynaraAppProps) {
   configureSynaraRuntime({
     ...(httpBaseUrl ? { httpBaseUrl } : {}),
     ...(resolveWebSocketUrl ? { resolveWebSocketUrl } : {}),
     ...(hostProject ? { hostProject } : {}),
+    ...(hostNavigation ? { hostNavigation } : {}),
   });
   const router = useMemo(() => getRouter(history), [history]);
 

@@ -908,7 +908,9 @@ export function ChatHeader({
             Environment panel. The right-side panel control stays beside it, acting as the
             multi-pane dock toggle on single chats and the legacy diff toggle in split hosts.
             Falls back to the legacy controls when no environment is resolved. */}
-        {hideEnvironmentControls ? null : environment ? (
+        {hideEnvironmentControls ? (
+          dockLauncherControl ?? rightPanelToggleControl
+        ) : environment ? (
           <>
             <EnvironmentToggle environment={environment} />
             {dockLauncherControl ?? rightPanelToggleControl}

@@ -3775,6 +3775,34 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps the embedded project underlined in Glasswing red without making it switchable", async () => {
+    const onSelectWorkspace = vi.fn();
+    configureSynaraRuntime({
+      hostProject: { name: "Cue Cloud", slug: "cue-cloud" },
+      hostNavigation: {
+        onSelectWorkspace,
+        profile: { email: "jane.doe@glasswing.vc", onSignOut: vi.fn() },
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+    });
+
+    try {
+      expect(page.getByTestId("empty-landing-heading-project-trigger").query()).toBeNull();
+      const projectName = page.getByTestId("empty-landing-heading-project-name");
+      await expect.element(projectName).toHaveTextContent("Project");
+      expect(projectName.element().className).toContain("decoration-destructive");
+      expect(page.getByRole("button", { name: "Switch project" }).query()).toBeNull();
+      await page.getByRole("button", { name: "Workspace" }).click();
+      expect(onSelectWorkspace).toHaveBeenCalledOnce();
+      expect(page.getByRole("button", { name: "Profile" })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("runs project scripts from local draft threads at the project cwd", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {
@@ -5846,7 +5874,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const newThreadButton = page.getByTestId("new-thread-button");
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
       await expect.element(newThreadButton).toBeInTheDocument();
 
       await newThreadButton.click();
@@ -6689,7 +6717,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("creates a fresh draft after the previous draft thread is promoted", async () => {
+  it("reuses a promoted zero-message thread when New thread is clicked again", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -6721,9 +6749,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const newThreadButton = page.getByTestId("new-thread-button");
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
       await expect.element(newThreadButton).toBeInTheDocument();
-      await waitForNewThreadShortcutLabel();
       await waitForServerConfigToApply();
       await newThreadButton.click();
 
@@ -6738,12 +6765,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       syncServerReadModel(addThreadToSnapshot(fixture.snapshot, promotedThreadId));
       useComposerDraftStore.getState().clearDraftThread(promotedThreadId);
 
-      const freshThreadPath = await triggerChatNewShortcutUntilPath(
-        mounted.router,
-        (path) => UUID_ROUTE_RE.test(path) && path !== promotedThreadPath,
-        "Shortcut should create a fresh draft instead of reusing the promoted thread.",
-      );
-      expect(freshThreadPath).not.toBe(promotedThreadPath);
+      await newThreadButton.click();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 64));
+
+      expect(mounted.router.state.location.pathname).toBe(promotedThreadPath);
     } finally {
       await mounted.cleanup();
     }

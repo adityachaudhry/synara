@@ -16,6 +16,16 @@ export interface SynaraHostProject {
   readonly onSelectProject?: (project: SynaraHostProjectSelection) => void;
 }
 
+export interface SynaraHostProfile {
+  readonly email: string;
+  readonly onSignOut: () => void | Promise<void>;
+}
+
+export interface SynaraHostNavigation {
+  readonly onSelectWorkspace: () => void;
+  readonly profile: SynaraHostProfile;
+}
+
 export interface SynaraRuntimeConfig {
   /** Prefix used to proxy Synara's HTTP routes through the embedding host. */
   readonly httpBaseUrl?: string;
@@ -23,6 +33,8 @@ export interface SynaraRuntimeConfig {
   readonly resolveWebSocketUrl?: SynaraWebSocketUrlResolver;
   /** Optional project context supplied by a native embedding host such as Glasswing. */
   readonly hostProject?: SynaraHostProject;
+  /** Optional host-owned destinations rendered by the embedded Synara shell. */
+  readonly hostNavigation?: SynaraHostNavigation;
 }
 
 let runtimeConfig: SynaraRuntimeConfig = {};
@@ -34,6 +46,7 @@ export function configureSynaraRuntime(config: SynaraRuntimeConfig): void {
       ? { resolveWebSocketUrl: config.resolveWebSocketUrl }
       : {}),
     ...(config.hostProject ? { hostProject: config.hostProject } : {}),
+    ...(config.hostNavigation ? { hostNavigation: config.hostNavigation } : {}),
   };
 }
 

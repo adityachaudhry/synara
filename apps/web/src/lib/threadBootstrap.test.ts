@@ -141,6 +141,18 @@ describe("threadBootstrap", () => {
       resolveThreadBootstrapPlan({
         storedDraftThread: null,
         latestActiveDraftThread: null,
+        activeUnstartedThreadId: THREAD_ID,
+        entryPoint: "terminal",
+        projectId: PROJECT_ID,
+        routeThreadId: null,
+      }),
+    ).toEqual({ kind: "active-unstarted", threadId: THREAD_ID });
+
+    expect(
+      resolveThreadBootstrapPlan({
+        storedDraftThread: null,
+        latestActiveDraftThread: null,
+        activeUnstartedThreadId: null,
         entryPoint: "terminal",
         projectId: PROJECT_ID,
         routeThreadId: null,

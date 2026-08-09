@@ -28,6 +28,7 @@ import {
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
+  UsersIcon,
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
@@ -1383,9 +1384,73 @@ function GlasswingProjectPicker({
   );
 }
 
+function EmbeddedHostNavigationFooter() {
+  const hostNavigation = readSynaraRuntimeConfig().hostNavigation;
+  if (!hostNavigation) return null;
+
+  const rowClassName = cn(
+    SIDEBAR_HEADER_ROW_CLASS_NAME,
+    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+    SIDEBAR_ROW_HOVER_CLASS_NAME,
+  );
+
+  return (
+    <SidebarMenu className="gap-0.5">
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          size="sm"
+          data-active
+          aria-current="page"
+          className={cn(SIDEBAR_HEADER_ROW_CLASS_NAME, SIDEBAR_ROW_ACTIVE_CLASS_NAME)}
+        >
+          <SidebarLeadingIcon size="sm" tone="text-inherit">
+            <SidebarGlyph icon={ChatBubbleIcon} variant="leading" />
+          </SidebarLeadingIcon>
+          <span>GlasswingOS</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          size="sm"
+          className={rowClassName}
+          onClick={hostNavigation.onSelectWorkspace}
+        >
+          <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
+            <SidebarGlyph icon={FolderOpenIcon} variant="leading" />
+          </SidebarLeadingIcon>
+          <span>Workspace</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      <SidebarMenuItem>
+        <Menu>
+          <MenuTrigger
+            render={
+              <SidebarMenuButton size="sm" className={rowClassName} aria-label="Profile" />
+            }
+          >
+            <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
+              <SidebarGlyph icon={UsersIcon} variant="leading" />
+            </SidebarLeadingIcon>
+            <span>Profile</span>
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="start" side="top" className="min-w-64">
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+              {hostNavigation.profile.email}
+            </div>
+            <MenuSeparator />
+            <MenuItem onClick={() => void hostNavigation.profile.onSignOut()}>Log out</MenuItem>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      </SidebarMenuItem>
+    </SidebarMenu>
+  );
+}
+
 export default function Sidebar() {
   const glasswingMode = getGlasswingModeForCurrentPage();
-  const hostProject = readSynaraRuntimeConfig().hostProject ?? null;
+  const runtimeConfig = readSynaraRuntimeConfig();
+  const hostProject = runtimeConfig.hostProject ?? null;
+  const embeddedMode = hostProject !== null;
   const projectScopedGlasswingShell = glasswingMode;
   const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
   const githubProvisioningAvailable = useSyncExternalStore(
@@ -6098,25 +6163,31 @@ export default function Sidebar() {
           <>
             <div className="flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5">
               {projectScopedGlasswingShell ? (
-                <GlasswingProjectPicker
-                  projects={glasswingProjectOptions}
-                  selectedProjectId={glasswingSelectedProject?.id ?? null}
-                  selectedProjectName={
-                    glasswingSelectedProject?.name ?? hostProject?.name ?? "Projects"
-                  }
-                  onSelectProject={(project) => {
-                    void activateGlasswingProjectSelection({
-                      project,
-                      activateProject: (projectId) =>
-                        handleNewThread(projectId, {
-                          envMode: resolveSidebarNewThreadEnvMode({
-                            defaultEnvMode: appSettings.defaultThreadEnvMode,
+                embeddedMode ? (
+                  <div className="flex h-8 min-w-0 items-center px-2.5">
+                    <span className="font-display min-w-0 truncate text-[17px] text-foreground">
+                      {glasswingSelectedProject?.name ?? hostProject.name}
+                    </span>
+                  </div>
+                ) : (
+                  <GlasswingProjectPicker
+                    projects={glasswingProjectOptions}
+                    selectedProjectId={glasswingSelectedProject?.id ?? null}
+                    selectedProjectName={glasswingSelectedProject?.name ?? "Projects"}
+                    onSelectProject={(project) => {
+                      void activateGlasswingProjectSelection({
+                        project,
+                        activateProject: (projectId) =>
+                          handleNewThread(projectId, {
+                            envMode: resolveSidebarNewThreadEnvMode({
+                              defaultEnvMode: appSettings.defaultThreadEnvMode,
+                            }),
                           }),
-                        }),
-                      hostProject,
-                    });
-                  }}
-                />
+                        hostProject,
+                      });
+                    }}
+                  />
+                )
               ) : (
                 <SidebarSurfacePicker
                   views={["threads", ...(studioSectionVisible ? (["studio"] as const) : [])]}
@@ -6575,6 +6646,9 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
+        {embeddedMode && runtimeConfig.hostNavigation ? (
+          <EmbeddedHostNavigationFooter />
+        ) : (
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
@@ -6645,6 +6719,7 @@ export default function Sidebar() {
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
+        )}
       </SidebarFooter>
 
       <CreateProjectDialog
