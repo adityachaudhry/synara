@@ -229,7 +229,7 @@ git commit -m "Scale embedded Synara as one app surface"
 - Modify: `/private/tmp/glasswing-ai-2-synara-react-embed/web/src/components/synara/synara-workspace-runtime.tsx`
 - Replace generated package contents: `/private/tmp/glasswing-ai-2-synara-react-embed/web/vendor/synara-react/`
 - Modify dependency lockfile only if the package sync changes it: `/private/tmp/glasswing-ai-2-synara-react-embed/web/package-lock.json`
-- Record: `docs/distributed-v3-trial-log.md`
+- Record: `docs/distributed-runtime/railway-v3-gitea-company-projects-trial-log.md`
 
 **Interfaces:**
 - Consumes: `SynaraAppProps.displayScale?: number` from Task 2.
@@ -237,12 +237,19 @@ git commit -m "Scale embedded Synara as one app surface"
 
 - [ ] **Step 1: Build the deterministic Synara embed package**
 
-Resolve the current adapter commit and its merge base with `upstream/main`, then run:
+Resolve the current adapter commit and its merge base with this checkout's upstream remote,
+`emanuele/main`, then run the checked-in Vite and package-writer entrypoints with bundled Node:
 
 ```bash
-SYNARA_COMMIT="$(git rev-parse HEAD)" \
-SYNARA_UPSTREAM_COMMIT="$(git merge-base HEAD upstream/main)" \
-bun --cwd apps/web run build:embed
+NODE_BIN="/Users/adityachaudhry/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+SYNARA_COMMIT="$(git rev-parse HEAD)"
+SYNARA_UPSTREAM_COMMIT="$(git merge-base HEAD emanuele/main)"
+(
+  cd apps/web
+  "$NODE_BIN" node_modules/vite/bin/vite.js build --config vite.embed.config.ts
+  SYNARA_COMMIT="$SYNARA_COMMIT" SYNARA_UPSTREAM_COMMIT="$SYNARA_UPSTREAM_COMMIT" \
+    "$NODE_BIN" scripts/write-embed-package.mjs
+)
 ```
 
 Expected: `apps/web/dist-embed/package` contains `index.js`, `style.css`, `index.d.ts`, and `synara-provenance.json` with non-empty commit identifiers.
@@ -258,15 +265,22 @@ displayScale={1.3}
 - [ ] **Step 3: Build both production surfaces**
 
 ```bash
-bun --cwd apps/web run build
-npm --prefix /private/tmp/glasswing-ai-2-synara-react-embed/web run build
+NODE_BIN="/Users/adityachaudhry/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+(
+  cd apps/web
+  "$NODE_BIN" node_modules/vite/bin/vite.js build
+)
+PATH="$(dirname "$NODE_BIN"):$PATH" \
+  "$NODE_BIN" /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js run build \
+  --prefix /private/tmp/glasswing-ai-2-synara-react-embed/web
 ```
 
 Expected: both production builds exit 0. Do not substitute workspace-wide lint/typecheck commands.
 
 - [ ] **Step 4: Record the trial and compatibility finding**
 
-Append a dated entry to `docs/distributed-v3-trial-log.md` stating:
+Append a dated entry to
+`docs/distributed-runtime/railway-v3-gitea-company-projects-trial-log.md` stating:
 
 - Live 100% Chrome measurements showed Synara at 12px type and 28px rows inside a 16px Glasswing host.
 - Font-only and density-only changes were rejected because they do not scale the full surface.
@@ -301,4 +315,3 @@ Expected: `browserScale === 1`, `displayScale === "1.3"`, and both overflow delt
 - [ ] **Step 8: Finalize the Chrome tab only after all browser checks**
 
 Keep the verified live Glasswing tab as `deliverable`. This must be the last Chrome action.
-

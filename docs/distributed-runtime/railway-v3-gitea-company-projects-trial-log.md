@@ -1004,3 +1004,41 @@ Neither failure changed source.
 **Correction:** Invoke the pinned `apps/server/node_modules/tsdown/dist/run.mjs` entrypoint directly
 for both controller and provider-worker bundles, and invoke `apps/web/node_modules/vite/bin/vite.js`
 from the web workspace. Both production artifacts then built with the same checked-in dependencies.
+
+## 2026-08-09 — Normalize the embedded Synara display scale
+
+### The small appearance was full-surface density, not browser zoom or one font
+
+**Observation:** At Chrome zoom 100%, `window.visualViewport.scale` was `1`, while the embedded
+Synara root exposed 12px base/UI/chat variables and 28px thread rows inside Glasswing's 16px host.
+The sidebar, headers, icons, controls, gutters, composer, and type all appeared proportionally small.
+
+**Rejected approaches:** Raising only the chat or base font would leave the rest of the geometry
+unchanged. Forcing Synara's spacious density would enlarge some rows and gaps but not every fixed
+surface. A transform-only host override would magnify without reflowing and could clip or blur the
+app.
+
+**Correction:** Add an optional, bounded `displayScale` to the existing reusable `SynaraApp` host
+adapter. Values normalize to `1` through `1.5`; Glasswing selects `1.3`, while standalone Synara
+omits the prop and preserves its original element tree. The opt-in wrapper uses CSS layout zoom and
+reciprocal `76.923%` logical dimensions, so the full app grows and reflows while its visual edges
+remain exactly inside the existing host. The model picker portals to `body` and already inherits
+Glasswing's 16px base, which aligns closely with the main surface's rendered 15.6px type after the
+scale correction.
+
+### Package-build assumptions were corrected instead of hidden
+
+**First failure:** The initial provenance command used `git merge-base HEAD upstream/main`, but
+this checkout has no `upstream` remote. The actual upstream remote is `emanuele`, so the package now
+records merge base `1fa1c61a14eebaf01136f516591d7f57f0711cc4` from `emanuele/main`.
+
+**Second failure:** The documented Bun wrapper was unavailable in this shell. As in the earlier
+server/web build correction, the embed package was built with the checked-in Vite entrypoint and
+the deterministic package writer under the bundled Node runtime. It produced Synara provenance
+`7a936409e4cdbd90b19c108054a2823465aedc7c` and a declaration containing `displayScale?: number`.
+
+**Third failure:** The first Glasswing `npm run build` resolved `/usr/local/bin/node` 18.17.1, below
+Next.js 16's Node 20.9 minimum. Calling npm with Node 24 was insufficient by itself because npm's
+child script still found Node 18 from `PATH`. Prepending the bundled Node bin directory corrected
+the child environment; the same source then completed the Next.js production build. Synara's Vite
+production build also completed, and 14 focused display-scale/runtime/package tests passed.
