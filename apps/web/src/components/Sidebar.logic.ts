@@ -57,10 +57,12 @@ export type SidebarActionBadge = {
 export async function activateGlasswingProjectSelection(input: {
   readonly project: Pick<Project, "id" | "name" | "cwd">;
   readonly activateProject: (projectId: ProjectId) => Promise<unknown>;
-  readonly selectHostProject?: (project: { readonly name: string; readonly cwd: string }) => void;
+  readonly hostProject?: {
+    readonly onSelectProject?: (project: { readonly name: string; readonly cwd: string }) => void;
+  } | null;
 }): Promise<void> {
   await input.activateProject(input.project.id);
-  input.selectHostProject?.({ name: input.project.name, cwd: input.project.cwd });
+  input.hostProject?.onSelectProject?.({ name: input.project.name, cwd: input.project.cwd });
 }
 
 export function isProjectsSidebarSurface(input: {

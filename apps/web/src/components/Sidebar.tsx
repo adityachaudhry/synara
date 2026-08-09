@@ -6113,7 +6113,7 @@ export default function Sidebar() {
                             defaultEnvMode: appSettings.defaultThreadEnvMode,
                           }),
                         }),
-                      selectHostProject: hostProject.onSelectProject,
+                      hostProject,
                     });
                   }}
                 />

@@ -181,6 +181,15 @@ Vitest config resolves `src/routes` relative to `apps/web`; it failed during con
 collecting the test. Re-running the identical case from `apps/web` produced the intended RED
 (Environment was rendered) and then GREEN after the shared Glasswing-mode gate was applied.
 
+The first live standalone acceptance pass exposed a separate adapter-ownership mistake. The picker
+opened and marked Nth as active, but clicking it left Cue Cloud selected. The standalone runtime has
+no host project object, while the click handler evaluated `hostProject.onSelectProject` before the
+shared activation helper could run. Embedded Glasswing hid the bug because its host object exists.
+Passing the nullable host object across the helper boundary, then optional-chaining its callback
+inside the helper, keeps native draft activation mandatory and outer host navigation optional. The
+regression test covers both the null-host standalone path and the embedded activation-before-host
+ordering.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

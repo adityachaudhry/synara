@@ -86,6 +86,25 @@ describe("isProjectsSidebarSurface", () => {
 });
 
 describe("activateGlasswingProjectSelection", () => {
+  it("activates the standalone project when no embedding host is present", async () => {
+    const calls: string[] = [];
+    const project = {
+      id: ProjectId.makeUnsafe("project-nth"),
+      name: "Nth",
+      cwd: "/workspace/nth",
+    };
+
+    await activateGlasswingProjectSelection({
+      project,
+      activateProject: async (projectId) => {
+        calls.push(`activate:${projectId}`);
+      },
+      hostProject: null,
+    });
+
+    expect(calls).toEqual(["activate:project-nth"]);
+  });
+
   it("activates the Synara draft before asking the host to change projects", async () => {
     const calls: string[] = [];
     const project = {
@@ -99,8 +118,10 @@ describe("activateGlasswingProjectSelection", () => {
       activateProject: async (projectId) => {
         calls.push(`activate:${projectId}`);
       },
-      selectHostProject: (selection) => {
-        calls.push(`host:${selection.name}:${selection.cwd}`);
+      hostProject: {
+        onSelectProject: (selection) => {
+          calls.push(`host:${selection.name}:${selection.cwd}`);
+        },
       },
     });
 
