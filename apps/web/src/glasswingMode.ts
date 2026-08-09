@@ -81,12 +81,9 @@ export function getGlasswingModeForCurrentPage(): boolean {
   return glasswingModeForCurrentPage;
 }
 
-export function resolveGlasswingChromePresentation(
-  enabled: boolean,
-  projectScopedEmbed = false,
-): GlasswingChromePresentation {
+export function resolveGlasswingChromePresentation(enabled: boolean): GlasswingChromePresentation {
   const base = enabled ? GLASSWING_CHROME_PRESENTATION : SYNARA_CHROME_PRESENTATION;
-  if (!enabled || !projectScopedEmbed) return base;
+  if (!enabled) return base;
 
   return {
     ...base,

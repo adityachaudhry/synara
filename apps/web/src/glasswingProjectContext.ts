@@ -49,6 +49,20 @@ export function resolveGlasswingHostProject<T extends GlasswingProjectCandidate>
   );
 }
 
+export function resolveGlasswingSelectedProject<T extends GlasswingProjectCandidate>(
+  projects: readonly T[],
+  input: {
+    readonly hostProject: GlasswingHostProjectIdentity | null;
+    readonly activeProjectId: string | null;
+  },
+): T | null {
+  if (input.hostProject) {
+    return resolveGlasswingHostProject(projects, input.hostProject);
+  }
+  if (!input.activeProjectId) return null;
+  return projects.find((project) => project.id === input.activeProjectId) ?? null;
+}
+
 export function toGlasswingProjectOptions<T extends GlasswingProjectCandidate>(
   projects: readonly T[],
 ): GlasswingProjectCandidate[] {

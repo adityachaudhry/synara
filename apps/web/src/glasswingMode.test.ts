@@ -10,7 +10,7 @@ import { DEFAULT_THEME_STATE, GLASSWING_THEME_STATE } from "./theme/theme.logic"
 
 describe("Glasswing Mode", () => {
   it("hides Synara-only chrome while preserving it outside Glasswing mode", () => {
-    expect(resolveGlasswingChromePresentation(true, true)).toEqual({
+    expect(resolveGlasswingChromePresentation(true)).toEqual({
       sidebarThreadsTitle: "GlasswingOS",
       showKanbanNavigation: false,
       showPullRequestNavigation: false,
@@ -24,7 +24,7 @@ describe("Glasswing Mode", () => {
       showComposerWorkspaceTray: false,
       showComposerVoiceInput: false,
     });
-    expect(resolveGlasswingChromePresentation(false, false)).toEqual({
+    expect(resolveGlasswingChromePresentation(false)).toEqual({
       sidebarThreadsTitle: "Synara",
       showKanbanNavigation: true,
       showPullRequestNavigation: true,
@@ -40,20 +40,20 @@ describe("Glasswing Mode", () => {
     });
   });
 
-  it("keeps general-purpose controls in standalone Glasswing mode", () => {
-    expect(resolveGlasswingChromePresentation(true, false)).toMatchObject({
+  it("uses the project-scoped chrome in standalone Glasswing mode", () => {
+    expect(resolveGlasswingChromePresentation(true)).toMatchObject({
       sidebarThreadsTitle: "GlasswingOS",
       showKanbanNavigation: false,
       showPullRequestNavigation: false,
       showHandoffAction: false,
-      showSearchAction: true,
-      showActivityAction: true,
-      showAutomationsAction: true,
-      showProjectActions: true,
-      showEnvironmentControls: true,
-      showComposerRuntimeMode: true,
-      showComposerWorkspaceTray: true,
-      showComposerVoiceInput: true,
+      showSearchAction: false,
+      showActivityAction: false,
+      showAutomationsAction: false,
+      showProjectActions: false,
+      showEnvironmentControls: false,
+      showComposerRuntimeMode: false,
+      showComposerWorkspaceTray: false,
+      showComposerVoiceInput: false,
     });
   });
 

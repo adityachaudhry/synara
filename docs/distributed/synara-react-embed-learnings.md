@@ -158,6 +158,29 @@ unsigned Rolldown native binding because their Team IDs differ. Running the same
 Vitest and Vite entrypoints with an unsigned Node 24 package was the non-destructive correction;
 the focused tests and production build then passed without reinstalling or rewriting dependencies.
 
+## Trial 9: Shipping the same component did not mean activating the same shell
+
+The standalone v3 deployment contained the project-picker code but still showed Search, Activity,
+Automations, cross-project threads, and the full composer chrome. The deployment was current and
+served with `no-cache`; this was configuration divergence, not stale assets. Standalone `main.tsx`
+mounted `<SynaraApp />`, while the Glasswing adapter supplied `hostProject`, and the first design
+used that optional host value as the feature gate.
+
+**Why it failed:** `hostProject` answered who owns selection and outer navigation, but it was also
+made to answer whether the project-scoped Glasswing presentation should exist. Those are separate
+decisions. Two mounts of the same React component therefore activated different feature subsets.
+
+**Correction:** Glasswing mode now enables the project-scoped shell on both mounts. Embedded
+Glasswing resolves selection from host company identity and keeps its outer route callback;
+standalone v3 resolves selection from Synara's already-reactive focused project ID and performs only
+native draft navigation. No parallel selected-project store was added. Host identity still takes
+precedence when present, and a missing standalone focus exposes no unrelated project.
+
+The first focused browser command was launched from the monorepo root even though the browser
+Vitest config resolves `src/routes` relative to `apps/web`; it failed during configuration before
+collecting the test. Re-running the identical case from `apps/web` produced the intended RED
+(Environment was rendered) and then GREEN after the shared Glasswing-mode gate was applied.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

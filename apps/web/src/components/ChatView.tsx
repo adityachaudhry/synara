@@ -259,7 +259,6 @@ import {
   getGlasswingModeForCurrentPage,
   resolveGlasswingChromePresentation,
 } from "../glasswingMode";
-import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import {
   deriveGlasswingRuntimeSetupProgress,
   resolveGlasswingTranscriptWorkingPresentation,
@@ -1204,12 +1203,7 @@ export default function ChatView({
   );
   const isEditorRail = presentationMode === "editor";
   const glasswingMode = getGlasswingModeForCurrentPage();
-  const projectScopedGlasswingEmbed =
-    glasswingMode && readSynaraRuntimeConfig().hostProject !== undefined;
-  const glasswingChrome = resolveGlasswingChromePresentation(
-    glasswingMode,
-    projectScopedGlasswingEmbed,
-  );
+  const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
   const usesGlasswingDockLauncher =
     glasswingMode && surfaceMode === "single" && !isEditorRail;
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;

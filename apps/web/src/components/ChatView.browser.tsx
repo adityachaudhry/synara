@@ -2318,13 +2318,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("removes project, environment, access, workspace, and voice controls in a project-scoped Glasswing embed", async () => {
-    configureSynaraRuntime({
-      hostProject: {
-        name: "project",
-        slug: "project",
-      },
-    });
+  it("removes project, environment, access, workspace, and voice controls in standalone Glasswing mode", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {
         [THREAD_ID]: {

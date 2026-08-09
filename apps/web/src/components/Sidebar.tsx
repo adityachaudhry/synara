@@ -108,7 +108,7 @@ import {
   resolveGlasswingChromePresentation,
 } from "../glasswingMode";
 import {
-  resolveGlasswingHostProject,
+  resolveGlasswingSelectedProject,
   toGlasswingProjectOptions,
   type GlasswingProjectCandidate,
 } from "../glasswingProjectContext";
@@ -1386,11 +1386,8 @@ function GlasswingProjectPicker({
 export default function Sidebar() {
   const glasswingMode = getGlasswingModeForCurrentPage();
   const hostProject = readSynaraRuntimeConfig().hostProject ?? null;
-  const projectScopedGlasswingEmbed = glasswingMode && hostProject !== null;
-  const glasswingChrome = resolveGlasswingChromePresentation(
-    glasswingMode,
-    projectScopedGlasswingEmbed,
-  );
+  const projectScopedGlasswingShell = glasswingMode;
+  const glasswingChrome = resolveGlasswingChromePresentation(glasswingMode);
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
     readGitHubProvisioningCapability,
@@ -1499,7 +1496,7 @@ export default function Sidebar() {
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
   const studioSectionVisible = appSettings.showStudioSection;
-  const { handleNewThread } = useHandleNewThread();
+  const { activeProjectId, handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewStudioChat } = useHandleNewStudioChat();
   const { createThreadHandoff } = useThreadHandoff();
@@ -3951,10 +3948,11 @@ export default function Sidebar() {
   );
   const glasswingSelectedProject = useMemo(
     () =>
-      hostProject
-        ? resolveGlasswingHostProject(allStandardProjectsBase, hostProject)
-        : null,
-    [allStandardProjectsBase, hostProject],
+      resolveGlasswingSelectedProject(allStandardProjectsBase, {
+        hostProject,
+        activeProjectId,
+      }),
+    [activeProjectId, allStandardProjectsBase, hostProject],
   );
   const glasswingProjectSidebarDataById = useMemo<
     ReadonlyMap<ProjectId, SidebarDerivedProjectData>
@@ -6099,11 +6097,13 @@ export default function Sidebar() {
         ) : (
           <>
             <div className="flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5">
-              {projectScopedGlasswingEmbed && hostProject ? (
+              {projectScopedGlasswingShell ? (
                 <GlasswingProjectPicker
                   projects={glasswingProjectOptions}
                   selectedProjectId={glasswingSelectedProject?.id ?? null}
-                  selectedProjectName={glasswingSelectedProject?.name ?? hostProject.name}
+                  selectedProjectName={
+                    glasswingSelectedProject?.name ?? hostProject?.name ?? "Projects"
+                  }
                   onSelectProject={(project) => {
                     void activateGlasswingProjectSelection({
                       project,
@@ -6159,7 +6159,7 @@ export default function Sidebar() {
               {/* Primary sidebar actions stay limited to features we currently ship. */}
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <SidebarMenu className="gap-0.5">
-                  {projectScopedGlasswingEmbed ? (
+                  {projectScopedGlasswingShell ? (
                     <SidebarPrimaryAction
                       icon={NewThreadIcon}
                       iconClassName="size-3.5"
@@ -6247,7 +6247,7 @@ export default function Sidebar() {
                 </SidebarMenu>
               </SidebarGroup>
 
-              {projectScopedGlasswingEmbed ? (
+              {projectScopedGlasswingShell ? (
                 <SidebarGroup className="px-1.5 py-1.5">
                   {renderGlasswingProjectThreads()}
                 </SidebarGroup>
@@ -6450,7 +6450,7 @@ export default function Sidebar() {
             </div>
           </>
         )}
-        {!projectScopedGlasswingEmbed &&
+        {!projectScopedGlasswingShell &&
         !isOnSettings &&
         !isOnStudio &&
         !activityViewEnabled &&

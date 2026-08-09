@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveGlasswingHostProject,
   resolveGlasswingProjectThreadProjection,
+  resolveGlasswingSelectedProject,
   toGlasswingProjectOptions,
 } from "./glasswingProjectContext";
 
@@ -36,6 +37,35 @@ describe("resolveGlasswingHostProject", () => {
       resolveGlasswingHostProject(projects, {
         name: "Missing Company",
         slug: "missing-company",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveGlasswingSelectedProject", () => {
+  it("uses the embedding host identity instead of a stale focused project", () => {
+    expect(
+      resolveGlasswingSelectedProject(projects, {
+        hostProject: { name: "Cue Cloud", slug: "cue-cloud" },
+        activeProjectId: "nth-id",
+      }),
+    ).toEqual(projects[0]);
+  });
+
+  it("uses the focused project ID when the standalone mount has no host identity", () => {
+    expect(
+      resolveGlasswingSelectedProject(projects, {
+        hostProject: null,
+        activeProjectId: "nth-id",
+      }),
+    ).toEqual(projects[1]);
+  });
+
+  it("does not expose an unrelated standalone project without a focused match", () => {
+    expect(
+      resolveGlasswingSelectedProject(projects, {
+        hostProject: null,
+        activeProjectId: "missing-id",
       }),
     ).toBeNull();
   });
