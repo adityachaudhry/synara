@@ -1049,3 +1049,8 @@ Next.js 16's Node 20.9 minimum. Calling npm with Node 24 was insufficient by its
 child script still found Node 18 from `PATH`. Prepending the bundled Node bin directory corrected
 the child environment; the same source then completed the Next.js production build. Synara's Vite
 production build also completed, and 14 focused display-scale/runtime/package tests passed.
+
+**Fourth failure:** The first rebuild after the live containment correction invoked npm from the
+Glasswing repository root, which has no `package.json`; npm exited with `ENOENT` before compilation.
+Running the identical modern-Node command from `web/` completed the production build. This was a
+working-directory mistake only and did not require a source or dependency change.
