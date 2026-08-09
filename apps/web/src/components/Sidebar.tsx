@@ -293,6 +293,7 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
+  activateGlasswingProjectSelection,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -6104,7 +6105,16 @@ export default function Sidebar() {
                   selectedProjectId={glasswingSelectedProject?.id ?? null}
                   selectedProjectName={glasswingSelectedProject?.name ?? hostProject.name}
                   onSelectProject={(project) => {
-                    hostProject.onSelectProject?.({ name: project.name, cwd: project.cwd });
+                    void activateGlasswingProjectSelection({
+                      project,
+                      activateProject: (projectId) =>
+                        handleNewThread(projectId, {
+                          envMode: resolveSidebarNewThreadEnvMode({
+                            defaultEnvMode: appSettings.defaultThreadEnvMode,
+                          }),
+                        }),
+                      selectHostProject: hostProject.onSelectProject,
+                    });
                   }}
                 />
               ) : (

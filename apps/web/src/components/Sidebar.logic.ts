@@ -53,6 +53,16 @@ export type SidebarActionBadge = {
   readonly accessibleLabel: string;
 };
 
+/** Keep Synara's active draft aligned before the embedding host swaps project routes. */
+export async function activateGlasswingProjectSelection(input: {
+  readonly project: Pick<Project, "id" | "name" | "cwd">;
+  readonly activateProject: (projectId: ProjectId) => Promise<unknown>;
+  readonly selectHostProject?: (project: { readonly name: string; readonly cwd: string }) => void;
+}): Promise<void> {
+  await input.activateProject(input.project.id);
+  input.selectHostProject?.({ name: input.project.name, cwd: input.project.cwd });
+}
+
 export function isProjectsSidebarSurface(input: {
   readonly isOnSettings: boolean;
   readonly isOnStudio: boolean;

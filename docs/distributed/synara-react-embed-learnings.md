@@ -146,6 +146,18 @@ accepted `hostProject`, but the package writer generated declarations from a man
 not include it. The writer now emits the host-project types and its deterministic package test
 asserts that the public declaration contains the new contract, preventing runtime/type drift.
 
+The first deployed Chrome pass found one more state-boundary bug: switching the host route from Nth
+to Cue Cloud correctly changed the project picker and thread rail, but the existing empty draft
+still rendered Nth in the underlined prompt. Host navigation alone does not change Synara's active
+draft store. The picker now activates or restores the target project's native Synara draft first,
+then asks Glasswing to change its company URL. A focused ordering test locks that handoff down.
+
+The final local recheck also could not use the assumed toolchain: `bun` was absent from `PATH`, the
+machine's Node 18 lacked `node:util.styleText`, and ChatGPT's signed Node 24 could not load the
+unsigned Rolldown native binding because their Team IDs differ. Running the same repository-local
+Vitest and Vite entrypoints with an unsigned Node 24 package was the non-destructive correction;
+the focused tests and production build then passed without reinstalling or rewriting dependencies.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,

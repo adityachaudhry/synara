@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activateGlasswingProjectSelection,
   buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
@@ -81,6 +82,32 @@ describe("isProjectsSidebarSurface", () => {
     expect(isProjectsSidebarSurface({ isOnSettings: false, isOnStudio: false })).toBe(true);
     expect(isProjectsSidebarSurface({ isOnSettings: false, isOnStudio: true })).toBe(false);
     expect(isProjectsSidebarSurface({ isOnSettings: true, isOnStudio: false })).toBe(false);
+  });
+});
+
+describe("activateGlasswingProjectSelection", () => {
+  it("activates the Synara draft before asking the host to change projects", async () => {
+    const calls: string[] = [];
+    const project = {
+      id: ProjectId.makeUnsafe("project-cue-cloud"),
+      name: "Cue Cloud",
+      cwd: "/workspace/cue-cloud",
+    };
+
+    await activateGlasswingProjectSelection({
+      project,
+      activateProject: async (projectId) => {
+        calls.push(`activate:${projectId}`);
+      },
+      selectHostProject: (selection) => {
+        calls.push(`host:${selection.name}:${selection.cwd}`);
+      },
+    });
+
+    expect(calls).toEqual([
+      "activate:project-cue-cloud",
+      "host:Cue Cloud:/workspace/cue-cloud",
+    ]);
   });
 });
 
