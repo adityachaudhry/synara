@@ -209,6 +209,11 @@ authenticated-Anthropic catalog repair seam was extended with Anthropic's publis
 metadata. It only synthesizes the entry after Anthropic authentication is present; it does not
 invent an unavailable provider or create a parallel execution primitive.
 
+The first host-package refresh was run from the Glasswing repository root and failed with
+`Cannot find module .../scripts/sync-synara-package.mjs`; the script belongs to the Next app at
+`web/scripts`. Re-running from `web` succeeded without cleanup because the failed command had not
+changed any files. Keep the host working directory explicit in future refresh automation.
+
 ## Current tradeoffs to measure
 
 - The package intentionally contains the complete feature graph. Heavy editor grammars, terminals,
