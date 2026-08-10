@@ -337,3 +337,37 @@ dock still measured to 1013px. Ancestor geometry showed why: `SingleChatSurface`
 split-chat, and route-inset content heights to `h-full`. Standalone leaves those overrides undefined
 and retains the original `h-dvh` classes. This completes the height chain from Glasswing host to
 Synara route, content card, left rail, right dock, transcript, and composers.
+
+## Trial 13: Readable embedded text must not be implemented as layout zoom
+
+The first density correction applied `displayScale={1.3}` to the complete embedded React surface.
+It made Synara's default 12px chat text render near 15.6 physical pixels, but CSS `zoom` also enlarged
+every host-owned dimension. Live Chrome comparison made the coupling measurable: the same shared
+Cue Cloud heading was 42.5px tall in Workspace and 55.3px tall in GlasswingOS, and the 320px sidebar
+needed an inverse-scale width exception to avoid becoming 416px.
+
+**Correction:** Glasswing no longer selects `displayScale`. The React adapter accepts an optional
+`embeddedBaseFontSizePx` and applies Synara's existing UI/chat CSS custom properties at the embedded
+root using the existing typography scale. Glasswing selects a 15px base; standalone Synara receives
+no override and keeps its persisted user setting and 12px default. The host company sidebar stays on
+its own Glasswing typography and renders at a native 320px without inverse geometry.
+
+The test-first pass deliberately failed in two places: the typography helper module did not exist,
+and the generated package declaration did not expose the new prop. The minimal implementation made
+both contracts green. The local shell did not have Bun on `PATH`, so the first repository wrapper
+command could not start; the same focused Vitest files were run through the bundled Node runtime.
+Two subsequent build attempts used the wrong Vite path and then the wrong working directory. Locating
+the content-addressed Vite binary and running it from `apps/web` fixed the invocation without source
+changes. These were environment failures, not product failures.
+
+The first explicit Glasswing Railway upload also failed before creating a deployment with
+`prefix not found` because the temporary Glasswing checkout was not linked to v3. Re-running the
+upload from the already-linked Synara workspace while passing the Glasswing checkout as
+`--path-as-root` created deployment `fce7af55-b965-406b-a86b-ef661d49d564`. GitHub autodeploy had
+also started a duplicate build moments later; Railway removed the older duplicate and promoted the
+explicit deployment.
+
+Final Chrome verification at 100% browser zoom recorded `visualViewport.scale === 1`, no
+`data-synara-display-scale` element, a 15px embedded base, 15px composer text, 14px model text, a
+320px host rail, matching 885px host/mount heights ending at the 949px viewport bottom, and no
+browser diagnostic errors.
