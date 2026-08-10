@@ -77,6 +77,7 @@ describe("writeEmbedPackage", () => {
     expect(declarations).toContain("readonly header?: ReactNode;");
     expect(declarations).toContain("readonly hostSidebar?: SynaraHostSidebar;");
     expect(declarations).toContain("readonly displayScale?: number;");
+    expect(declarations).toContain("readonly embeddedBaseFontSizePx?: number;");
     await expect(fs.stat(path.join(fixture.outputDir, "route-chunk.js"))).resolves.toBeDefined();
   });
 

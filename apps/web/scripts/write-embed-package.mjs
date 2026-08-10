@@ -58,6 +58,7 @@ export interface SynaraRuntimeConfig {
 export interface SynaraAppProps extends SynaraRuntimeConfig {
   readonly history?: SynaraHistory;
   readonly hostSidebar?: SynaraHostSidebar;
+  readonly embeddedBaseFontSizePx?: number;
 }
 
 export declare function SynaraApp(props: SynaraAppProps): ReactElement;
