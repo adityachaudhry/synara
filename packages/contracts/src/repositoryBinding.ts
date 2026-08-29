@@ -52,14 +52,11 @@ export const RepositorySubdirectoryPath = Schema.String.check(
       return false;
     }
     const segments = value.split("/");
-    return (
-      segments.join("/") === value &&
-      segments.every(
-        (segment) =>
-          segment !== "." &&
-          segment !== ".." &&
-          SafeRepositoryIdentifierPattern.test(segment),
-      )
+    return segments.every(
+      (segment) =>
+        segment !== "." &&
+        segment !== ".." &&
+        SafeRepositoryIdentifierPattern.test(segment),
     );
   }),
 );

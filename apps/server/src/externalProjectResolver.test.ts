@@ -1,6 +1,8 @@
+import { CommandId, ProjectId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "./config.ts";
 import {
@@ -15,6 +17,7 @@ import { ProjectionProjectRepository } from "./persistence/Services/ProjectionPr
 import { OrchestrationEngineLive } from "./orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 
 const policy = {
   allowedOrigins: ["https://git.example.com"],
@@ -53,6 +56,46 @@ const layer = it.layer(
 );
 
 layer("ExternalProjectResolver", (it) => {
+  it.effect("cannot be preempted through the client project and command ID surface", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const resolver = yield* ExternalProjectResolver;
+      const repository = yield* ProjectionProjectRepository;
+      const externalKey = "host-company:preempted";
+      const formerlyDerivedProjectId = ProjectId.makeUnsafe(
+        "external-bbba9db2c16bb05907bc4ee6caf8b95d",
+      );
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe(
+          "server:external-project:bbba9db2c16bb05907bc4ee6caf8b95d8da1252b5efb93efe53de5738e375ac7",
+        ),
+        projectId: formerlyDerivedProjectId,
+        title: "Client preemption attempt",
+        workspaceRoot: "/tmp/client-preemption-attempt",
+        createdAt: "2026-08-29T20:00:00.000Z",
+      });
+
+      const resolvedProjectId = yield* resolver.resolveExternalProject({
+        externalKey,
+        name: "Server-owned project",
+        repositoryBinding,
+      });
+
+      assert.notStrictEqual(resolvedProjectId, formerlyDerivedProjectId);
+      const clientProject = Option.getOrThrow(
+        yield* repository.getById({ projectId: formerlyDerivedProjectId }),
+      );
+      assert.strictEqual(clientProject.externalKey, null);
+      const resolvedProject = Option.getOrThrow(
+        yield* repository.getByExternalKey({ externalKey }),
+      );
+      assert.strictEqual(resolvedProject.projectId, resolvedProjectId);
+      assert.deepStrictEqual(resolvedProject.repositoryBinding, repositoryBinding);
+    }),
+  );
+
   it.effect("resolves concurrent retries to one durable project", () =>
     Effect.gen(function* () {
       const resolver = yield* ExternalProjectResolver;
@@ -75,6 +118,62 @@ layer("ExternalProjectResolver", (it) => {
       assert.strictEqual(row.projectId, projectIds[0]);
       assert.strictEqual(row.externalKey, input.externalKey);
       assert.deepStrictEqual(row.repositoryBinding, repositoryBinding);
+    }),
+  );
+
+  it.effect("lets one of two concurrent bindings win without orphaning the loser", () =>
+    Effect.gen(function* () {
+      const resolver = yield* ExternalProjectResolver;
+      const repository = yield* ProjectionProjectRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const externalKey = "host-company:binding-race";
+      const bindings = [
+        repositoryBinding,
+        { ...repositoryBinding, path: "companies/race-other" },
+      ] as const;
+
+      const outcomes = yield* Effect.all(
+        bindings.map((binding) =>
+          Effect.result(
+            resolver.resolveExternalProject({
+              externalKey,
+              name: "Binding race",
+              repositoryBinding: binding,
+            }),
+          ),
+        ),
+        { concurrency: "unbounded" },
+      );
+      assert.strictEqual(
+        outcomes.filter((outcome) => outcome._tag === "Success").length,
+        1,
+      );
+      assert.strictEqual(
+        outcomes.filter((outcome) => outcome._tag === "Failure").length,
+        1,
+      );
+      const winnerIndex = outcomes.findIndex((outcome) => outcome._tag === "Success");
+      const loserIndex = outcomes.findIndex((outcome) => outcome._tag === "Failure");
+      assert.notStrictEqual(winnerIndex, -1);
+      assert.notStrictEqual(loserIndex, -1);
+      const winner = outcomes[winnerIndex]!;
+      const loser = outcomes[loserIndex]!;
+      assert.strictEqual(winner._tag, "Success");
+      assert.strictEqual(loser._tag, "Failure");
+      if (winner._tag !== "Success" || loser._tag !== "Failure") return;
+      assert.strictEqual(loser.failure._tag, "ExternalProjectBindingMismatchError");
+
+      const stored = Option.getOrThrow(yield* repository.getByExternalKey({ externalKey }));
+      assert.strictEqual(stored.projectId, winner.success);
+      assert.deepStrictEqual(stored.repositoryBinding, bindings[winnerIndex]);
+
+      const eventRows = yield* sql<{ readonly projectId: string }>`
+        SELECT stream_id AS "projectId"
+        FROM orchestration_events
+        WHERE event_type = 'project.created'
+          AND json_extract(payload_json, '$.externalKey') = ${externalKey}
+      `;
+      assert.deepStrictEqual(eventRows, [{ projectId: winner.success }]);
     }),
   );
 
@@ -104,6 +203,48 @@ layer("ExternalProjectResolver", (it) => {
       const stored = Option.getOrThrow(yield* repository.getByExternalKey({ externalKey }));
       assert.strictEqual(stored.projectId, projectId);
       assert.deepStrictEqual(stored.repositoryBinding, repositoryBinding);
+    }),
+  );
+
+  it.effect("rejects a mismatched retry after soft deletion without rebinding identity", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const resolver = yield* ExternalProjectResolver;
+      const repository = yield* ProjectionProjectRepository;
+      const externalKey = "host-company:deleted-mismatch";
+      const projectId = yield* resolver.resolveExternalProject({
+        externalKey,
+        name: "Deleted project",
+        repositoryBinding,
+      });
+      yield* engine.dispatch({
+        type: "project.delete",
+        commandId: CommandId.makeUnsafe("delete-external-project-for-mismatch-test"),
+        projectId,
+      });
+      const deleted = Option.getOrThrow(
+        yield* repository.getByExternalKey({ externalKey }),
+      );
+      assert.isNotNull(deleted.deletedAt);
+
+      const mismatch = yield* Effect.result(
+        resolver.resolveExternalProject({
+          externalKey,
+          name: "Replacement attempt",
+          repositoryBinding: { ...repositoryBinding, path: "companies/replacement" },
+        }),
+      );
+      assert.strictEqual(mismatch._tag, "Failure");
+      if (mismatch._tag === "Failure") {
+        assert.strictEqual(mismatch.failure._tag, "ExternalProjectBindingMismatchError");
+      }
+
+      const preserved = Option.getOrThrow(
+        yield* repository.getByExternalKey({ externalKey }),
+      );
+      assert.strictEqual(preserved.projectId, projectId);
+      assert.deepStrictEqual(preserved.repositoryBinding, repositoryBinding);
+      assert.strictEqual(preserved.deletedAt, deleted.deletedAt);
     }),
   );
 

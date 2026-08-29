@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import {
@@ -134,16 +134,15 @@ export const makeExternalProjectResolverLive = (
           const existing = yield* resolveExisting(decoded.externalKey, repositoryBinding);
           if (Option.isSome(existing)) return existing.value;
 
-          const digest = createHash("sha256").update(decoded.externalKey).digest("hex");
-          const projectId = ProjectId.makeUnsafe(`external-${digest.slice(0, 32)}`);
-          const commandId = CommandId.makeUnsafe(`server:external-project:${digest}`);
+          const projectId = ProjectId.makeUnsafe(`external-${randomUUID()}`);
+          const commandId = CommandId.makeUnsafe(`server:external-project:${randomUUID()}`);
           const dispatch = engine.dispatch({
             type: "project.external.resolve",
             commandId,
             projectId,
             externalKey: decoded.externalKey,
             title: decoded.name,
-            workspaceRoot: path.join(config.worktreesDir, "external-projects", digest),
+            workspaceRoot: path.join(config.worktreesDir, "external-projects", projectId),
             repositoryBinding,
             createdAt: new Date().toISOString(),
           });
