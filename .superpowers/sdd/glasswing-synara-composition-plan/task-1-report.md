@@ -8,6 +8,8 @@ Initial implementation commit: `9b4a26e6f433c35c08893962ee13b3c55c715cf0`
 
 Review-correction implementation commit: `ceed395affc2760c8a83e0467b31a8634126e411`
 
+Second review-correction implementation commit: `94249923ed7f9f3da420b8cc07eb255383c970c6`
+
 ## Delivered
 
 - Added the reusable `SynaraApp` React entrypoint and preserved standalone startup by mounting it from `main.tsx`.
@@ -123,7 +125,7 @@ Two consecutive builds stamped with the same commit produced byte-identical requ
 
 ## Concerns
 
-- The tarball contains the full Synara app and its lazy runtime assets, so it remains sizeable at 6,245,585 bytes packed. Further pruning should be driven by measured host load behavior.
+- The tarball contains the full Synara app and its lazy runtime assets, so it remains sizeable at 6,099,052 bytes packed. Further pruning should be driven by measured host load behavior.
 - No blocking concerns remain from the Task 1 review.
 
 ## Review corrections
@@ -211,3 +213,82 @@ Two consecutive builds stamped with the correction commit passed. `cmp` confirme
 - The build embeds 254 referenced reversed icons and 256 referenced fill icons as data URLs, so installed hosts need no public asset server seam.
 - The shared portal coverage test enumerates all 12 current Base UI portal primitive files; each resolves the root-owned container and falls back to Base UI's standalone body behavior when no provider exists.
 - The existing chat sidebar consumes host width/lock presentation and renders the host header, optional project title, and footer slots around the thread content.
+
+## Second review corrections
+
+The scoped re-review found that icon pruning still shared one filename-literal set across both variants and that the public `RouterHistory` declaration referenced an undeclared package. Both were corrected without changing the public history shape or adding a host asset-serving seam.
+
+### Second correction RED
+
+```sh
+npx --yes bun@1.3.12 run --cwd apps/web test -- \
+  src/lib/centralIconAssets.test.ts \
+  scripts/write-embed-package.test.ts
+```
+
+Expected result: exit 1. The fill-only fixture leaked into the reversed map, and the generated manifest omitted `@tanstack/react-router`. Summary: 2 failed files; 2 failed and 2 passed tests.
+
+### Second correction GREEN
+
+```sh
+npx --yes bun@1.3.12 run --cwd apps/web test -- \
+  src/lib/centralIconAssets.test.ts \
+  src/lib/central-icons.test.ts \
+  scripts/write-embed-package.test.ts \
+  src/embeddedHistory.contract.test.ts
+```
+
+Result: 4 files passed; 7 tests passed. The icon fixture proves a reversed-only asset is absent from fill, a fill-only asset is absent from reversed, a shared asset is retained in both, and an unrelated filename literal is excluded.
+
+```sh
+npx --yes bun@1.3.12 run --cwd apps/web test
+```
+
+Result: 334 files passed; 4,111 tests passed.
+
+```sh
+npx --yes bun@1.3.12 run --cwd apps/web test:browser:stable -- \
+  src/components/hostPortal.browser.tsx \
+  src/components/AppHistoryProvider.browser.tsx
+```
+
+Result: 2 browser files passed; 2 tests passed.
+
+Per instruction, `bun fmt`, `bun lint`, and `bun typecheck` were not run. The embed package build's declaration-only `tsc -p tsconfig.embed.json` step was run as required for package/declaration verification.
+
+### Second correction implementation
+
+- `apps/web/vite.config.ts` now reads actual `CentralIcon` JSX and `centralIconWrapper`, `createCentralIconComponent`, `createCentralIconElement`, and `getCentralIconUrl` calls. Each static name is assigned only to its requested variant. Dynamic default-variant render sites retain the available literals from the calling module and its direct local imports, preserving file, settings, automation, and Space catalogs without restoring the fill union.
+- `apps/web/src/lib/centralIconAssets.test.ts` covers per-variant exclusivity, shared names, and an unrelated literal.
+- `apps/web/scripts/write-embed-package.mjs` derives the router peer range from `apps/web/package.json` and writes it beside the existing React peers.
+- `apps/web/scripts/write-embed-package.test.ts` uses the real exported `RouterHistory` import and verifies that every bare public declaration import is present in generated dependencies or peer dependencies.
+
+### Second correction package evidence
+
+```sh
+SYNARA_COMMIT=94249923ed7f9f3da420b8cc07eb255383c970c6 \
+  npx --yes bun@1.3.12 run --cwd apps/web build:embed
+```
+
+Two consecutive exact-SHA builds passed. `cmp` confirmed byte-identical manifest, generated declarations, scoped stylesheet, and provenance.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `package.json` | `a9e739e2e0780a1813c04278ea957cb27b7e6569d1151d60a8a96c6bfc95ca05` |
+| `index.d.ts` | `7b4bae732494cfce0a10a8c4a6e12aa4464471484bda9889ff96f1325d3b4a6b` |
+| `style.css` | `f67a9eabfc2d9b0225adb12a56ec5e2250d64fc78071a751a719945b1c9e2569` |
+| `synara-provenance.json` | `264390739c9439af4a313cf2741e07fcc17ac674d2f3b321951cd076097ef7c6` |
+
+Two consecutive `npm pack` runs were byte-identical. `synara-react-0.7.3.tgz` is 6,099,052 bytes with SHA-256 `1f78f4bfef20e09cecc7fa001682b9cc0c530ecbe4ba9837b98e6c5053fa6ee6`.
+
+- Embedded icon maps contain 157 reversed assets and 8 fill assets (`arrow-up`, `circle-check`, `circle-x`, `pause`, `pin`, `play`, `stop`, `zap`), down from 254 and 256 respectively.
+- Tarball listing contains no `central-icons-reversed`, `central-icons-fill`, favicon, app-icon, Apple-touch-icon, or standalone `synara.png` path.
+- The generated manifest declares `@tanstack/react-router: ^1.160.2` as a peer, matching the web package's exact compatible range; `embeddedHistory.d.ts` resolves `RouterHistory` from that declared peer rather than duplicating the interface.
+
+### Second correction self-review and concerns
+
+- Confirmed the collector's test names are present in both fixture asset folders, so the negative assertions prove variant selection rather than missing files.
+- Confirmed runtime icon data remains bundled as data URLs and the package still exposes no public asset path.
+- Confirmed the package writer rejects an absent router version instead of emitting an incomplete contract.
+- Confirmed `git diff --check` passed before the implementation commit.
+- No blocking concerns remain. The dynamic default-variant fallback intentionally examines only the rendering source and its direct local imports; a future indirect icon catalog will need an explicit render/reference path or a focused collector test.
