@@ -374,6 +374,66 @@ it.effect("decodes historical project.created payloads with a default provider",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
     assert.strictEqual(parsed.isPinned, false);
+    assert.strictEqual(parsed.repositoryBinding, null);
+    assert.strictEqual(parsed.externalKey, null);
+  }),
+);
+
+it.effect("round-trips repository metadata only through the server-owned project command", () =>
+  Effect.gen(function* () {
+    const repositoryBinding = {
+      kind: "git-subdirectory" as const,
+      origin: "https://git.example.com",
+      owner: "acme-platform",
+      repository: "company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+    const externalCommand = {
+      type: "project.external.resolve",
+      commandId: "server:external-project:abc",
+      projectId: "external-abc",
+      externalKey: "host-company:company-123",
+      title: "Cue Cloud",
+      workspaceRoot: "/tmp/external-abc",
+      repositoryBinding,
+      createdAt: "2026-08-29T12:00:00.000Z",
+    };
+
+    const clientResult = yield* Effect.exit(decodeClientOrchestrationCommand(externalCommand));
+    assert.strictEqual(clientResult._tag, "Failure");
+
+    const parsed = yield* decodeOrchestrationCommand(externalCommand);
+    assert.strictEqual(parsed.type, "project.external.resolve");
+    if (parsed.type !== "project.external.resolve") return;
+    assert.strictEqual(parsed.externalKey, "host-company:company-123");
+    assert.deepStrictEqual(parsed.repositoryBinding, repositoryBinding);
+  }),
+);
+
+it.effect("does not expose repository identity on the browser project.create command", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "project.create",
+      commandId: "cmd-browser-project",
+      projectId: "project-browser",
+      title: "Browser Project",
+      workspaceRoot: "/tmp/browser-project",
+      externalKey: "host-company:hijack",
+      repositoryBinding: {
+        kind: "git-subdirectory",
+        origin: "https://evil.example.com",
+        owner: "attacker",
+        repository: "attacker-data",
+        ref: "main",
+        path: "companies/victim",
+      },
+      createdAt: "2026-08-29T12:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "project.create");
+    assert.strictEqual("externalKey" in parsed, false);
+    assert.strictEqual("repositoryBinding" in parsed, false);
   }),
 );
 

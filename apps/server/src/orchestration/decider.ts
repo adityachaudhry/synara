@@ -792,6 +792,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return events.length === 1 ? events[0]! : events;
     }
 
+    case "project.external.resolve": {
+      const existingExternalProject = readModel.projects.find(
+        (project) => project.externalKey === command.externalKey,
+      );
+      if (existingExternalProject) {
+        const binding = existingExternalProject.repositoryBinding;
+        const matches =
+          binding !== null &&
+          binding.kind === command.repositoryBinding.kind &&
+          binding.origin === command.repositoryBinding.origin &&
+          binding.owner === command.repositoryBinding.owner &&
+          binding.repository === command.repositoryBinding.repository &&
+          binding.ref === command.repositoryBinding.ref &&
+          binding.path === command.repositoryBinding.path;
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: matches
+            ? `External project '${command.externalKey}' is already resolved.`
+            : `External project '${command.externalKey}' is already bound to different repository coordinates.`,
+        });
+      }
+      yield* requireProjectAbsent({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+
+      return {
+        ...withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "project.created",
+        payload: {
+          projectId: command.projectId,
+          kind: "project",
+          title: command.title,
+          workspaceRoot: command.workspaceRoot,
+          repositoryBinding: command.repositoryBinding,
+          externalKey: command.externalKey,
+          defaultModelSelection: null,
+          scripts: [],
+          isPinned: false,
+          spaceId: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "project.meta.update": {
       const existingProject = yield* requireProject({
         readModel,

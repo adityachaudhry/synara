@@ -14,6 +14,7 @@ import type {
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSession,
+  ProjectRepositoryBinding,
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
@@ -211,6 +212,7 @@ describe("ProviderCommandReactor", () => {
     readonly gatewayOperationId?: string;
     readonly gitWritingModelSelection?: ModelSelection;
     readonly omitStopRuntimeSession?: boolean;
+    readonly projectRepositoryBinding?: ProjectRepositoryBinding;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -591,15 +593,28 @@ describe("ProviderCommandReactor", () => {
     const drain = () => Effect.runPromise(reactor.drain);
 
     await Effect.runPromise(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-create"),
-        projectId: asProjectId("project-1"),
-        title: "Provider Project",
-        workspaceRoot: "/tmp/provider-project",
-        defaultModelSelection: modelSelection,
-        createdAt: now,
-      }),
+      engine.dispatch(
+        input?.projectRepositoryBinding
+          ? {
+              type: "project.external.resolve",
+              commandId: CommandId.makeUnsafe("server:external-project:provider-project"),
+              projectId: asProjectId("project-1"),
+              externalKey: "test-host:provider-project",
+              title: "Provider Project",
+              workspaceRoot: "/tmp/provider-project",
+              repositoryBinding: input.projectRepositoryBinding,
+              createdAt: now,
+            }
+          : {
+              type: "project.create",
+              commandId: CommandId.makeUnsafe("cmd-project-create"),
+              projectId: asProjectId("project-1"),
+              title: "Provider Project",
+              workspaceRoot: "/tmp/provider-project",
+              defaultModelSelection: modelSelection,
+              createdAt: now,
+            },
+      ),
     );
     await Effect.runPromise(
       engine.dispatch({
@@ -4148,6 +4163,39 @@ describe("ProviderCommandReactor", () => {
     // One scan rechecks the provider's live-turn race before dispatch; the
     // session ensure then performs the only full lookup needed for startup.
     expect(harness.listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the project repository binding into provider session startup", async () => {
+    const repositoryBinding: ProjectRepositoryBinding = {
+      kind: "git-subdirectory",
+      origin: "https://git.example.com",
+      owner: "acme-platform",
+      repository: "company-data",
+      ref: "main",
+      path: "companies/cue-cloud",
+    };
+    const harness = await createHarness({ projectRepositoryBinding: repositoryBinding });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-repository-bound"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-repository-bound"),
+          role: "user",
+          text: "Inspect the repository",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ repositoryBinding });
   });
 
   it("routes subagent-thread turn starts to the parent session as steers", async () => {

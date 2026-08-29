@@ -3,11 +3,16 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SchemaGetter from "effect/SchemaGetter";
 
-import { ModelSelection, ProjectScript } from "@synara/contracts";
+import {
+  ModelSelection,
+  ProjectRepositoryBinding,
+  ProjectScript,
+} from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   ClearProjectionProjectSpaceAssignmentsInput,
   DeleteProjectionProjectInput,
+  GetProjectionProjectByExternalKeyInput,
   GetProjectionProjectInput,
   ProjectionProject,
   ProjectionProjectRepository,
@@ -24,6 +29,7 @@ const SqliteBoolean = Schema.Number.pipe(
 const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    repositoryBinding: Schema.NullOr(Schema.fromJsonString(ProjectRepositoryBinding)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
     isPinned: SqliteBoolean,
   }),
@@ -42,6 +48,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind,
           title,
           workspace_root,
+          repository_binding_json,
+          external_key,
           default_model_selection_json,
           scripts_json,
           is_pinned,
@@ -55,6 +63,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.kind},
           ${row.title},
           ${row.workspaceRoot},
+          ${row.repositoryBinding != null ? JSON.stringify(row.repositoryBinding) : null},
+          ${row.externalKey ?? null},
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${JSON.stringify(row.scripts)},
           ${row.isPinned ? 1 : 0},
@@ -68,6 +78,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind = excluded.kind,
           title = excluded.title,
           workspace_root = excluded.workspace_root,
+          repository_binding_json = excluded.repository_binding_json,
+          external_key = excluded.external_key,
           default_model_selection_json = excluded.default_model_selection_json,
           scripts_json = excluded.scripts_json,
           is_pinned = excluded.is_pinned,
@@ -88,6 +100,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind,
           title,
           workspace_root AS "workspaceRoot",
+          repository_binding_json AS "repositoryBinding",
+          external_key AS "externalKey",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
@@ -97,6 +111,31 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_projects
         WHERE project_id = ${projectId}
+      `,
+  });
+
+  const getProjectionProjectRowByExternalKey = SqlSchema.findOneOption({
+    Request: GetProjectionProjectByExternalKeyInput,
+    Result: ProjectionProjectDbRow,
+    execute: ({ externalKey }) =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          kind,
+          title,
+          workspace_root AS "workspaceRoot",
+          repository_binding_json AS "repositoryBinding",
+          external_key AS "externalKey",
+          default_model_selection_json AS "defaultModelSelection",
+          scripts_json AS "scripts",
+          is_pinned AS "isPinned",
+          space_id AS "spaceId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_projects
+        WHERE external_key = ${externalKey}
+        LIMIT 1
       `,
   });
 
@@ -110,6 +149,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           kind,
           title,
           workspace_root AS "workspaceRoot",
+          repository_binding_json AS "repositoryBinding",
+          external_key AS "externalKey",
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
@@ -158,6 +199,13 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.listAll:query")),
     );
 
+  const getByExternalKey: ProjectionProjectRepositoryShape["getByExternalKey"] = (input) =>
+    getProjectionProjectRowByExternalKey(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionProjectRepository.getByExternalKey:query"),
+      ),
+    );
+
   const deleteById: ProjectionProjectRepositoryShape["deleteById"] = (input) =>
     deleteProjectionProjectRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.deleteById:query")),
@@ -175,6 +223,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
   return {
     upsert,
     getById,
+    getByExternalKey,
     listAll,
     deleteById,
     clearSpaceAssignments,

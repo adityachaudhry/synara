@@ -11,7 +11,7 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -37,6 +37,7 @@ import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { runManagedAttachmentCleanupBatch } from "../../managedAttachmentCleanup.ts";
 
@@ -4543,7 +4544,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
   ),
 );
 
-const engineLayer = it.layer(
+const makeEngineLayer = (prefix: string) =>
   OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -4552,11 +4553,83 @@ const engineLayer = it.layer(
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), {
-        prefix: "synara-projection-pipeline-engine-dispatch-",
+        prefix,
       }),
     ),
     Layer.provideMerge(NodeServices.layer),
-  ),
+  );
+
+const repositoryIdentityEngineLayer = it.layer(
+  makeEngineLayer("synara-projection-pipeline-repository-identity-"),
+);
+
+repositoryIdentityEngineLayer("repository identity projection", (it) => {
+  it.effect("projects server-owned repository identity into the durable read model", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-08-29T12:00:00.000Z";
+
+      yield* engine.dispatch({
+        type: "project.external.resolve",
+        commandId: CommandId.makeUnsafe("server:external-project:project-bound"),
+        projectId: ProjectId.makeUnsafe("external-project-bound"),
+        externalKey: "host-company:123",
+        title: "Bound Project",
+        workspaceRoot: "/tmp/external-project-bound",
+        repositoryBinding: {
+          kind: "git-subdirectory",
+          origin: "https://git.example.com",
+          owner: "acme-platform",
+          repository: "company-data",
+          ref: "main",
+          path: "companies/cue-cloud",
+        },
+        createdAt,
+      });
+
+      const rows = yield* sql<{
+        readonly repositoryBinding: string | null;
+        readonly externalKey: string | null;
+      }>`
+        SELECT
+          repository_binding_json AS "repositoryBinding",
+          external_key AS "externalKey"
+        FROM projection_projects
+        WHERE project_id = 'external-project-bound'
+      `;
+      assert.deepStrictEqual(rows, [
+        {
+          repositoryBinding:
+            '{"kind":"git-subdirectory","origin":"https://git.example.com","owner":"acme-platform","repository":"company-data","ref":"main","path":"companies/cue-cloud"}',
+          externalKey: "host-company:123",
+        },
+      ]);
+
+      const projectedShell = yield* Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        return Option.getOrThrow(
+          yield* snapshotQuery.getProjectShellById(
+            ProjectId.makeUnsafe("external-project-bound"),
+          ),
+        );
+      }).pipe(Effect.provide(OrchestrationProjectionSnapshotQueryLive));
+
+      assert.deepStrictEqual(projectedShell.repositoryBinding, {
+        kind: "git-subdirectory",
+        origin: "https://git.example.com",
+        owner: "acme-platform",
+        repository: "company-data",
+        ref: "main",
+        path: "companies/cue-cloud",
+      });
+      assert.equal(projectedShell.externalKey, "host-company:123");
+    }),
+  );
+});
+
+const engineLayer = it.layer(
+  makeEngineLayer("synara-projection-pipeline-engine-dispatch-"),
 );
 
 engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {

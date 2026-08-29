@@ -9,8 +9,10 @@
 import {
   IsoDateTime,
   ModelSelection,
+  ExternalProjectKey,
   ProjectId,
   ProjectKind,
+  ProjectRepositoryBinding,
   ProjectScript,
   SpaceId,
 } from "@synara/contracts";
@@ -24,6 +26,12 @@ export const ProjectionProject = Schema.Struct({
   kind: ProjectKind.pipe(Schema.withDecodingDefault(() => "project")),
   title: Schema.String,
   workspaceRoot: Schema.String,
+  repositoryBinding: Schema.NullOr(ProjectRepositoryBinding).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  externalKey: Schema.NullOr(ExternalProjectKey).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
@@ -38,6 +46,12 @@ export const GetProjectionProjectInput = Schema.Struct({
   projectId: ProjectId,
 });
 export type GetProjectionProjectInput = typeof GetProjectionProjectInput.Type;
+
+export const GetProjectionProjectByExternalKeyInput = Schema.Struct({
+  externalKey: ExternalProjectKey,
+});
+export type GetProjectionProjectByExternalKeyInput =
+  typeof GetProjectionProjectByExternalKeyInput.Type;
 
 export const DeleteProjectionProjectInput = Schema.Struct({
   projectId: ProjectId,
@@ -67,6 +81,10 @@ export interface ProjectionProjectRepositoryShape {
    */
   readonly getById: (
     input: GetProjectionProjectInput,
+  ) => Effect.Effect<Option.Option<ProjectionProject>, ProjectionRepositoryError>;
+
+  readonly getByExternalKey: (
+    input: GetProjectionProjectByExternalKeyInput,
   ) => Effect.Effect<Option.Option<ProjectionProject>, ProjectionRepositoryError>;
 
   /**

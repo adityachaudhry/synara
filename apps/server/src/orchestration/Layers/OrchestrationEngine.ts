@@ -124,6 +124,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
         aggregateId: command.spaceId,
       };
     case "project.create":
+    case "project.external.resolve":
     case "project.meta.update":
     case "project.delete":
       return {

@@ -387,6 +387,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           spaceId: null,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
+          repositoryBinding: null,
+          externalKey: null,
           defaultModelSelection: {
             provider: "codex",
             model: "gpt-5-codex",

@@ -12,6 +12,10 @@ import {
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
+  ExternalProjectKey,
+  ProjectRepositoryBinding,
+} from "./repositoryBinding";
+import {
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -454,6 +458,12 @@ export const OrchestrationProject = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  externalKey: Schema.optional(Schema.NullOr(ExternalProjectKey)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -469,6 +479,12 @@ export const OrchestrationProjectShell = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  externalKey: Schema.optional(Schema.NullOr(ExternalProjectKey)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -1506,6 +1522,18 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ExternalProjectResolveCommand = Schema.Struct({
+  type: Schema.Literal("project.external.resolve"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  externalKey: ExternalProjectKey,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: ProjectRepositoryBinding,
+  createdAt: IsoDateTime,
+});
+export type ExternalProjectResolveCommand = typeof ExternalProjectResolveCommand.Type;
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -1689,6 +1717,7 @@ const ThreadConversationRollbackCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ExternalProjectResolveCommand,
   ThreadSessionSetCommand,
   ThreadGoalContinueCommand,
   ThreadMessagesImportCommand,
@@ -1792,6 +1821,12 @@ export const ProjectCreatedPayload = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  repositoryBinding: Schema.optional(Schema.NullOr(ProjectRepositoryBinding)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  externalKey: Schema.optional(Schema.NullOr(ExternalProjectKey)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
