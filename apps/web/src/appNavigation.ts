@@ -8,12 +8,19 @@ import {
   createBrowserHistory,
   createHashHistory,
   createMemoryHistory,
+  type RouterHistory,
 } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { isElectron } from "./env";
 
-type RouterHistory = ReturnType<typeof createBrowserHistory>;
 type HistorySubscriberEvent = Parameters<Parameters<RouterHistory["subscribe"]>[0]>[0];
 type HistorySubscriberAction = HistorySubscriberEvent["action"];
 
@@ -28,6 +35,26 @@ function createAppHistory(): RouterHistory {
 }
 
 export const appHistory: RouterHistory = createAppHistory();
+
+export function createEmbeddedAppHistory(initialPath = "/"): RouterHistory {
+  return createMemoryHistory({ initialEntries: [initialPath] });
+}
+
+const AppHistoryContext = createContext<RouterHistory>(appHistory);
+
+export function AppHistoryProvider({
+  history,
+  children,
+}: {
+  readonly history: RouterHistory;
+  readonly children: ReactNode;
+}) {
+  return createElement(AppHistoryContext.Provider, { value: history }, children);
+}
+
+export function useAppHistory(): RouterHistory {
+  return useContext(AppHistoryContext);
+}
 
 const appHistoryMaxIndexByHistory = new WeakMap<RouterHistory, number>();
 
@@ -110,15 +137,18 @@ export function resolveAppNavigationState(history: RouterHistory = appHistory): 
 }
 
 export function useAppNavigationState(): AppNavigationState {
-  const [navigationState, setNavigationState] = useState(() => resolveAppNavigationState());
+  const history = useAppHistory();
+  const [navigationState, setNavigationState] = useState(() =>
+    resolveAppNavigationState(history),
+  );
 
   useEffect(() => {
     const updateNavigationState = (event?: HistorySubscriberEvent) =>
-      setNavigationState(syncAppNavigationState(appHistory, event?.action));
-    const unsubscribe = appHistory.subscribe(updateNavigationState);
+      setNavigationState(syncAppNavigationState(history, event?.action));
+    const unsubscribe = history.subscribe(updateNavigationState);
     updateNavigationState();
     return unsubscribe;
-  }, []);
+  }, [history]);
 
   return navigationState;
 }

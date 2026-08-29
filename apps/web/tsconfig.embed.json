@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "incremental": false,
+    "noEmit": false,
+    "outDir": "./dist-embed/build",
+    "rootDir": "./src",
+    "types": ["vite/client", "node"]
+  },
+  "include": ["src/embedded.ts", "src/*.d.ts"]
+}

@@ -1,17 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { RouterProvider } from "@tanstack/react-router";
 
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
-import { appHistory } from "./appNavigation";
-import { getRouter } from "./router";
+import { SynaraApp } from "./SynaraApp";
 import { APP_DISPLAY_NAME } from "./branding";
 import { isElectron } from "./env";
 import { isMacPlatform } from "./lib/utils";
-
-const router = getRouter(appHistory);
 
 document.title = APP_DISPLAY_NAME;
 
@@ -27,6 +23,6 @@ if (isElectron) {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <SynaraApp />
   </React.StrictMode>,
 );

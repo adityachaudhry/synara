@@ -928,6 +928,30 @@ describe("WsTransport", () => {
     }
   });
 
+  it("resolves a fresh one-use WebSocket URL for every feature connection", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
+    vi.stubGlobal("fetch", fetchMock);
+    const resolveUrl = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("ws://localhost:3020/?token=first")
+      .mockResolvedValueOnce("ws://localhost:3020/?token=second");
+
+    const transport = new WsTransport(resolveUrl);
+    const internals = transport as unknown as {
+      createSession(): { clientPromise: Promise<unknown> };
+      probeFeatureConnection: (...args: unknown[]) => Promise<void>;
+    };
+    await waitForSockets(1);
+    internals.probeFeatureConnection = vi.fn(async () => undefined);
+    await internals.createSession().clientPromise;
+
+    expect(resolveUrl).toHaveBeenCalledTimes(2);
+    expect(new URL(sockets[0]!.url).searchParams.get("token")).toBe("first");
+    expect(new URL(sockets[1]!.url).searchParams.get("token")).toBe("second");
+
+    await transport.dispose();
+  });
+
   it("retries duplicate-rejected streams in place despite the non-retryable marker", () => {
     const duplicate = Cause.fail({
       code: "STREAM_DUPLICATE_SUBSCRIPTION",

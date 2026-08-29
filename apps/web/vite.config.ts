@@ -43,7 +43,7 @@ async function listFiles(root: string): Promise<string[]> {
 }
 
 // Finds literal icon basenames in source, then prunes the copied public icon set after build.
-function centralIconPrunePlugin(): Plugin {
+export function centralIconPrunePlugin(): Plugin {
   let resolvedRoot = process.cwd();
   let resolvedOutDir = "dist";
   return {

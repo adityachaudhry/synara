@@ -28,6 +28,11 @@ import {
   updateChromeTheme,
   updateThemePackFromShareString,
 } from "../theme/theme.logic";
+import {
+  resolveHostAwareThemeVariant,
+  resolveThemeDomTarget,
+  shouldProjectSynaraThemeVariables,
+} from "../theme/themeDomTarget";
 
 type ThemeSnapshot = {
   state: ThemeState;
@@ -36,6 +41,7 @@ type ThemeSnapshot = {
 
 const STORAGE_KEY = "synara:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
+const IS_EMBEDDED_BUILD = import.meta.env.VITE_SYNARA_EMBEDDED === "true";
 
 let listeners: Array<() => void> = [];
 let lastSnapshot: ThemeSnapshot | null = null;
@@ -139,13 +145,21 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
     return;
   }
 
-  const root = document.documentElement;
+  const root = resolveThemeDomTarget(document, IS_EMBEDDED_BUILD);
+  if (!root) return;
   // Some server-rendered tests stub only the tiny DOM surface they need.
   if (
     typeof root.classList?.toggle !== "function" ||
     typeof root.style?.setProperty !== "function" ||
     typeof root.style?.removeProperty !== "function"
   ) {
+    return;
+  }
+
+  if (!shouldProjectSynaraThemeVariables(root, IS_EMBEDDED_BUILD)) {
+    root.classList.remove("dark", "no-transitions");
+    root.setAttribute("data-theme-mode", "light");
+    root.setAttribute("data-theme-variant", "light");
     return;
   }
 
@@ -206,7 +220,7 @@ function syncDesktopTheme(theme: ThemeMode) {
 }
 
 // Apply immediately on module load to minimize flash before React mounts.
-if (typeof document !== "undefined") {
+if (typeof document !== "undefined" && !IS_EMBEDDED_BUILD) {
   applyThemeState(readStoredThemeState());
 }
 
@@ -252,7 +266,17 @@ export function useTheme() {
     systemDark: false,
   }));
   const theme = snapshot.state.mode;
-  const resolvedTheme = resolveThemeVariant(theme, snapshot.systemDark);
+  const embeddedRoot =
+    typeof document === "undefined"
+      ? null
+      : resolveThemeDomTarget(document, IS_EMBEDDED_BUILD);
+  const hostThemed =
+    typeof embeddedRoot?.hasAttribute === "function" &&
+    embeddedRoot.hasAttribute("data-synara-host-themed");
+  const resolvedTheme = resolveHostAwareThemeVariant(
+    resolveThemeVariant(theme, snapshot.systemDark),
+    hostThemed,
+  );
   const activeTheme = resolveThemePack(snapshot.state, resolvedTheme);
   const darkTheme = resolveThemePack(snapshot.state, "dark");
   const lightTheme = resolveThemePack(snapshot.state, "light");
@@ -282,7 +306,7 @@ export function useTheme() {
   // Keep the DOM synced if something bypassed the immediate module-load apply.
   useEffect(() => {
     applyThemeState(snapshot.state);
-  }, [snapshot.state]);
+  }, [hostThemed, snapshot.state]);
 
   return {
     activeTheme,

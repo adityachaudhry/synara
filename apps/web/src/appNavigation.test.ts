@@ -7,6 +7,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createEmbeddedAppHistory,
   goBackInAppHistory,
   goForwardInAppHistory,
   resolveAppNavigationState,
@@ -14,6 +15,16 @@ import {
 } from "./appNavigation";
 
 describe("resolveAppNavigationState", () => {
+  it("contains embedded navigation in a fresh memory history", () => {
+    const first = createEmbeddedAppHistory("/settings");
+    const second = createEmbeddedAppHistory();
+
+    expect(first.location.pathname).toBe("/settings");
+    first.push("/plugins");
+    expect(first.location.pathname).toBe("/plugins");
+    expect(second.location.pathname).toBe("/");
+  });
+
   it("tracks back and forward availability from the TanStack history index", () => {
     const history = createMemoryHistory({ initialEntries: ["/"] });
 

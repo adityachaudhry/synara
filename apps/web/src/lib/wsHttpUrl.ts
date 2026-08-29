@@ -4,6 +4,8 @@
 // Layer: Web utility
 // Exports: resolveWsHttpUrl, toAttachmentPreviewUrl
 
+import { readSynaraRuntimeConfig, resolveSynaraHttpUrl } from "../synaraRuntimeConfig";
+
 // Build a fully-qualified HTTP URL for `rawPath` against the same server the WS connection uses.
 // On desktop the page is served from a custom protocol scheme, so <img>/<a download> with a
 // relative path never reaches the server. We mirror the WS host and forward the legacy token
@@ -11,6 +13,11 @@
 // request without touching cookies.
 export function resolveWsHttpUrl(rawPath: string): string {
   if (typeof window === "undefined") return rawPath;
+  const pageOrigin = window.location?.origin;
+  if (!pageOrigin) return rawPath;
+  if (readSynaraRuntimeConfig().httpBaseUrl) {
+    return resolveSynaraHttpUrl(rawPath, pageOrigin);
+  }
   const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
   const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
   const wsCandidate =
@@ -19,7 +26,7 @@ export function resolveWsHttpUrl(rawPath: string): string {
       : typeof envWsUrl === "string" && envWsUrl.length > 0
         ? envWsUrl
         : null;
-  if (!wsCandidate) return new URL(rawPath, window.location.origin).toString();
+  if (!wsCandidate) return new URL(rawPath, pageOrigin).toString();
   try {
     const wsUrl = new URL(wsCandidate);
     const protocol =
@@ -34,7 +41,7 @@ export function resolveWsHttpUrl(rawPath: string): string {
     }
     return httpUrl.toString();
   } catch {
-    return new URL(rawPath, window.location.origin).toString();
+    return new URL(rawPath, pageOrigin).toString();
   }
 }
 

@@ -124,6 +124,8 @@ export interface WsRequestOptions {
   readonly signal?: AbortSignal;
 }
 
+export type WsUrlResolver = () => string | Promise<string>;
+
 interface RequestAbortScope {
   readonly signal: AbortSignal | undefined;
   readonly didTimeout: () => boolean;
@@ -696,7 +698,7 @@ export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<stri
 }
 
 export class WsTransport {
-  private readonly explicitUrl: string | null;
+  private readonly urlSource: string | WsUrlResolver | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly stateListeners = new Set<(state: WsTransportState) => void>();
   private readonly compatibilityListeners = new Set<(issue: WsCompatibilityError | null) => void>();
@@ -748,8 +750,8 @@ export class WsTransport {
   // cache was cleared by an intervening failure.
   private lastServerInstanceId: string | null = null;
 
-  constructor(url?: string) {
-    this.explicitUrl = url ?? null;
+  constructor(url?: string | WsUrlResolver) {
+    this.urlSource = url ?? null;
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
       if (this.disposed || isTerminalCompatibilityFailure(error)) return;
@@ -759,6 +761,15 @@ export class WsTransport {
         }
       });
     });
+  }
+
+  private async resolveSessionUrl(): Promise<string | null> {
+    if (typeof this.urlSource !== "function") return this.urlSource;
+    const url = await this.urlSource();
+    if (url.trim().length === 0) {
+      throw new Error("The WebSocket URL resolver returned an empty URL.");
+    }
+    return url;
   }
 
   async request<T = unknown>(
@@ -1004,16 +1015,19 @@ export class WsTransport {
    * endpoint answers directly on current servers, and only servers predating
    * it fall back to the legacy `/ws/bootstrap` socket round trip.
    */
-  private async negotiateCompatibility(): Promise<WsBootstrapNegotiateResult> {
-    const httpResult = await negotiateOverHttp(this.explicitUrl, this.lifetime.signal);
-    if (httpResult) return httpResult;
+  private async negotiateCompatibility(explicitUrl: string | null): Promise<{
+    readonly compatibility: WsBootstrapNegotiateResult;
+    readonly usedBootstrapSocket: boolean;
+  }> {
+    const httpResult = await negotiateOverHttp(explicitUrl, this.lifetime.signal);
+    if (httpResult) return { compatibility: httpResult, usedBootstrapSocket: false };
     // dispose() may have run while the request was in flight; it captured a
     // null runtime and returned, so building one here would strand it.
     if (this.disposed) {
       throw new Error("WebSocket transport was disposed during negotiation.");
     }
     const runtime = ManagedRuntime.make(
-      makeProtocolLayer(makeSocketUrl(this.explicitUrl, WS_BOOTSTRAP_PATH)),
+      makeProtocolLayer(makeSocketUrl(explicitUrl, WS_BOOTSTRAP_PATH)),
     );
     const clientScope = runtime.runSync(Scope.make());
     // Track the bootstrap runtime so dispose() during negotiation aborts it.
@@ -1023,7 +1037,7 @@ export class WsTransport {
       const bootstrapClient = await runtime.runPromise(
         Scope.provide(clientScope)(makeBootstrapRpcClient),
       );
-      return await runtime.runPromise(
+      const compatibility = await runtime.runPromise(
         bootstrapClient[WS_BOOTSTRAP_METHOD]({
           protocolEpoch: WS_PROTOCOL_EPOCH,
           minRevision: WS_PROTOCOL_MIN_REVISION,
@@ -1032,6 +1046,7 @@ export class WsTransport {
           requiredCapabilities: [...WS_CLIENT_REQUIRED_CAPABILITIES],
         }),
       );
+      return { compatibility, usedBootstrapSocket: true };
     } finally {
       await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
       await runtime.dispose().catch(() => undefined);
@@ -1097,13 +1112,21 @@ export class WsTransport {
     // unchanged, so a reconnect costs exactly one WebSocket handshake.
     const cachedCompatibility = this.compatibility;
     const clientPromise = (async () => {
-      const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
+      const initialUrl = await this.resolveSessionUrl();
+      const negotiation = cachedCompatibility
+        ? { compatibility: cachedCompatibility, usedBootstrapSocket: false }
+        : await this.negotiateCompatibility(initialUrl);
+      const compatibility = negotiation.compatibility;
       if (this.disposed || this.sessionVersion !== sessionVersion) {
         throw new Error("WebSocket session superseded during compatibility negotiation.");
       }
 
+      const featureUrl = negotiation.usedBootstrapSocket
+        ? await this.resolveSessionUrl()
+        : initialUrl;
+
       const featureRuntime = ManagedRuntime.make(
-        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility)),
+        makeProtocolLayer(makeFeatureSocketUrl(featureUrl, compatibility)),
       );
       const featureScope = featureRuntime.runSync(Scope.make());
       this.runtime = featureRuntime;
