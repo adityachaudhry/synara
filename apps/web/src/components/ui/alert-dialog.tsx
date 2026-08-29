@@ -4,12 +4,16 @@ import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog
 
 import { cn } from "~/lib/utils";
 import { dialogFooterButtonClassName } from "~/components/ui/dialog";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const AlertDialogCreateHandle = AlertDialogPrimitive.createHandle;
 
 const AlertDialog = AlertDialogPrimitive.Root;
 
-const AlertDialogPortal = AlertDialogPrimitive.Portal;
+function AlertDialogPortal(props: AlertDialogPrimitive.Portal.Props) {
+  const container = useSynaraPortalContainer();
+  return <AlertDialogPrimitive.Portal {...props} container={props.container ?? container} />;
+}
 
 function AlertDialogTrigger(props: AlertDialogPrimitive.Trigger.Props) {
   return <AlertDialogPrimitive.Trigger data-slot="alert-dialog-trigger" {...props} />;

@@ -1,13 +1,8 @@
+import type { RouterHistory } from "@tanstack/react-router";
+
 import { createEmbeddedAppHistory as createAppHistory } from "./appNavigation";
 
-export interface SynaraHistory {
-  readonly location: { readonly pathname: string };
-  push(path: string): void;
-  replace(path: string): void;
-  back(): void;
-  forward(): void;
-  flush(): void;
-}
+export type SynaraHistory = RouterHistory;
 
 export function createEmbeddedAppHistory(initialPath = "/"): SynaraHistory {
   return createAppHistory(initialPath);

@@ -4,3 +4,9 @@
 // Exports: module declarations only
 
 declare module "@fontsource-variable/jetbrains-mono";
+
+declare module "virtual:synara-central-icon-assets" {
+  export const CENTRAL_ICON_ASSET_URLS: Readonly<
+    Record<"reversed" | "fill", Readonly<Record<string, string>>>
+  >;
+}

@@ -32,6 +32,8 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { createCentralIconComponent } from "~/lib/central-icons";
+import { useSynaraHostSidebar } from "~/hostSidebar";
+import { readSynaraRuntimeConfig } from "~/synaraRuntimeConfig";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
@@ -1311,6 +1313,8 @@ export function SidebarSurfacePicker({
 }
 
 export default function Sidebar() {
+  const hostSidebar = useSynaraHostSidebar();
+  const hostProject = readSynaraRuntimeConfig().project;
   const githubProvisioningAvailable = useSyncExternalStore(
     subscribeGitHubProvisioningCapability,
     readGitHubProvisioningCapability,
@@ -5776,7 +5780,19 @@ export default function Sidebar() {
         </SidebarHeader>
       )}
 
+      {hostSidebar?.header ? (
+        <SidebarHeader data-synara-host-sidebar-header>{hostSidebar.header}</SidebarHeader>
+      ) : null}
+
       <SidebarContent className="gap-0 font-system-ui">
+        {hostProject && hostSidebar?.showProjectTitle !== false ? (
+          <div
+            className="truncate px-3 py-2 font-medium text-foreground"
+            data-synara-host-project-title
+          >
+            {hostProject.name}
+          </div>
+        ) : null}
         {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
           <SidebarGroup className="px-2 pt-2 pb-0">
             <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
@@ -6230,6 +6246,10 @@ export default function Sidebar() {
           </SidebarGroup>
         ) : null}
       </SidebarContent>
+
+      {hostSidebar?.footer ? (
+        <SidebarFooter data-synara-host-sidebar-footer>{hostSidebar.footer}</SidebarFooter>
+      ) : null}
 
       <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
         <SidebarMenu>

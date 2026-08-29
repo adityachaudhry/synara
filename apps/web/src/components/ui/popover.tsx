@@ -4,6 +4,7 @@ import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 
 import { cn } from "~/lib/utils";
 import { APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME } from "../chat/composerPickerStyles";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const PopoverCreateHandle = PopoverPrimitive.createHandle;
 
@@ -40,8 +41,9 @@ function PopoverPopup({
   const sideOffset = sideOffsetProp ?? 4;
   const alignOffset = alignOffsetProp ?? 0;
   const tooltipStyle = tooltipStyleProp ?? false;
+  const container = useSynaraPortalContainer();
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

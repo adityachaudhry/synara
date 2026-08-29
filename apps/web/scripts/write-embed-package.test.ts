@@ -16,6 +16,9 @@ async function makeFixture(name: string) {
   await fs.writeFile(path.join(buildDir, "index.js"), "export const SynaraApp = {};\n");
   await fs.writeFile(path.join(buildDir, "style.css"), "[data-synara-app-root] {}\n");
   await fs.writeFile(path.join(buildDir, "route-chunk.js"), "export {};\n");
+  await fs.writeFile(path.join(buildDir, "favicon.ico"), "standalone");
+  await fs.mkdir(path.join(buildDir, "app-icons"));
+  await fs.writeFile(path.join(buildDir, "app-icons", "default.png"), "standalone");
   await fs.writeFile(
     path.join(buildDir, "index.d.ts"),
     [
@@ -69,6 +72,8 @@ describe("writeEmbedPackage", () => {
     ];
     expect((await fs.readdir(first.outputDir)).sort()).toEqual(expectedNames);
     expect((await fs.readdir(second.outputDir)).sort()).toEqual(expectedNames);
+    await expect(fs.access(path.join(first.outputDir, "favicon.ico"))).rejects.toThrow();
+    await expect(fs.access(path.join(first.outputDir, "app-icons"))).rejects.toThrow();
 
     for (const name of expectedNames) {
       expect(await fs.readFile(path.join(first.outputDir, name), "utf8")).toBe(

@@ -5,17 +5,14 @@
 // Depends on: Vite public asset serving and app className merging utilities.
 
 import { forwardRef, type CSSProperties, type HTMLAttributes, type ReactElement } from "react";
+import { CENTRAL_ICON_ASSET_URLS } from "virtual:synara-central-icon-assets";
 import { cn } from "./utils";
 
-// Central icons ship in two visual sets served as static assets: the default
+// Central icons ship in two visual sets bundled by Vite: the default
 // "reversed" outline set and a solid "fill" set. The variant only selects the
 // source folder — rendering (CSS mask + bg-current) is identical for both, so a
 // fill asset paints as a solid glyph and an outline asset as a stroked one.
-const CENTRAL_ICON_BASE_PATHS = {
-  reversed: "/central-icons-reversed",
-  fill: "/central-icons-fill",
-} as const;
-export type CentralIconVariant = keyof typeof CENTRAL_ICON_BASE_PATHS;
+export type CentralIconVariant = keyof typeof CENTRAL_ICON_ASSET_URLS;
 const DEFAULT_CENTRAL_ICON_VARIANT: CentralIconVariant = "reversed";
 const SVG_SUFFIX = ".svg";
 const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -26,7 +23,7 @@ export type CentralIconProps = Omit<HTMLAttributes<HTMLSpanElement>, "children">
   variant?: CentralIconVariant | undefined;
 };
 
-// Builds a public asset URL from the icon basename without allowing path traversal.
+// Resolves a bundled asset URL from the icon basename without allowing path traversal.
 export function getCentralIconUrl(
   name: string,
   variant: CentralIconVariant = DEFAULT_CENTRAL_ICON_VARIANT,
@@ -44,7 +41,7 @@ export function getCentralIconUrl(
     return null;
   }
 
-  return `${CENTRAL_ICON_BASE_PATHS[variant]}/${encodeURIComponent(normalizedName)}${SVG_SUFFIX}`;
+  return CENTRAL_ICON_ASSET_URLS[variant][normalizedName] ?? null;
 }
 
 // Shared base classes so the React component and the imperative DOM helper stay
@@ -107,6 +104,7 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
+      data-central-icon={name.endsWith(SVG_SUFFIX) ? name.slice(0, -SVG_SUFFIX.length) : name}
       data-slot={CENTRAL_ICON_SLOT}
       className={cn(CENTRAL_ICON_BASE_CLASS, className)}
       style={maskStyle}
@@ -143,6 +141,7 @@ export function createCentralIconElement(
 
   const span = document.createElement("span");
   span.setAttribute("aria-hidden", "true");
+  span.dataset.centralIcon = name.endsWith(SVG_SUFFIX) ? name.slice(0, -SVG_SUFFIX.length) : name;
   span.dataset.slot = CENTRAL_ICON_SLOT;
   span.className = cn(CENTRAL_ICON_BASE_CLASS, className);
   const maskValue = centralIconMaskValue(iconUrl);

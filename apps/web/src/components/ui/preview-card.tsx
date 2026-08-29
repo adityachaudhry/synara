@@ -1,6 +1,7 @@
 import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card";
 
 import { cn } from "~/lib/utils";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 // Hover-triggered, interactive card (Base UI PreviewCard). Unlike a Tooltip it
 // stays open while the pointer moves into the popup, so its content can hold
@@ -32,8 +33,9 @@ function PreviewCardPopup({
   const align = alignProp ?? "start";
   const side = sideProp ?? "right";
   const sideOffset = sideOffsetProp ?? 8;
+  const container = useSynaraPortalContainer();
   return (
-    <PreviewCardPrimitive.Portal>
+    <PreviewCardPrimitive.Portal container={container}>
       <PreviewCardPrimitive.Positioner
         align={align}
         anchor={anchor}

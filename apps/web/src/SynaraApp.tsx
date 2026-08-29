@@ -1,20 +1,14 @@
-import { RouterProvider, type RouterHistory } from "@tanstack/react-router";
-import { useMemo, type CSSProperties, type ReactNode } from "react";
+import { RouterProvider } from "@tanstack/react-router";
+import { useMemo, useRef, type CSSProperties } from "react";
 
 import { AppHistoryProvider, appHistory } from "./appNavigation";
 import type { SynaraHistory } from "./embeddedHistory";
+import { SynaraHostPortalProvider } from "./hostPortal";
+import { SynaraHostSidebarProvider, type SynaraHostSidebar } from "./hostSidebar";
 import { getAppTypographyScale } from "./lib/appTypography";
 import { createHostThemeStyle } from "./lib/hostThemeStyle";
 import { getRouter } from "./router";
 import { configureSynaraRuntime, type SynaraRuntimeConfig } from "./synaraRuntimeConfig";
-
-export interface SynaraHostSidebar {
-  readonly widthPx: number;
-  readonly lockedOpen?: boolean;
-  readonly showProjectTitle?: boolean;
-  readonly header?: ReactNode;
-  readonly footer?: ReactNode;
-}
 
 export interface SynaraHostTheme {
   readonly fontFamilySans?: string;
@@ -77,24 +71,28 @@ export function SynaraApp({
     ...(resolveWebSocketUrl ? { resolveWebSocketUrl } : {}),
     ...(project ? { project } : {}),
   });
-  const routerHistory = history as RouterHistory;
-  const router = useMemo(() => getRouter(routerHistory), [routerHistory]);
+  const router = useMemo(() => getRouter(history), [history]);
+  const portalContainerRef = useRef<HTMLDivElement>(null);
   const style = {
     position: "relative",
     width: "100%",
     height: "100%",
     minWidth: 0,
     minHeight: 0,
-    ...(hostSidebar ? { "--sidebar-width": `${hostSidebar.widthPx}px` } : {}),
     ...createHostThemeStyle(hostTheme),
     ...embeddedTypographyStyle(embeddedBaseFontSizePx),
   } as CSSProperties;
 
   return (
-    <div data-synara-app-root data-synara-host-themed={hostTheme ? "" : undefined} style={style}>
-      <AppHistoryProvider history={routerHistory}>
-        <RouterProvider router={router} />
-      </AppHistoryProvider>
-    </div>
+    <SynaraHostPortalProvider value={portalContainerRef}>
+      <div data-synara-app-root data-synara-host-themed={hostTheme ? "" : undefined} style={style}>
+        <SynaraHostSidebarProvider value={hostSidebar ?? null}>
+          <AppHistoryProvider history={history}>
+            <RouterProvider router={router} />
+          </AppHistoryProvider>
+        </SynaraHostSidebarProvider>
+        <div ref={portalContainerRef} data-synara-portal-container />
+      </div>
+    </SynaraHostPortalProvider>
   );
 }

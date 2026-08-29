@@ -46,7 +46,7 @@ export default defineConfig({
   build: {
     outDir: "dist-embed/build",
     emptyOutDir: true,
-    copyPublicDir: true,
+    copyPublicDir: false,
     cssCodeSplit: false,
     lib: {
       entry: path.resolve(import.meta.dirname, "src/embeddedBundle.ts"),

@@ -16,10 +16,14 @@ import {
   AutocompleteSeparator,
   AutocompleteStatus,
 } from "~/components/ui/autocomplete";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const CommandDialog = CommandDialogPrimitive.Root;
 
-const CommandDialogPortal = CommandDialogPrimitive.Portal;
+function CommandDialogPortal(props: CommandDialogPrimitive.Portal.Props) {
+  const container = useSynaraPortalContainer();
+  return <CommandDialogPrimitive.Portal {...props} container={props.container ?? container} />;
+}
 
 const CommandCreateHandle = CommandDialogPrimitive.createHandle;
 

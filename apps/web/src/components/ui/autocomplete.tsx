@@ -6,6 +6,7 @@ import { ChevronsUpDownIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const Autocomplete = AutocompletePrimitive.Root;
 
@@ -99,8 +100,9 @@ function AutocompletePopup({
   const side = sideProp ?? "bottom";
   const sideOffset = sideOffsetProp ?? 4;
   const align = alignProp ?? "start";
+  const container = useSynaraPortalContainer();
   return (
-    <AutocompletePrimitive.Portal>
+    <AutocompletePrimitive.Portal container={container}>
       <AutocompletePrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

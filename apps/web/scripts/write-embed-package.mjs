@@ -8,8 +8,16 @@ const PUBLIC_DECLARATIONS = new Set([
   "index.d.ts",
   "SynaraApp.d.ts",
   "embeddedHistory.d.ts",
+  "hostSidebar.d.ts",
   "synaraRuntimeConfig.d.ts",
 ]);
+const STANDALONE_PUBLIC_ASSETS = [
+  "app-icons",
+  "apple-touch-icon.png",
+  "favicon-16x16.png",
+  "favicon.ico",
+  "synara.png",
+];
 
 function requireValue(name, value) {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -60,6 +68,11 @@ export async function writeEmbedPackage(input) {
   await fs.rm(input.outputDir, { recursive: true, force: true });
   await fs.mkdir(input.outputDir, { recursive: true });
   await fs.cp(input.buildDir, input.outputDir, { recursive: true });
+  await Promise.all(
+    STANDALONE_PUBLIC_ASSETS.map((name) =>
+      fs.rm(path.join(input.outputDir, name), { force: true, recursive: true }),
+    ),
+  );
 
   const declarationPath = path.join(input.outputDir, "index.d.ts");
   try {

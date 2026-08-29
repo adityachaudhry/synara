@@ -5,10 +5,14 @@ import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const Sheet = SheetPrimitive.Root;
 
-const SheetPortal = SheetPrimitive.Portal;
+function SheetPortal(props: SheetPrimitive.Portal.Props) {
+  const container = useSynaraPortalContainer();
+  return <SheetPrimitive.Portal {...props} container={props.container ?? container} />;
+}
 
 function SheetTrigger(props: SheetPrimitive.Trigger.Props) {
   return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />;

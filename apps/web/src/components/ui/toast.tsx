@@ -19,6 +19,7 @@ import { cn } from "~/lib/utils";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { APP_TOOLTIP_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useSynaraPortalContainer } from "~/hostPortal";
 import {
   buildVisibleToastLayout,
   DEFAULT_TOAST_TIMEOUT_MS,
@@ -518,6 +519,7 @@ function ToastProvider({
 }
 
 function Toasts({ position: positionProp }: { position: ToastPosition }) {
+  const container = useSynaraPortalContainer();
   const position = positionProp ?? "top-center";
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const visibleThreadIds = useVisibleThreadIdsFromRoute();
@@ -542,7 +544,7 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
   }, [toasts]);
 
   return (
-    <Toast.Portal data-slot="toast-portal">
+    <Toast.Portal container={container} data-slot="toast-portal">
       <Toast.Viewport
         className={cn(
           "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
@@ -695,11 +697,12 @@ function AnchoredToastProvider({
 }
 
 function AnchoredToasts() {
+  const container = useSynaraPortalContainer();
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const visibleThreadIds = useVisibleThreadIdsFromRoute();
 
   return (
-    <Toast.Portal data-slot="toast-portal-anchored">
+    <Toast.Portal container={container} data-slot="toast-portal-anchored">
       <Toast.Viewport className="outline-none" data-slot="toast-viewport-anchored">
         {toasts
           .filter((toast) => shouldRenderForActiveThread(toast.data, visibleThreadIds))

@@ -16,6 +16,7 @@ import {
   COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME,
   COMPOSER_SURFACE_SHADOW_CLASS_NAME,
 } from "../chat/composerPickerStyles";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const Select = SelectPrimitive.Root;
 
@@ -174,10 +175,11 @@ function SelectPopup({
     surface === "settings"
       ? "before:from-[var(--app-settings-surface)]"
       : "before:from-[var(--composer-surface)]";
+  const container = useSynaraPortalContainer();
 
   return (
     <SelectPopupSurfaceContext.Provider value={surface}>
-      <SelectPrimitive.Portal>
+      <SelectPrimitive.Portal container={container}>
         <SelectPrimitive.Positioner
           align={align}
           alignItemWithTrigger={alignItemWithTrigger}

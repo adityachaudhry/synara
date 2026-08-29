@@ -5,6 +5,7 @@ import {
   APP_TOOLTIP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const TooltipCreateHandle = TooltipPrimitive.createHandle;
 
@@ -64,8 +65,9 @@ function TooltipPopup({
   const align = alignProp ?? "center";
   const sideOffset = sideOffsetProp ?? 4;
   const side = sideProp ?? "top";
+  const container = useSynaraPortalContainer();
   return (
-    <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Portal container={container}>
       <TooltipPrimitive.Positioner
         align={align}
         anchor={anchor}

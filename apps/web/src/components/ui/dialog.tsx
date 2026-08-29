@@ -5,12 +5,16 @@ import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button, dialogActionButtonClassName } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const DialogCreateHandle = DialogPrimitive.createHandle;
 
 const Dialog = DialogPrimitive.Root;
 
-const DialogPortal = DialogPrimitive.Portal;
+function DialogPortal(props: DialogPrimitive.Portal.Props) {
+  const container = useSynaraPortalContainer();
+  return <DialogPrimitive.Portal {...props} container={props.container ?? container} />;
+}
 
 function DialogTrigger(props: DialogPrimitive.Trigger.Props) {
   return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />;

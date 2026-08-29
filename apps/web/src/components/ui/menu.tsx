@@ -12,6 +12,7 @@ import {
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
 import { SWITCH_THUMB_CLASS_NAME, SWITCH_TRACK_CLASS_NAME } from "./switch";
+import { useSynaraPortalContainer } from "~/hostPortal";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
 
@@ -46,7 +47,10 @@ function Menu({
   return <MenuPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
 }
 
-const MenuPortal = MenuPrimitive.Portal;
+function MenuPortal(props: MenuPrimitive.Portal.Props) {
+  const container = useSynaraPortalContainer();
+  return <MenuPrimitive.Portal {...props} container={props.container ?? container} />;
+}
 
 function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Props) {
   return (
@@ -77,6 +81,7 @@ function MenuPopupBase({
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal" | undefined;
 }) {
+  const container = useSynaraPortalContainer();
   const surface = surfaceProp ?? "default";
   const sideOffset = sideOffsetProp ?? 4;
   const align = alignProp ?? "center";
@@ -89,7 +94,7 @@ function MenuPopupBase({
   const isComposerSurface = surface === "composer";
 
   return (
-    <MenuPrimitive.Portal>
+    <MenuPrimitive.Portal container={container}>
       <MenuPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

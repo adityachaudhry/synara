@@ -1,7 +1,7 @@
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import {
   goBackInAppHistory,
@@ -14,6 +14,7 @@ import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { resolveHostSidebarPresentation, useSynaraHostSidebar } from "../hostSidebar";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -564,20 +565,26 @@ function ChatRouteLayout() {
     select: (location) => (location.search as { view?: unknown }).view === "editor",
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const resolvedSidebarOpen = isEditorView ? false : sidebarOpen;
+  const hostSidebar = useSynaraHostSidebar();
+  const sidebarPresentation = resolveHostSidebarPresentation(hostSidebar);
+  const resolvedSidebarOpen = isEditorView
+    ? false
+    : hostSidebar?.lockedOpen
+      ? true
+      : sidebarOpen;
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
   const sidebarElement = (
     <Sidebar
       side="left"
-      collapsible="offcanvas"
+      collapsible={sidebarPresentation.collapsible}
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
       className={cn("text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
       gapClassName={cn(SIDEBAR_GAP_CLASS, SIDEBAR_OFFCANVAS_MOTION_CLASS)}
       innerClassName={SIDEBAR_INNER_CLASS}
       transparentSurface
-      resizable={THREAD_SIDEBAR_RESIZABLE}
+      resizable={sidebarPresentation.resizable ? THREAD_SIDEBAR_RESIZABLE : false}
     >
       <ThreadSidebar />
     </Sidebar>
@@ -591,8 +598,12 @@ function ChatRouteLayout() {
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
     <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
-      {isEditorView ? null : (
-        <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
+      {isEditorView || !sidebarPresentation.showSeamRail ? null : (
+        <SidebarInstanceProvider
+          side="left"
+          resizable={THREAD_SIDEBAR_RESIZABLE}
+          collapsible={sidebarPresentation.collapsible}
+        >
           <SidebarRail placement="content-seam" />
         </SidebarInstanceProvider>
       )}
@@ -607,6 +618,11 @@ function ChatRouteLayout() {
       onOpenChange={setSidebarOpen}
       className="bg-[var(--app-shell-background)]"
       data-sidebar-side="left"
+      style={
+        sidebarPresentation.width
+          ? ({ "--sidebar-width": sidebarPresentation.width } as CSSProperties)
+          : undefined
+      }
     >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />

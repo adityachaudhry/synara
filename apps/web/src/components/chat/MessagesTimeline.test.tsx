@@ -464,8 +464,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(folderMarkup).toContain("/central-icons-reversed/folder-2.svg");
-    expect(folderMarkup).not.toContain("/central-icons-reversed/puzzle.svg");
+    expect(folderMarkup).toContain('data-central-icon="folder-2"');
+    expect(folderMarkup).not.toContain('data-central-icon="puzzle"');
 
     const tsxMarkup = renderToStaticMarkup(
       <MessagesTimeline
@@ -487,8 +487,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(tsxMarkup).toContain("/central-icons-reversed/react.svg");
-    expect(tsxMarkup).not.toContain("/central-icons-reversed/folder-2.svg");
+    expect(tsxMarkup).toContain('data-central-icon="react"');
+    expect(tsxMarkup).not.toContain('data-central-icon="folder-2"');
 
     const pluginMarkup = renderToStaticMarkup(
       <MessagesTimeline
@@ -511,7 +511,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(pluginMarkup).toContain("/central-icons-reversed/puzzle.svg");
+    expect(pluginMarkup).toContain('data-central-icon="puzzle"');
   });
 
   it("renders edit beside copy for user messages", async () => {
@@ -1014,7 +1014,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("/central-icons-reversed/console.svg");
+    expect(markup).toContain('data-central-icon="console"');
     expect(markup).toContain("yoo what&#x27;s ");
     expect(markup).toContain("<strong>bold</strong>");
   });
@@ -2448,7 +2448,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup.match(/data-tool-icon="github"/g)).toHaveLength(2);
-    expect(markup).not.toContain("/central-icons-reversed/git.svg");
+    expect(markup).not.toContain('data-central-icon="git"');
   });
 
   it("marks command rows with captured details as clickable", async () => {
@@ -2691,7 +2691,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Searched the web");
     expect(markup).toContain("48 files found");
-    expect(markup).toContain("/central-icons-reversed/globe.svg");
+    expect(markup).toContain('data-central-icon="globe"');
     expect(markup).not.toContain("tabler-icon-world");
   });
 

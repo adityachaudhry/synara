@@ -24,9 +24,12 @@ const buildSourcemap =
       ? "hidden"
       : false;
 
-const CENTRAL_ICON_DIR = "central-icons-reversed";
+const CENTRAL_ICON_VARIANTS = ["reversed", "fill"] as const;
+type CentralIconVariant = (typeof CENTRAL_ICON_VARIANTS)[number];
 const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
+const CENTRAL_ICON_ASSET_MODULE_ID = "virtual:synara-central-icon-assets";
+const RESOLVED_CENTRAL_ICON_ASSET_MODULE_ID = `\0${CENTRAL_ICON_ASSET_MODULE_ID}`;
 
 async function listFiles(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
@@ -42,61 +45,89 @@ async function listFiles(root: string): Promise<string[]> {
   return result;
 }
 
-// Finds literal icon basenames in source, then prunes the copied public icon set after build.
+export async function collectReferencedCentralIcons(
+  root: string,
+): Promise<Record<CentralIconVariant, string[]>> {
+  const availableByVariant = Object.fromEntries(
+    await Promise.all(
+      CENTRAL_ICON_VARIANTS.map(async (variant) => {
+        const directory = path.join(root, "public", `central-icons-${variant}`);
+        const names = (await fs.readdir(directory).catch(() => []))
+          .filter((name) => name.endsWith(".svg"))
+          .map((name) => name.slice(0, -".svg".length));
+        return [variant, new Set(names)] as const;
+      }),
+    ),
+  ) as Record<CentralIconVariant, Set<string>>;
+  const referencedNames = new Set<string>();
+  const sourceFiles = (await listFiles(path.join(root, "src"))).filter((file) =>
+    SOURCE_EXTENSIONS.has(path.extname(file)),
+  );
+  const literalPattern = /["'`]([a-z0-9][a-z0-9-]*)["'`]/g;
+  for (const sourceFile of sourceFiles) {
+    const source = await fs.readFile(sourceFile, "utf8").catch(() => "");
+    for (const match of source.matchAll(literalPattern)) {
+      const name = match[1];
+      if (name && CENTRAL_ICON_NAME_PATTERN.test(name)) referencedNames.add(name);
+    }
+  }
+
+  return Object.fromEntries(
+    CENTRAL_ICON_VARIANTS.map((variant) => [
+      variant,
+      [...referencedNames].filter((name) => availableByVariant[variant].has(name)).sort(),
+    ]),
+  ) as Record<CentralIconVariant, string[]>;
+}
+
+async function createCentralIconAssetModule(root: string): Promise<string> {
+  const icons = await collectReferencedCentralIcons(root);
+  const mappings = Object.fromEntries(
+    await Promise.all(
+      CENTRAL_ICON_VARIANTS.map(async (variant) => [
+        variant,
+        Object.fromEntries(
+          await Promise.all(
+            icons[variant].map(async (name) => {
+              const source = await fs.readFile(
+                path.join(root, "public", `central-icons-${variant}`, `${name}.svg`),
+              );
+              return [name, `data:image/svg+xml;base64,${source.toString("base64")}`];
+            }),
+          ),
+        ),
+      ]),
+    ),
+  );
+  return `export const CENTRAL_ICON_ASSET_URLS=${JSON.stringify(mappings)};\n`;
+}
+
+// Bundles referenced public icons as data URLs, then removes both copied icon trees.
 export function centralIconPrunePlugin(): Plugin {
   let resolvedRoot = process.cwd();
   let resolvedOutDir = "dist";
   return {
     name: "synara-central-icon-prune",
-    apply: "build",
     configResolved(config) {
       resolvedRoot = config.root;
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
+    resolveId(id) {
+      return id === CENTRAL_ICON_ASSET_MODULE_ID ? RESOLVED_CENTRAL_ICON_ASSET_MODULE_ID : null;
+    },
+    async load(id) {
+      return id === RESOLVED_CENTRAL_ICON_ASSET_MODULE_ID
+        ? createCentralIconAssetModule(resolvedRoot)
+        : null;
+    },
     async closeBundle() {
-      const publicIconDir = path.join(resolvedRoot, "public", CENTRAL_ICON_DIR);
-      const distIconDir = path.join(resolvedOutDir, CENTRAL_ICON_DIR);
-      const iconFiles = await fs.readdir(publicIconDir).catch(() => []);
-      const availableIcons = new Set(
-        iconFiles
-          .filter((name) => name.endsWith(".svg"))
-          .map((name) => name.slice(0, -".svg".length)),
-      );
-      if (availableIcons.size === 0) return;
-
-      const sourceFiles = (await listFiles(path.join(resolvedRoot, "src"))).filter((file) =>
-        SOURCE_EXTENSIONS.has(path.extname(file)),
-      );
-      const requiredIcons = new Set<string>();
-      const literalPattern = /["'`]([a-z0-9][a-z0-9-]*)["'`]/g;
-      for (const sourceFile of sourceFiles) {
-        const source = await fs.readFile(sourceFile, "utf8").catch(() => "");
-        for (const match of source.matchAll(literalPattern)) {
-          const iconName = match[1];
-          if (
-            iconName &&
-            CENTRAL_ICON_NAME_PATTERN.test(iconName) &&
-            availableIcons.has(iconName)
-          ) {
-            requiredIcons.add(iconName);
-          }
-        }
-      }
-
-      if (requiredIcons.size === 0) return;
-      const copiedIconFiles = await fs.readdir(distIconDir).catch(() => []);
-      let removedCount = 0;
       await Promise.all(
-        copiedIconFiles.map(async (fileName) => {
-          if (!fileName.endsWith(".svg")) return;
-          const iconName = fileName.slice(0, -".svg".length);
-          if (requiredIcons.has(iconName)) return;
-          removedCount += 1;
-          await fs.rm(path.join(distIconDir, fileName), { force: true });
-        }),
-      );
-      console.info(
-        `[central-icons] kept ${requiredIcons.size}/${availableIcons.size} referenced SVGs, pruned ${removedCount}.`,
+        CENTRAL_ICON_VARIANTS.map((variant) =>
+          fs.rm(path.join(resolvedOutDir, `central-icons-${variant}`), {
+            force: true,
+            recursive: true,
+          }),
+        ),
       );
     },
   };
