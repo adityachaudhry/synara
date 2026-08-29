@@ -12,21 +12,34 @@ afterEach(async () => {
 });
 
 describe("central icon asset collection", () => {
-  it("keeps only source-referenced icons from both variants", async () => {
+  it("keeps source-referenced icons only in their requested variants", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-central-icons-"));
     roots.push(root);
     await fs.mkdir(path.join(root, "src"));
-    await fs.writeFile(path.join(root, "src", "icons.tsx"), 'const icon = "used";\n');
+    await fs.writeFile(
+      path.join(root, "src", "icons.tsx"),
+      [
+        'createCentralIconComponent("reversed-only");',
+        'createCentralIconComponent("shared");',
+        'createCentralIconComponent("fill-only", "fill");',
+        '<CentralIcon name="shared" variant="fill" />;',
+        'const unrelated = "unrelated";',
+        "",
+      ].join("\n"),
+    );
     for (const variant of ["reversed", "fill"]) {
       const directory = path.join(root, "public", `central-icons-${variant}`);
       await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(path.join(directory, "used.svg"), "<svg />");
+      await fs.writeFile(path.join(directory, "reversed-only.svg"), "<svg />");
+      await fs.writeFile(path.join(directory, "fill-only.svg"), "<svg />");
+      await fs.writeFile(path.join(directory, "shared.svg"), "<svg />");
+      await fs.writeFile(path.join(directory, "unrelated.svg"), "<svg />");
       await fs.writeFile(path.join(directory, "unused.svg"), "<svg />");
     }
 
     const icons = await collectReferencedCentralIcons(root);
 
-    expect(icons.reversed).toEqual(["used"]);
-    expect(icons.fill).toEqual(["used"]);
+    expect(icons.reversed).toEqual(["reversed-only", "shared"]);
+    expect(icons.fill).toEqual(["fill-only", "shared"]);
   });
 });

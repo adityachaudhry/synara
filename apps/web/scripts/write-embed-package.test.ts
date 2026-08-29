@@ -22,6 +22,7 @@ async function makeFixture(name: string) {
   await fs.writeFile(
     path.join(buildDir, "index.d.ts"),
     [
+      'import type { RouterHistory } from "@tanstack/react-router";',
       "export interface SynaraRuntimeConfig {",
       "  readonly httpBaseUrl?: string;",
       "  readonly resolveWebSocketUrl?: () => string | Promise<string>;",
@@ -29,7 +30,7 @@ async function makeFixture(name: string) {
       "}",
       "export interface SynaraAppProps extends SynaraRuntimeConfig {}",
       "export declare function SynaraApp(props: SynaraAppProps): unknown;",
-      "export declare function createEmbeddedAppHistory(initialEntry?: string): unknown;",
+      "export declare function createEmbeddedAppHistory(initialEntry?: string): RouterHistory;",
       "export interface SynaraHostSidebar {}",
       "export interface SynaraHostTheme {}",
       "",
@@ -56,6 +57,7 @@ describe("writeEmbedPackage", () => {
     const input = {
       version: "0.7.3",
       synaraCommit: "synara-sha",
+      routerVersion: "^1.160.2",
     };
 
     await writeEmbedPackage({ ...first, ...input });
@@ -94,7 +96,11 @@ describe("writeEmbedPackage", () => {
         "./style.css": "./style.css",
         "./provenance": "./synara-provenance.json",
       },
-      peerDependencies: { react: ">=19 <20", "react-dom": ">=19 <20" },
+      peerDependencies: {
+        "@tanstack/react-router": "^1.160.2",
+        react: ">=19 <20",
+        "react-dom": ">=19 <20",
+      },
     });
 
     expect(
@@ -109,10 +115,42 @@ describe("writeEmbedPackage", () => {
     expect(declarations).toContain("export interface SynaraHostTheme");
   });
 
+  it("declares every dependency imported by the public declarations", async () => {
+    const fixture = await makeFixture("declaration-dependencies");
+    await writeEmbedPackage({
+      ...fixture,
+      version: "0.7.3",
+      synaraCommit: "synara-sha",
+      routerVersion: "^1.160.2",
+    });
+
+    const declarations = await fs.readFile(path.join(fixture.outputDir, "index.d.ts"), "utf8");
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(fixture.outputDir, "package.json"), "utf8"),
+    );
+    const bareDeclarationImports = [...declarations.matchAll(/from ["']([^./][^"']*)["']/g)].map(
+      (match) => match[1],
+    );
+    const declaredDependencies = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+    ]);
+
+    expect(bareDeclarationImports).toContain("@tanstack/react-router");
+    expect(
+      bareDeclarationImports.filter((specifier) => !declaredDependencies.has(specifier)),
+    ).toEqual([]);
+  });
+
   it("rejects missing provenance instead of reading ambient repository state", async () => {
     const fixture = await makeFixture("missing-provenance");
     await expect(
-      writeEmbedPackage({ ...fixture, version: "0.7.3", synaraCommit: "" }),
+      writeEmbedPackage({
+        ...fixture,
+        version: "0.7.3",
+        synaraCommit: "",
+        routerVersion: "^1.160.2",
+      }),
     ).rejects.toThrow("SYNARA_COMMIT");
   });
 
@@ -128,6 +166,7 @@ describe("writeEmbedPackage", () => {
         ...fixture,
         version: "0.7.3",
         synaraCommit: "synara-sha",
+        routerVersion: "^1.160.2",
       }),
     ).rejects.toThrow("dynamically requires peer React");
   });

@@ -11,6 +11,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
+import ts from "typescript";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
 
@@ -30,6 +31,12 @@ const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const CENTRAL_ICON_ASSET_MODULE_ID = "virtual:synara-central-icon-assets";
 const RESOLVED_CENTRAL_ICON_ASSET_MODULE_ID = `\0${CENTRAL_ICON_ASSET_MODULE_ID}`;
+const CENTRAL_ICON_CALL_VARIANT_ARGUMENT = new Map([
+  ["centralIconWrapper", 1],
+  ["createCentralIconComponent", 1],
+  ["createCentralIconElement", 2],
+  ["getCentralIconUrl", 1],
+]);
 
 async function listFiles(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
@@ -59,23 +66,109 @@ export async function collectReferencedCentralIcons(
       }),
     ),
   ) as Record<CentralIconVariant, Set<string>>;
-  const referencedNames = new Set<string>();
+  const referencedByVariant: Record<CentralIconVariant, Set<string>> = {
+    reversed: new Set(),
+    fill: new Set(),
+  };
+  const dynamicDefaultSources = new Set<string>();
   const sourceFiles = (await listFiles(path.join(root, "src"))).filter((file) =>
     SOURCE_EXTENSIONS.has(path.extname(file)),
   );
-  const literalPattern = /["'`]([a-z0-9][a-z0-9-]*)["'`]/g;
+  const sourceByFile = new Map<string, string>();
+
+  const stringValue = (node: ts.Node | undefined): string | null =>
+    node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+      ? node.text
+      : null;
+  const addName = (variant: CentralIconVariant, name: string | null) => {
+    if (name && CENTRAL_ICON_NAME_PATTERN.test(name)) referencedByVariant[variant].add(name);
+  };
+
   for (const sourceFile of sourceFiles) {
     const source = await fs.readFile(sourceFile, "utf8").catch(() => "");
-    for (const match of source.matchAll(literalPattern)) {
-      const name = match[1];
-      if (name && CENTRAL_ICON_NAME_PATTERN.test(name)) referencedNames.add(name);
+    sourceByFile.set(sourceFile, source);
+    const tree = ts.createSourceFile(sourceFile, source, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+        const variantArgumentIndex = CENTRAL_ICON_CALL_VARIANT_ARGUMENT.get(node.expression.text);
+        if (variantArgumentIndex !== undefined) {
+          const name = stringValue(node.arguments[0]);
+          const variant = stringValue(node.arguments[variantArgumentIndex]);
+          if (name) addName(variant === "fill" ? "fill" : "reversed", name);
+          else if (variant !== "fill") dynamicDefaultSources.add(sourceFile);
+        }
+      }
+
+      if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+        if (ts.isIdentifier(node.tagName) && node.tagName.text === "CentralIcon") {
+          const attributes = new Map(
+            node.attributes.properties.flatMap((attribute) =>
+              ts.isJsxAttribute(attribute) && ts.isIdentifier(attribute.name)
+                ? [[attribute.name.text, attribute.initializer] as const]
+                : [],
+            ),
+          );
+          const nameInitializer = attributes.get("name");
+          const name =
+            stringValue(nameInitializer) ??
+            (nameInitializer && ts.isJsxExpression(nameInitializer)
+              ? stringValue(nameInitializer.expression)
+              : null);
+          const variantInitializer = attributes.get("variant");
+          const variant =
+            stringValue(variantInitializer) ??
+            (variantInitializer && ts.isJsxExpression(variantInitializer)
+              ? stringValue(variantInitializer.expression)
+              : null);
+          if (name) addName(variant === "fill" ? "fill" : "reversed", name);
+          else if (!variantInitializer) dynamicDefaultSources.add(sourceFile);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+  }
+
+  const addAvailableLiterals = (source: string) => {
+    const tree = ts.createSourceFile("dynamic.tsx", source, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node) => {
+      const value = stringValue(node);
+      if (value) addName("reversed", value);
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+  };
+  const resolveImport = (sourceFile: string, specifier: string): string | null => {
+    const base = specifier.startsWith("~/")
+      ? path.join(root, "src", specifier.slice(2))
+      : specifier.startsWith(".")
+        ? path.resolve(path.dirname(sourceFile), specifier)
+        : null;
+    if (!base) return null;
+    return (
+      sourceFiles.find(
+        (candidate) =>
+          candidate === base || candidate.slice(0, -path.extname(candidate).length) === base,
+      ) ?? null
+    );
+  };
+  for (const sourceFile of dynamicDefaultSources) {
+    const source = sourceByFile.get(sourceFile) ?? "";
+    addAvailableLiterals(source);
+    const tree = ts.createSourceFile(sourceFile, source, ts.ScriptTarget.Latest, true);
+    for (const statement of tree.statements) {
+      if (!ts.isImportDeclaration(statement)) continue;
+      const importedFile = resolveImport(sourceFile, statement.moduleSpecifier.text);
+      if (importedFile) addAvailableLiterals(sourceByFile.get(importedFile) ?? "");
     }
   }
 
   return Object.fromEntries(
     CENTRAL_ICON_VARIANTS.map((variant) => [
       variant,
-      [...referencedNames].filter((name) => availableByVariant[variant].has(name)).sort(),
+      [...referencedByVariant[variant]]
+        .filter((name) => availableByVariant[variant].has(name))
+        .sort(),
     ]),
   ) as Record<CentralIconVariant, string[]>;
 }

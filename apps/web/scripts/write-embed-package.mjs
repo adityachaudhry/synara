@@ -63,6 +63,7 @@ async function removePrivateDeclarations(directory, root = directory) {
 export async function writeEmbedPackage(input) {
   const version = requireValue("PACKAGE_VERSION", input.version);
   const synaraCommit = requireValue("SYNARA_COMMIT", input.synaraCommit);
+  const routerVersion = requireValue("TANSTACK_ROUTER_VERSION", input.routerVersion);
 
   await assertNoDynamicPeerReactRequire(input.buildDir);
   await fs.rm(input.outputDir, { recursive: true, force: true });
@@ -100,7 +101,11 @@ export async function writeEmbedPackage(input) {
       "./style.css": "./style.css",
       "./provenance": "./synara-provenance.json",
     },
-    peerDependencies: { react: ">=19 <20", "react-dom": ">=19 <20" },
+    peerDependencies: {
+      "@tanstack/react-router": routerVersion,
+      react: ">=19 <20",
+      "react-dom": ">=19 <20",
+    },
   };
   const provenance = { packageVersion: version, synaraCommit };
   await Promise.all([
@@ -127,5 +132,6 @@ if (invokedPath === import.meta.url) {
     readmePath: path.join(webDir, "README.embed.md"),
     version: packageManifest.version,
     synaraCommit: process.env.SYNARA_COMMIT,
+    routerVersion: packageManifest.dependencies["@tanstack/react-router"],
   });
 }
