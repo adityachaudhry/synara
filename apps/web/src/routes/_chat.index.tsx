@@ -4,7 +4,7 @@
 // Layer: Routing
 // Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
 
-import { SpaceId, type ProjectId } from "@synara/contracts";
+import { ProjectId, SpaceId } from "@synara/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 
 import {
@@ -14,11 +14,14 @@ import {
 import { readSidebarUiState } from "../components/Sidebar.uiState";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { startContainerChat } from "../lib/startContainerChat";
 import { VOID_SPACE_KEY } from "../lib/spaceGrouping";
 import { collectStudioProjectIds } from "../lib/studioProjects";
 import { resolveSplitViewThreadIds, useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import { resolveChatIndexRestoreRoute, type ChatIndexLandingSpace } from "./-chatIndexRoute.logic";
 
 /**
@@ -33,6 +36,8 @@ export interface ChatIndexSearch {
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
+  const { handleNewThread } = useHandleNewThread();
+  const hostProjectId = readSynaraRuntimeConfig().project?.projectId;
   const landingSpaceKey = Route.useSearch({ select: (search) => search.space });
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
@@ -44,8 +49,17 @@ function ChatIndexRouteView() {
   // A Space landing reuses the stored home-chat draft instead of minting one (same reasoning as
   // the /studio landing): a fresh draft per visit would litter the Chats container every time
   // someone clicked through their empty Spaces.
-  const createFreshChat = () =>
-    landingSpaceKey === undefined ? handleNewChat({ fresh: true }) : handleNewChat();
+  const createFreshChat = () => {
+    if (hostProjectId) {
+      return startContainerChat({
+        ensureProjectId: async () => ProjectId.makeUnsafe(hostProjectId),
+        handleNewThread,
+        fresh: landingSpaceKey === undefined,
+        errorLabel: "Unable to prepare the hosted project chat.",
+      });
+    }
+    return landingSpaceKey === undefined ? handleNewChat({ fresh: true }) : handleNewChat();
+  };
 
   const workspacePaths = { homeDir, chatWorkspaceRoot, studioWorkspaceRoot };
   // Home chats restore the last visited route, except Studio threads — those belong to the
