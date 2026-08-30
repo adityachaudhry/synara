@@ -145,6 +145,7 @@ import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
   CurrentWsSessionRole,
+  lookupWsConnectionProjectScope,
   provideWsConnectionSession,
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
@@ -371,6 +372,7 @@ const makeWsRpcHandlersLayer = () =>
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
       const config = yield* ServerConfig;
+      const connectionSessions = yield* WsConnectionSessions;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
@@ -2010,8 +2012,12 @@ const makeWsRpcHandlersLayer = () =>
               ),
             ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server config stream failed"))),
           ),
-        [WS_METHODS.subscribeServerProviderStatuses]: (_, { clientId }) =>
-          streamAdmission.guard(
+        [WS_METHODS.subscribeServerProviderStatuses]: (_, { clientId, headers }) => {
+          const scope = lookupWsConnectionProjectScope(
+            connectionSessions,
+            Headers.get(headers, WS_CONNECTION_SESSION_HEADER),
+          );
+          return streamAdmission.guard(
             clientId,
             { key: "server.provider-statuses" },
             Stream.concat(
@@ -2023,15 +2029,12 @@ const makeWsRpcHandlersLayer = () =>
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }).pipe(Stream.map((providers) => ({ providers }))),
             ).pipe(
-              Stream.mapEffect((payload) =>
-                CurrentProjectScope.pipe(
-                  Effect.map((scope) => ({
-                    providers: filterProviderStatusesByProjectScope(payload.providers, scope),
-                  })),
-                ),
-              ),
+              Stream.map((payload) => ({
+                providers: filterProviderStatusesByProjectScope(payload.providers, scope),
+              })),
             ),
-          ),
+          );
+        },
         [WS_METHODS.subscribeServerSettings]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,

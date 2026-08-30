@@ -68,6 +68,13 @@ export const WsConnectionSessionsLive = Layer.effect(
   makeWsConnectionSessions,
 );
 
+export function lookupWsConnectionProjectScope(
+  sessions: Pick<WsConnectionSessionsShape, "lookup">,
+  key: string | undefined,
+): ReturnType<typeof toProjectScope> {
+  return toProjectScope(sessions.lookup(key)?.allowedProjectIds);
+}
+
 /**
  * Provides the connection session's identity services to an RPC handler
  * effect. With no session (no or unknown key), the effect keeps the

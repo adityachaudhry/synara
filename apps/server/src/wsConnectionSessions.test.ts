@@ -7,6 +7,7 @@ import {
 } from "./managedAttachmentPrincipal.ts";
 import {
   CurrentWsSessionRole,
+  lookupWsConnectionProjectScope,
   makeWsConnectionSessions,
   provideWsConnectionSession,
   type WsConnectionSession,
@@ -47,6 +48,25 @@ describe("WsConnectionSessions", () => {
 
     expect(first).not.toEqual(second);
     expect(sessions.lookup(second)?.role).toBe("client");
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  it("resolves a registered connection's project scope synchronously", async () => {
+    const sessions = await Effect.runPromise(makeWsConnectionSessions);
+    const scope = await Effect.runPromise(Scope.make());
+    const key = await Effect.runPromise(
+      Scope.provide(
+        sessions.register({
+          role: "client",
+          attachmentPrincipal: { ownerKind: "session", ownerId: "scoped-session" },
+          allowedProjectIds: ["project-a" as never],
+        }),
+        scope,
+      ),
+    );
+
+    expect(lookupWsConnectionProjectScope(sessions, key)).toEqual(new Set(["project-a"]));
+    expect(lookupWsConnectionProjectScope(sessions, "unknown-key")).toBeUndefined();
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
