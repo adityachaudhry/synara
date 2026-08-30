@@ -5,6 +5,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import type {
   BashOperations,
@@ -159,6 +160,7 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
 
 type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
 type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
+type PiWebAccessModule = typeof import("pi-web-access/index.ts");
 type PiAgentRuntime = Awaited<ReturnType<PiCodingAgentModule["createAgentSessionRuntime"]>>;
 type PiShellConfig = ReturnType<PiCodingAgentModule["getShellConfig"]>;
 
@@ -323,6 +325,59 @@ export function makePiBashProcessSupervisor(
 const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
   () => import("@earendil-works/pi-coding-agent"),
 );
+const loadPiWebAccessModule: () => Promise<PiWebAccessModule> = lazyModule(
+  () => import("pi-web-access/index.ts"),
+);
+
+async function configurePiWebAccess(agentDir: string) {
+  const configDir = process.env.PI_CODING_AGENT_DIR?.trim() || agentDir;
+  process.env.PI_CODING_AGENT_DIR = configDir;
+  const configPath = path.join(configDir, "web-search.json");
+  let existing: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await readFile(configPath, "utf8"));
+    if (!isRecord(parsed)) throw new Error(`${configPath} must contain a JSON object.`);
+    existing = parsed;
+  } catch (cause) {
+    if (!isRecord(cause) || cause.code !== "ENOENT") throw cause;
+  }
+  await mkdir(configDir, { recursive: true });
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        ...existing,
+        workflow: "none",
+        searchRouting: {
+          providers: ["perplexity"],
+          fallbackOn: ["transient", "quota", "network", "invalid-response", "unsupported"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+}
+
+async function createPiAgentSessionServices(
+  sdk: PiCodingAgentModule,
+  options: Parameters<PiCodingAgentModule["createAgentSessionServices"]>[0],
+) {
+  await configurePiWebAccess(options.agentDir ?? sdk.getAgentDir());
+  const { default: piWebAccess } = await loadPiWebAccessModule();
+  const resourceLoaderOptions = options.resourceLoaderOptions;
+  return sdk.createAgentSessionServices({
+    ...options,
+    resourceLoaderOptions: {
+      ...resourceLoaderOptions,
+      extensionFactories: [
+        ...(resourceLoaderOptions?.extensionFactories ?? []),
+        { name: "pi-web-access", factory: piWebAccess },
+      ],
+    },
+  });
+}
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
@@ -2082,7 +2137,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         sessionManager,
         sessionStartEvent,
       }) => {
-        const services = await input.sdk.createAgentSessionServices({
+        const services = await createPiAgentSessionServices(input.sdk, {
           cwd,
           agentDir,
           modelRuntime,
@@ -2730,7 +2785,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
           const modelRuntime = await createPiModelRuntime(agentDir, piSdk);
-          const services = await piSdk.createAgentSessionServices({
+          const services = await createPiAgentSessionServices(piSdk, {
             cwd,
             agentDir,
             modelRuntime,
@@ -2774,7 +2829,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             | undefined;
           if (!loader) {
             const piSdk = await loadPiCodingAgentModule();
-            services = await piSdk.createAgentSessionServices({
+            services = await createPiAgentSessionServices(piSdk, {
               cwd: input.cwd,
               agentDir: makeAgentDir(input.agentDir, piSdk),
             });
@@ -2848,7 +2903,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             } satisfies ProviderListCommandsResult;
           }
           const piSdk = await loadPiCodingAgentModule();
-          const services = await piSdk.createAgentSessionServices({
+          const services = await createPiAgentSessionServices(piSdk, {
             cwd: input.cwd,
             agentDir: makeAgentDir(input.agentDir, piSdk),
           });
