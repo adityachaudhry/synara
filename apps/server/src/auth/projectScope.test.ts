@@ -15,7 +15,9 @@ describe("external project scope", () => {
   const query = {
     getThreadShellById: (threadId: string) =>
       Effect.succeed(
-        threadId === "allowed-thread"
+        threadId === "missing-thread"
+          ? Option.none()
+          : threadId === "allowed-thread"
           ? Option.some({ projectId: allowed } as never)
           : Option.some({ projectId: denied } as never),
       ),
@@ -53,8 +55,8 @@ describe("external project scope", () => {
     expect(
       await Effect.runPromise(
         authorizeProjectScopedRpc({
-          method: "provider.listModels",
-          payload: { threadId: "allowed-thread" },
+          method: "projects.readFile",
+          payload: { cwd: "/allowed" },
           scope: new Set([allowed]),
           query,
         }),
@@ -109,6 +111,53 @@ describe("external project scope", () => {
     ).toBe(true);
   });
 
+  it("requires every thread mention in a turn start to belong to the scoped project", async () => {
+    const turnStartPayload = (mentionPath: string) => ({
+      command: {
+        type: "thread.turn.start",
+        commandId: "cmd-scoped-mention",
+        threadId: "allowed-thread",
+        message: {
+          messageId: "message-scoped-mention",
+          role: "user",
+          text: "Review the mentioned thread",
+          attachments: [],
+          mentions: [{ name: "Referenced thread", path: mentionPath }],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: "2026-08-29T00:00:00.000Z",
+      },
+    });
+
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: turnStartPayload("thread://allowed-thread"),
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+    for (const mentionPath of [
+      "thread://denied-thread",
+      "thread://missing-thread",
+      "thread://",
+    ]) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: turnStartPayload(mentionPath),
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("requires every locator at dev-server, terminal, and provider discovery sinks", async () => {
     for (const [method, payload] of [
       ["projects.runDevServer", { projectId: allowed, cwd: "/denied" }],
@@ -129,6 +178,19 @@ describe("external project scope", () => {
         authorizeProjectScopedRpc({
           method: "filesystem.browse",
           payload: { cwd: "/allowed", partialPath: "/denied/private" },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("denies filesystem browse for scoped sessions even inside an allowed cwd", async () => {
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "filesystem.browse",
+          payload: { cwd: "/allowed", partialPath: "/allowed/subdirectory" },
           scope: new Set([allowed]),
           query,
         }),
@@ -204,6 +266,179 @@ describe("external project scope", () => {
           }),
         ),
       ).toBe(false);
+    }
+  });
+
+  it("denies provider methods that can inspect controller-local executables or catalogs", async () => {
+    for (const [method, payload] of [
+      ["provider.compactThread", { threadId: "allowed-thread" }],
+      ["provider.listCommands", { threadId: "allowed-thread", serverUrl: "http://private" }],
+      ["provider.listSkills", { threadId: "allowed-thread", agentDir: "/private/agents" }],
+      ["provider.listSkillsCatalog", { threadId: "allowed-thread" }],
+      ["provider.listPlugins", { threadId: "allowed-thread" }],
+      ["provider.readPlugin", { threadId: "allowed-thread", marketplacePath: "/private" }],
+      ["provider.listModels", { threadId: "allowed-thread", binaryPath: "/private/bin" }],
+      ["provider.listAgents", { threadId: "allowed-thread", binaryPath: "/private/bin" }],
+    ] as const) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({ method, payload, scope: new Set([allowed]), query }),
+        ),
+      ).toBe(false);
+    }
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "provider.getComposerCapabilities",
+          payload: {},
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("denies scoped provider-history imports", async () => {
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.importThread",
+          payload: {
+            projectId: allowed,
+            threadId: "allowed-thread",
+            cwd: "/allowed",
+            externalId: "provider-history-id",
+          },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("denies every device RPC for scoped sessions", async () => {
+    for (const method of [
+      "device.list",
+      "device.boot",
+      "device.shutdown",
+      "device.attach",
+      "device.detach",
+      "device.getThreadState",
+      "device.tap",
+      "device.swipe",
+      "device.typeText",
+      "device.keyEvent",
+      "device.pressButton",
+      "device.installApp",
+      "device.launchApp",
+      "device.openUrl",
+      "device.screenshot",
+      "device.startRecording",
+      "device.stopRecording",
+      "device.describeUi",
+      "device.scrollToElement",
+      "device.subscribeEvents",
+    ]) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method,
+            payload: {
+              projectId: allowed,
+              threadId: "allowed-thread",
+              cwd: "/allowed",
+              udid: "arbitrary-device",
+            },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("denies client-controlled thread workspace paths but allows pathless create and update", async () => {
+    const create = {
+      type: "thread.create",
+      commandId: "cmd-create-scoped-thread",
+      threadId: "new-thread",
+      projectId: allowed,
+      title: "Scoped thread",
+      modelSelection: { provider: "codex", model: "gpt-test" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-08-29T00:00:00.000Z",
+    };
+    const update = {
+      type: "thread.meta.update",
+      commandId: "cmd-update-scoped-thread",
+      threadId: "allowed-thread",
+    };
+    for (const [command, field] of [
+      [create, "worktreePath"],
+      [create, "workingDirectory"],
+      [create, "associatedWorktreePath"],
+      [update, "worktreePath"],
+      [update, "workingDirectory"],
+      [update, "associatedWorktreePath"],
+    ] as const) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: { command: { ...command, [field]: "/attacker-controlled" } },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(false);
+    }
+    for (const command of [create, update]) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: { command },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(true);
+    }
+
+    for (const command of [create, update]) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: { command: { ...command, parentThreadId: "denied-thread" } },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: { command: { ...command, parentThreadId: "allowed-thread" } },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: { command: { ...command, parentThreadId: null } },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(true);
     }
   });
 

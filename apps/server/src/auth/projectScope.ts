@@ -1,11 +1,13 @@
-import path from "node:path";
-
 import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   ProjectId,
 } from "@synara/contracts";
+import {
+  isThreadMentionPath,
+  threadIdFromThreadMentionPath,
+} from "@synara/shared/threadMentions";
 import { Effect, Option, ServiceMap } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery";
@@ -63,6 +65,8 @@ const SCOPE_FILTERED_GLOBAL_METHODS = new Set([
 ]);
 
 const SCOPE_DENIED_METHODS = new Set([
+  "orchestration.importThread",
+  "filesystem.browse",
   "projects.provisionFromGitHub",
   "projects.runDevServer",
   "projects.stopDevServer",
@@ -92,11 +96,6 @@ function stringField(payload: unknown, key: string): string | undefined {
   if (!payload || typeof payload !== "object") return undefined;
   const value = (payload as Record<string, unknown>)[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function scopedPayload(method: string, payload: unknown): unknown {
@@ -131,36 +130,22 @@ export function authorizeProjectScopedRpc(input: {
 }): Effect.Effect<boolean> {
   if (input.scope === undefined) return Effect.succeed(true);
   if (SCOPE_DENIED_METHODS.has(input.method)) return Effect.succeed(false);
+  if (
+    (input.method.startsWith("provider.") &&
+      input.method !== "provider.getComposerCapabilities") ||
+    input.method.startsWith("device.")
+  ) {
+    return Effect.succeed(false);
+  }
   if (SCOPE_FILTERED_GLOBAL_METHODS.has(input.method)) return Effect.succeed(true);
   const scope = input.scope;
   const payload = scopedPayload(input.method, input.payload);
+  const threadIsAllowed = (threadId: string) =>
+    input.query.getThreadShellById(threadId as never).pipe(
+      Effect.map((thread) => Option.isSome(thread) && scope.has(thread.value.projectId)),
+      Effect.orElseSucceed(() => false),
+    );
   return Effect.gen(function* () {
-    if (input.method === "filesystem.browse") {
-      const cwd = stringField(payload, "cwd");
-      const partialPath = stringField(payload, "partialPath");
-      if (
-        cwd === undefined ||
-        partialPath === undefined ||
-        partialPath === "~" ||
-        partialPath.startsWith("~/") ||
-        partialPath.startsWith("~\\") ||
-        (/^[A-Za-z]:[\\/]/u.test(partialPath) && process.platform !== "win32")
-      ) {
-        return false;
-      }
-      const target = path.isAbsolute(partialPath)
-        ? partialPath
-        : partialPath === "." ||
-            partialPath === ".." ||
-            partialPath.startsWith("./") ||
-            partialPath.startsWith("../") ||
-            partialPath.startsWith(".\\") ||
-            partialPath.startsWith("..\\")
-          ? path.resolve(cwd, partialPath)
-          : undefined;
-      if (target === undefined || !isPathInside(cwd, target)) return false;
-    }
-
     let located = false;
     const projectId = stringField(payload, "projectId");
     if (projectId !== undefined) {
@@ -170,13 +155,41 @@ export function authorizeProjectScopedRpc(input: {
 
     const threadId = stringField(payload, "threadId");
     const commandType = stringField(payload, "type");
+    if (commandType === "thread.create" || commandType === "thread.meta.update") {
+      if (
+        ["worktreePath", "workingDirectory", "associatedWorktreePath"].some(
+          (field) => stringField(payload, field) !== undefined,
+        )
+      ) {
+        return false;
+      }
+      const parentThreadId = stringField(payload, "parentThreadId");
+      if (parentThreadId !== undefined && !(yield* threadIsAllowed(parentThreadId))) {
+        return false;
+      }
+    }
     if (threadId !== undefined && commandType !== "thread.create") {
       located = true;
-      const allowed = yield* input.query.getThreadShellById(threadId as never).pipe(
-        Effect.map((thread) => Option.isSome(thread) && scope.has(thread.value.projectId)),
-        Effect.orElseSucceed(() => false),
-      );
+      const allowed = yield* threadIsAllowed(threadId);
       if (!allowed) return false;
+    }
+
+    if (commandType === "thread.turn.start" && payload && typeof payload === "object") {
+      const message = (payload as Record<string, unknown>).message;
+      const mentions =
+        message && typeof message === "object"
+          ? (message as Record<string, unknown>).mentions
+          : undefined;
+      if (Array.isArray(mentions)) {
+        for (const mention of mentions) {
+          const mentionPath = stringField(mention, "path");
+          if (mentionPath === undefined || !isThreadMentionPath(mentionPath)) continue;
+          const mentionedThreadId = threadIdFromThreadMentionPath(mentionPath);
+          if (mentionedThreadId === null || !(yield* threadIsAllowed(mentionedThreadId))) {
+            return false;
+          }
+        }
+      }
     }
 
     const cwd =
