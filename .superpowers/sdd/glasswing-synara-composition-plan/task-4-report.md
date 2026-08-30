@@ -5,6 +5,7 @@
 Implemented and committed bounded Railway sandbox admission as:
 
 - `1314cd1af` — `feat(server): bound Railway sandbox capacity`
+- `f41d58240` — `fix(server): harden sandbox capacity lifecycle`
 
 The implementation adds one process-local FIFO capacity service, one positive-integer Railway capacity setting, and the minimum contract/projection/UI additions needed to show queued sessions and their positions. It composes with Task 3's durable workspace creation intents and provider runtime bindings; it does not add a second cleanup owner or alter Task 3's marker reconciliation ordering.
 
@@ -22,6 +23,14 @@ No Railway or other external infrastructure was mutated.
 - Reports unowned listed runtimes through a warning only. No destructive orphan policy was added.
 - Added canonical `runtime.capacity.changed` events to the existing provider runtime stream. Queue positions are projected into the existing orchestration session status, normalized through the existing connecting UI path, and shown as `Queued #N`. Position state clears on cancellation/admission/failure transitions.
 
+## Blocking review hardening
+
+- Stale replacement now keeps the old binding addressable and unretired while authoritative destruction is attempted. A failed destroy therefore leaves a retryable handle; a later stop retries destruction, releases the original permit, and allows a replacement at capacity one. The old generation is marked retired and replaced in memory only after replacement succeeds.
+- Initial capacity recovery and Task 3 intent cleanup no longer start as independent fibers. Recovery installs every durable occupied reservation and opens admission first; only then does the existing intent cleanup loop begin, so a concurrent cleanup release cannot be lost and reappear as a ghost permit.
+- A Railway queue wait no longer consumes the provider service's 60-second launch budget. Only repository-bound Pi starts using the capacity-managed adapter path move the timeout into `WorkspaceRuntime.create`, after permit admission and durable intent insertion. Local Pi and every other adapter retain the existing provider-service deadline. A timed-out Railway create remains uncertain and therefore retains its intent and permit for Task 3 cleanup.
+- Same-key queue entries now hold independent caller waiters. Cancelling either the first or a later retry rejects only that caller; the lifecycle key remains at the same FIFO position until every caller cancels. Admission resolves every remaining caller with one shared lifecycle lease.
+- Startup recovery now installs the decoded persisted `capacityKey`, after validating it against the durable row's thread and lifecycle generation and the binding's workspace/fence generation. Legacy bindings still synthesize that key during decode. A mismatch fails closed before any occupancy is installed or new create is admitted.
+
 ## Ownership and recovery invariants
 
 The create ordering is now:
@@ -32,7 +41,7 @@ The permit is not released by adoption. It remains active until the correspondin
 
 Startup ordering is:
 
-`list Railway inventory + read durable bindings + read durable intents -> rebuild occupied permits -> open FIFO admission`
+`list Railway inventory + read durable bindings + read durable intents -> validate persisted capacity keys -> rebuild occupied permits -> open FIFO admission -> start Task 3 intent cleanup`
 
 Task 3 remains the only owner of pending-intent cleanup:
 
@@ -50,6 +59,7 @@ The implementation was driven through focused RED/GREEN cycles:
 - Contract, ingestion, and web RED runs rejected the new runtime event, failed to project a queued session, dropped queue position, and rendered `Connecting` instead of `Queued`.
 - Routed-adapter RED failed because there was no capacity-aware runtime-event source.
 - Final edge review added two more RED cases: a pre-reconciliation same-key waiter remained queued behind its own recovered permit, and a legacy Task 3 binding had no releasable capacity key. The run recorded **2 failed, 9 passed** before both fixes; the focused capacity/recovery/routing/ingestion rerun passed **4 files, 118 tests**.
+- Blocking-review RED runs then reproduced all five reported defects: first-caller cancellation removed a shared queue entry; later-caller cancellation was ignored; failed replacement destruction left the old capacity permit unreachable; slow initial inventory let cleanup release before a stale reservation was installed; and a mismatched persisted key was silently replaced with a reconstructed key. Two test-harness polling assertions were corrected and not counted as product failures. A dedicated virtual-time RED run additionally proved the outer provider deadline expired during a 61-second queue wait while post-admission Railway create had no deadline. The minimum fixes made the final focused server run pass **7 files, 238 tests**.
 
 Focused coverage includes max-N admission, strict FIFO N+1, same-key idempotency, cancellation and queue compaction, terminal create cleanup, authoritative destroy, stale-generation replacement ordering, double release, controller restart reconciliation, pending intent occupancy, transient inventory failure, orphan reporting, queued event projection/clearing, legacy binding recovery, and the unchanged local Pi path.
 
@@ -57,9 +67,11 @@ Focused coverage includes max-N admission, strict FIFO N+1, same-key idempotency
 
 All final commands used Node **v24.16.0** in `PATH` and Bun **1.3.12** through `npx`. `bun test` was never used.
 
-- Focused capacity, recovery, routed activity, and ingestion suites: **4 files, 118 tests passed**.
+- Focused capacity, provisioner, provider timeout, recovery, routed activity, and ingestion suites: **7 files, 238 tests passed**.
+- Focused contracts queue projection: **2 files, 54 tests passed**.
+- Focused web queue projection: **2 files, 137 tests passed**.
 - Full `packages/contracts` suite: **20 files, 250 tests passed**.
-- Full `apps/server` suite: **380 files passed, 3 skipped; 4,213 tests passed, 16 skipped**.
+- Full `apps/server` suite: **380 files passed, 3 skipped; 4,222 tests passed, 16 skipped**.
 - Full `apps/web` suite: **334 files, 4,113 tests passed**.
 - `git diff --cached --check`: passed before the implementation commit.
 
