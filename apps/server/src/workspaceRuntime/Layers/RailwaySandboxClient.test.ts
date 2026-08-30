@@ -134,6 +134,69 @@ describe("RailwaySandboxClient", () => {
     expect(unrelatedDestroyed).toBe(false);
   });
 
+  it("reports only non-terminal Railway sandboxes as live inventory", async () => {
+    const statuses = [
+      "CREATING",
+      "RUNNING",
+      "STOPPED",
+      "DESTROYING",
+      "DESTROYED",
+      "FAILED",
+    ] as const;
+    const sandbox = makeSdkSandbox();
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
+      connect: async () => sandbox,
+      list: async () =>
+        statuses.map((status) => ({
+          id: `sandbox-${status.toLowerCase()}`,
+          status,
+          region: "us-east4-eqdc4a",
+        })) as never,
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    const inventory = await Effect.runPromise(client.list);
+
+    expect(inventory.map((record) => record.status)).toEqual([
+      "CREATING",
+      "RUNNING",
+      "STOPPED",
+    ]);
+  });
+
+  it("does not probe terminal Railway history while reconciling a create marker", async () => {
+    const operationId = "66666666-6666-4666-8666-666666666666";
+    const active = makeSdkSandbox({ id: "sandbox-active" });
+    const connectedRuntimeIds: string[] = [];
+    const sdk: RailwaySdkFacade = {
+      create: async () => active,
+      list: async () => [
+        {
+          id: "sandbox-destroyed",
+          status: "DESTROYED",
+          region: "us-east4-eqdc4a",
+        },
+        { id: active.id, status: active.status, region: active.region },
+      ] as never,
+      connect: async (runtimeId) => {
+        connectedRuntimeIds.push(runtimeId);
+        if (runtimeId === "sandbox-destroyed") {
+          throw new Error("terminal sandbox cannot execute marker probe");
+        }
+        return active;
+      },
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    await expect(
+      Effect.runPromise(client.findByCreateOperationId(operationId)),
+    ).resolves.toBe("sandbox-active");
+    expect(connectedRuntimeIds).toEqual(["sandbox-active"]);
+  });
+
   it("leaves marker discovery retryable after transient list and connect failures", async () => {
     const operationId = "77777777-7777-4777-8777-777777777777";
     const sandbox = makeSdkSandbox({ id: "sandbox-late" });

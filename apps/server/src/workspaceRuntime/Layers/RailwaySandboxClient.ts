@@ -113,6 +113,10 @@ function toRecord(sandbox: Pick<RailwaySdkSandbox, "id" | "status" | "region">) 
   } satisfies RailwaySandboxRecord;
 }
 
+function isLiveSandboxStatus(status: SandboxStatus): boolean {
+  return status !== "DESTROYING" && status !== "DESTROYED" && status !== "FAILED";
+}
+
 function clientFailure(
   sdk: RailwaySdkFacade,
   operation: string,
@@ -174,6 +178,7 @@ export function makeRailwaySandboxClient(
         try: async () => {
           const records = await sdk.list(connectionInput);
           for (const record of records) {
+            if (!isLiveSandboxStatus(record.status)) continue;
             const sandbox = await sdk.connect(record.id, connectionInput);
             const probe = await sandbox.exec(
               `test "$${WORKSPACE_CREATE_OPERATION_ENV_KEY}" = ${shellQuote(operationId)}`,
@@ -370,7 +375,10 @@ export function makeRailwaySandboxClient(
     );
 
   const list: RailwaySandboxClientShape["list"] = Effect.tryPromise({
-    try: async () => (await sdk.list(connectionInput)).map(toRecord),
+    try: async () =>
+      (await sdk.list(connectionInput))
+        .filter((record) => isLiveSandboxStatus(record.status))
+        .map(toRecord),
     catch: (cause) =>
       clientFailure(sdk, "list", undefined, cause) as RailwaySandboxClientError,
   });
