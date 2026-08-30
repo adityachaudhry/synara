@@ -152,6 +152,12 @@ export function makeWorkspaceRuntimeLive(
           Effect.gen(function* () {
             const enabled = yield* requireEnabled(config, "create");
             const operationId = (options.createOperationId ?? randomUUID)();
+            if (ownedOperationIds.has(operationId)) {
+              return yield* new WorkspaceRuntimeError({
+                operation: "create.reserve",
+                detail: `Workspace create operation '${operationId}' is already active.`,
+              });
+            }
             ownedOperationIds.add(operationId);
             const putExit = yield* Effect.exit(
               intents

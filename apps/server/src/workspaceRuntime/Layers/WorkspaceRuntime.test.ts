@@ -226,7 +226,7 @@ describe("WorkspaceRuntime", () => {
     expect(order).toEqual(["intent", "create"]);
   });
 
-  it("never reconciles an active create while its durable intent is being inserted", async () => {
+  it("a duplicate create cannot release the first active create's reservation", async () => {
     const operationId = "11111111-1111-4111-8111-111111111111";
     const insertStarted = await Effect.runPromise(Deferred.make<void>());
     const releasePublish = await Effect.runPromise(Deferred.make<void>());
@@ -236,8 +236,11 @@ describe("WorkspaceRuntime", () => {
     const secondPublishedList = await Effect.runPromise(Deferred.make<void>());
     const discoveryStarted = await Effect.runPromise(Deferred.make<void>());
     const intents = makeIntentRepository();
+    let putCalls = 0;
     intents.repository.put = (input) =>
       Effect.gen(function* () {
+        putCalls += 1;
+        if (putCalls > 1) return yield* Effect.fail(new Error("duplicate insert") as never);
         yield* Deferred.succeed(insertStarted, undefined);
         yield* Deferred.await(releasePublish);
         intents.records.set(input.operationId, { ...input, runtimeId: null });
@@ -246,9 +249,10 @@ describe("WorkspaceRuntime", () => {
       });
     let preInsertLists = 0;
     let publishedLists = 0;
+    let observeAfterDuplicate = false;
     intents.repository.list = () =>
       Effect.gen(function* () {
-        if (intents.records.has(operationId)) {
+        if (intents.records.has(operationId) && observeAfterDuplicate) {
           publishedLists += 1;
           if (publishedLists === 2) yield* Deferred.succeed(secondPublishedList, undefined);
         } else {
@@ -271,7 +275,7 @@ describe("WorkspaceRuntime", () => {
       Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
     );
 
-    const winner = await Effect.runPromise(
+    const result = await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* WorkspaceRuntime;
         const createFiber = yield* runtime
@@ -281,6 +285,10 @@ describe("WorkspaceRuntime", () => {
         yield* Deferred.await(secondPreInsertList);
         yield* Deferred.succeed(releasePublish, undefined);
         yield* Deferred.await(intentPublished);
+        const duplicate = yield* runtime
+          .create({ lifecycleGeneration: "generation-2", environment: {} })
+          .pipe(Effect.result);
+        observeAfterDuplicate = true;
         const observed = yield* Effect.raceFirst(
           Deferred.await(secondPublishedList).pipe(Effect.as("second-list" as const)),
           Deferred.await(discoveryStarted).pipe(Effect.as("discovery" as const)),
@@ -288,11 +296,13 @@ describe("WorkspaceRuntime", () => {
         yield* Deferred.succeed(releaseInsert, undefined);
         const binding = yield* Fiber.join(createFiber);
         yield* runtime.adopt(binding);
-        return observed;
+        return { duplicate, observed };
       }).pipe(Effect.provide(layer), Effect.scoped),
     );
 
-    expect(winner).toBe("second-list");
+    expect(result.duplicate._tag).toBe("Failure");
+    expect(result.observed).toBe("second-list");
+    expect(putCalls).toBe(1);
   });
 
   it.each(["failed", "duplicate"] as const)(
