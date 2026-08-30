@@ -17,12 +17,16 @@ export function SidebarUnreadCompletionGlyph({ className }: { className?: string
 }
 
 export function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
+  const ariaLabel =
+    status.queuePosition === undefined
+      ? status.label
+      : `${status.label}, position ${status.queuePosition}`;
   if (status.label === "Completed") {
     return <SidebarUnreadCompletionGlyph />;
   }
   if (status.pulse) {
     return (
-      <span role="img" aria-label={status.label} className="inline-flex shrink-0">
+      <span role="img" aria-label={ariaLabel} className="inline-flex shrink-0">
         <ThreadRunningSpinner />
       </span>
     );
@@ -30,7 +34,7 @@ export function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPil
   return (
     <span
       role="img"
-      aria-label={status.label}
+      aria-label={ariaLabel}
       className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
     />
   );

@@ -557,6 +557,7 @@ const SourceProposedPlanReference = Schema.Struct({
 
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
+  "queued",
   "starting",
   "running",
   "ready",
@@ -573,6 +574,7 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  queuePosition: Schema.optional(PositiveInt),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;

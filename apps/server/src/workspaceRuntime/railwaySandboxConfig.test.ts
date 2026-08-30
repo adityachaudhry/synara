@@ -18,6 +18,7 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
       authType: " bearer ",
       region: " us-east4-eqdc4a ",
         idleTimeoutMinutes: "30",
+        maxActiveSandboxes: "5",
       }),
     ).toEqual({
       enabled: true,
@@ -26,6 +27,7 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
       authType: "bearer",
       region: "us-east4-eqdc4a",
       idleTimeoutMinutes: 30,
+      maxActiveSandboxes: 5,
     });
   });
 
@@ -66,6 +68,22 @@ describe("resolveRailwaySandboxRuntimeConfig", () => {
         idleTimeoutMinutes: "121",
       }),
     ).toThrow(/1 through 120/);
+  });
+
+  it("uses one active sandbox by default and rejects invalid capacity", () => {
+    expect(
+      resolveRailwaySandboxRuntimeConfig({ token: "secret", environmentId: "env-1" }),
+    ).toMatchObject({ maxActiveSandboxes: 1 });
+
+    for (const maxActiveSandboxes of ["0", "-1", "1.5", "not-a-number"]) {
+      expect(() =>
+        resolveRailwaySandboxRuntimeConfig({
+          token: "secret",
+          environmentId: "env-1",
+          maxActiveSandboxes,
+        }),
+      ).toThrow(/SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES/);
+    }
   });
 
   it("redacts the token from diagnostics", () => {

@@ -1142,6 +1142,31 @@ describe("resolveThreadStatusTrailingIndicator", () => {
 });
 
 describe("resolveThreadStatusPill", () => {
+  it("shows the stable sandbox queue position in the existing connecting status path", () => {
+    const thread = {
+      interactionMode: "act" as const,
+      latestTurn: null,
+      lastVisitedAt: undefined,
+      updatedAt: "2026-08-29T00:00:00.000Z",
+      session: {
+        provider: "pi" as const,
+        status: "connecting",
+        orchestrationStatus: "queued" as never,
+        queuePosition: 3,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      },
+    };
+
+    expect(
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).toMatchObject({ label: "Queued", queuePosition: 3 });
+  });
+
   const baseThread = {
     interactionMode: "plan" as const,
     latestTurn: null,

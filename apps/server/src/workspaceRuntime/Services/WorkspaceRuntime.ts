@@ -6,6 +6,7 @@ export interface WorkspaceRuntimeBinding {
   readonly runtimeKind: "railway-sandbox";
   readonly runtimeId: string;
   readonly creationOperationId?: string;
+  readonly capacityKey?: string;
   readonly lifecycleGeneration: string;
   readonly status:
     | "creating"
@@ -25,6 +26,7 @@ export interface WorkspaceRuntimeInventoryRecord {
 }
 
 export interface WorkspaceRuntimeCreateInput {
+  readonly threadId?: string;
   readonly lifecycleGeneration: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";

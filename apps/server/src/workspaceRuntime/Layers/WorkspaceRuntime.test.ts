@@ -21,6 +21,7 @@ import {
   makeWorkspaceRuntimeLive,
   reconcileWorkspaceCreationIntents,
 } from "./WorkspaceRuntime";
+import { SandboxCapacity } from "../SandboxCapacity";
 
 function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandboxRecord["status"] }) {
   const sandboxes = new Map<string, RailwaySandboxRecord>();
@@ -153,6 +154,78 @@ function makeIntentRepository(initial: ReadonlyArray<WorkspaceCreationIntent> = 
 }
 
 describe("WorkspaceRuntime", () => {
+  it("bounds workspace creation until an authoritative destroy releases capacity", async () => {
+    const fake = makeFakeRailwayClient();
+    const capacity = new SandboxCapacity(1);
+    let operation = 0;
+    const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+      createOperationId: () => `operation-${++operation}`,
+      reconcileIntervalMs: 60_000,
+      capacity,
+    }).pipe(
+      Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+      Layer.provide(
+        Layer.succeed(WorkspaceCreationIntentRepository, makeIntentRepository().repository),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const first = yield* runtime.create({
+          threadId: "thread-first",
+          lifecycleGeneration: "generation-first",
+          environment: {},
+        });
+        const secondFiber = yield* runtime
+          .create({
+            threadId: "thread-second",
+            lifecycleGeneration: "generation-second",
+            environment: {},
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.yieldNow;
+        expect(fake.creates).toBe(1);
+
+        yield* runtime.destroy(first);
+        const second = yield* Fiber.join(secondFiber);
+        expect(fake.creates).toBe(2);
+        yield* runtime.destroy(second);
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    );
+  });
+
+  it("releases capacity after terminal create cleanup", async () => {
+    const fake = makeFakeRailwayClient({ createdStatus: "FAILED" });
+    const capacity = new SandboxCapacity(1);
+    let operation = 0;
+    const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+      createOperationId: () => `operation-${++operation}`,
+      reconcileIntervalMs: 60_000,
+      capacity,
+    }).pipe(
+      Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+      Layer.provide(
+        Layer.succeed(WorkspaceCreationIntentRepository, makeIntentRepository().repository),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const failed = yield* runtime
+          .create({
+            threadId: "thread-failed",
+            lifecycleGeneration: "generation-failed",
+            environment: {},
+          })
+          .pipe(Effect.result);
+        expect(failed._tag).toBe("Failure");
+        expect(capacity.snapshot().activeKeys).toEqual([]);
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    );
+  });
+
   it("creates an isolated sandbox by default", async () => {
     const fake = makeFakeRailwayClient();
 

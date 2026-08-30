@@ -1235,6 +1235,42 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBeNull();
   });
 
+  it("projects sandbox capacity queue position and clears it when admission starts", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "runtime.capacity.changed",
+      eventId: asEventId("evt-capacity-queued"),
+      provider: "pi",
+      threadId: asThreadId("thread-1"),
+      lifecycleGeneration: "generation-capacity",
+      createdAt: new Date().toISOString(),
+      payload: { state: "queued", queuePosition: 3 },
+    } as never);
+
+    let thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "queued" && entry.session?.queuePosition === 3,
+    );
+    expect(thread.session).toMatchObject({ status: "queued", queuePosition: 3 });
+
+    harness.emit({
+      type: "runtime.capacity.changed",
+      eventId: asEventId("evt-capacity-acquired"),
+      provider: "pi",
+      threadId: asThreadId("thread-1"),
+      lifecycleGeneration: "generation-capacity",
+      createdAt: new Date().toISOString(),
+      payload: { state: "acquired" },
+    } as never);
+
+    thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "starting" && entry.session?.queuePosition == null,
+    );
+    expect(thread.session?.queuePosition).toBeUndefined();
+  });
+
   it("clears active turn state when a provider session reports ready", async () => {
     const harness = await createHarness();
 

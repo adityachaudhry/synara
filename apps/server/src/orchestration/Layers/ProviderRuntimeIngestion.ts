@@ -2191,6 +2191,7 @@ const make = Effect.gen(function* () {
 
       if (
         event.type === "session.started" ||
+        event.type === "runtime.capacity.changed" ||
         event.type === "session.state.changed" ||
         event.type === "session.exited" ||
         event.type === "thread.started" ||
@@ -2213,6 +2214,8 @@ const make = Effect.gen(function* () {
         }
         const status = (() => {
           switch (event.type) {
+            case "runtime.capacity.changed":
+              return event.payload.state === "queued" ? "queued" : "starting";
             case "session.state.changed":
               return event.payload.state === "waiting" ? "running" : event.payload.state;
             case "turn.started":
@@ -2278,6 +2281,11 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              ...(event.type === "runtime.capacity.changed" &&
+                event.payload.state === "queued" &&
+                event.payload.queuePosition !== undefined
+                ? { queuePosition: event.payload.queuePosition }
+                : {}),
               updatedAt: now,
             },
             createdAt: now,

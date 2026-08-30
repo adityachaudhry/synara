@@ -337,6 +337,7 @@ const THREAD_JUMP_COMMANDS = [
 export interface ThreadStatusPill {
   label:
     | "Working"
+    | "Queued"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
@@ -347,6 +348,7 @@ export interface ThreadStatusPill {
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+  queuePosition?: number;
 }
 
 /**
@@ -392,6 +394,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,
   Working: 3,
+  Queued: 3,
   Connecting: 3,
   "Plan Ready": 2,
   Completed: 1,
@@ -657,6 +660,18 @@ export function resolveThreadStatusPill(input: {
   }
 
   if (thread.session?.status === "connecting") {
+    if (thread.session.orchestrationStatus === "queued") {
+      return {
+        label: "Queued",
+        colorClass: "text-sky-600 dark:text-sky-300/80",
+        dotClass: "bg-sky-500 dark:bg-sky-300/80",
+        pulse: true,
+        dismissible: false,
+        ...(thread.session.queuePosition === undefined
+          ? {}
+          : { queuePosition: thread.session.queuePosition }),
+      };
+    }
     return {
       label: "Connecting",
       colorClass: "text-sky-600 dark:text-sky-300/80",

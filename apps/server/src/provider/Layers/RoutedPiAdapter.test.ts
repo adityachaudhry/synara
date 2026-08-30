@@ -1,5 +1,5 @@
 import type { ProviderSessionStartInput } from "@synara/contracts";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Effect, Fiber, Layer, Option, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
@@ -7,7 +7,8 @@ import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWork
 import type { ProviderWorkerRuntimeBinding } from "../../providerWorker/runtimeBinding";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
-import { makeRoutedPiAdapter } from "./RoutedPiAdapter";
+import { makeRoutedPiAdapter, makeRoutedPiAdapterWithCapacity } from "./RoutedPiAdapter";
+import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 
 const threadId = "11111111-1111-4111-8111-111111111111" as never;
 const repositoryBinding = {
@@ -132,6 +133,48 @@ function makeHarness(
 }
 
 describe("RoutedPiAdapter", () => {
+  it("publishes queued positions and clears them when capacity starts", async () => {
+    const harness = makeHarness();
+    const capacity = new SandboxCapacity(1);
+    const occupied = await capacity.acquire({
+      key: "occupied:generation",
+      threadId: "occupied" as never,
+      lifecycleGeneration: "generation",
+    });
+    const adapter = await Effect.runPromise(
+      makeRoutedPiAdapterWithCapacity(capacity).pipe(Effect.provide(harness.layer)),
+    );
+    const eventsFiber = Effect.runFork(
+      Stream.runCollect(adapter.streamEvents.pipe(Stream.take(2))),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const waiting = capacity.acquire({
+      key: `${threadId}:generation-1`,
+      threadId,
+      lifecycleGeneration: "generation-1",
+    });
+    await Promise.resolve();
+    occupied.release();
+    (await waiting).release();
+
+    const events = Array.from(
+      await Promise.race([
+        Effect.runPromise(Fiber.join(eventsFiber)),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("capacity event stream timed out")), 1_000),
+        ),
+      ]),
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "runtime.capacity.changed",
+      "runtime.capacity.changed",
+    ]);
+    expect(events.map((event) => event.payload)).toEqual([
+      { state: "queued", queuePosition: 1 },
+      { state: "acquired" },
+    ]);
+  });
+
   it("preserves the existing local Pi adapter as the default", async () => {
     const harness = makeHarness();
     const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));

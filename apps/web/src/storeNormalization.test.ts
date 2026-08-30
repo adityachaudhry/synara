@@ -10,12 +10,37 @@ import {
   dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
+  normalizeThreadSession,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
 
 type ThreadActivity = Thread["activities"][number];
+
+describe("sandbox capacity session projection", () => {
+  it("keeps queued sessions in the connecting UI path with their queue position", () => {
+    const session = normalizeThreadSession(
+      {
+        threadId: "thread-queued" as never,
+        status: "queued" as never,
+        providerName: "pi",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        queuePosition: 4,
+        updatedAt: "2026-08-29T00:00:00.000Z" as never,
+      } as never,
+      null,
+    );
+
+    expect(session).toMatchObject({
+      status: "connecting",
+      orchestrationStatus: "queued",
+      queuePosition: 4,
+    });
+  });
+});
 
 interface FoldStep {
   readonly changed: boolean;

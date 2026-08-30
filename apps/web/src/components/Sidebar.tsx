@@ -3823,7 +3823,7 @@ export default function Sidebar() {
       );
       if (!status) continue;
       const tone: SpaceActivityTone =
-        status.label === "Working" || status.label === "Connecting"
+        status.label === "Working" || status.label === "Queued" || status.label === "Connecting"
           ? "running"
           : status.label === "Completed"
             ? "completed"

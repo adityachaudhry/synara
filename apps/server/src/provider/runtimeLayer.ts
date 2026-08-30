@@ -17,7 +17,8 @@ import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
 import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
-import { RoutedPiAdapterLive } from "./Layers/RoutedPiAdapter";
+import { makeRoutedPiAdapterLive } from "./Layers/RoutedPiAdapter";
+import type { SandboxCapacity } from "../workspaceRuntime/SandboxCapacity";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
@@ -28,6 +29,7 @@ import { ProviderRuntimeEventRepositoryLive } from "../persistence/Layers/Provid
 export function makeServerProviderLayer(
   options: {
     readonly agentGatewayCredentialsLayer?: typeof AgentGatewayCredentialsWithSecretsLive;
+    readonly sandboxCapacity?: SandboxCapacity;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -84,7 +86,7 @@ export function makeServerProviderLayer(
     const localPiAdapterLayer = makePiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const piAdapterLayer = RoutedPiAdapterLive.pipe(
+    const piAdapterLayer = makeRoutedPiAdapterLive(options.sandboxCapacity).pipe(
       Layer.provide(localPiAdapterLayer),
       Layer.provide(providerSessionDirectoryLayer),
     );

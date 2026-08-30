@@ -51,6 +51,7 @@ import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTur
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { WorkspaceCreationIntentRepositoryLive } from "./persistence/Layers/WorkspaceCreationIntents";
+import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
@@ -65,6 +66,7 @@ import {
 import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedRuntimeConfig";
 import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
 import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
+import { SandboxCapacity } from "./workspaceRuntime/SandboxCapacity";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -271,6 +273,11 @@ export function makeServerApplicationLayers() {
     ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
   );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
+  const sandboxCapacity = distributedPiConfig.enabled
+    ? new SandboxCapacity(distributedPiConfig.railway.maxActiveSandboxes, {
+        reconcileBeforeAdmission: true,
+      })
+    : undefined;
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled
     ? makeProviderWorkerProvisionerFromArtifactLive({
         controlUrl: distributedPiConfig.controlUrl,
@@ -281,9 +288,10 @@ export function makeServerApplicationLayers() {
           : { repositoryAuthorization: distributedPiConfig.repositoryAuthorization }),
       }).pipe(
         Layer.provide(
-          makeWorkspaceRuntimeLive(distributedPiConfig.railway).pipe(
+          makeWorkspaceRuntimeLive(distributedPiConfig.railway, { capacity: sandboxCapacity }).pipe(
             Layer.provide(makeRailwaySandboxClientLive(distributedPiConfig.railway)),
             Layer.provide(WorkspaceCreationIntentRepositoryLive),
+            Layer.provide(ProviderSessionRuntimeRepositoryLive),
           ),
         ),
         Layer.provide(providerWorkerTransportLayer),
@@ -298,7 +306,10 @@ export function makeServerApplicationLayers() {
     runtimeServicesLayer: makeServerRuntimeServicesLayer({
       agentGatewayCredentialsLayer,
     }),
-    providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
+    providerLayer: makeServerProviderLayer({
+      agentGatewayCredentialsLayer,
+      ...(sandboxCapacity === undefined ? {} : { sandboxCapacity }),
+    }).pipe(
       Layer.provide(providerWorkerInfrastructureLayer),
     ),
   } as const;

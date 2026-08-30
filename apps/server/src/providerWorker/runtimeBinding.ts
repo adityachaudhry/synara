@@ -9,6 +9,7 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
     runtimeKind: Schema.Literal("railway-sandbox"),
     runtimeId: Schema.String,
     creationOperationId: Schema.optional(Schema.String),
+    capacityKey: Schema.optional(Schema.String),
     lifecycleGeneration: Schema.String,
     status: Schema.Literals([
       "creating",
@@ -42,5 +43,16 @@ export type ProviderWorkerRuntimeBinding = typeof ProviderWorkerRuntimeBinding.T
 
 export function decodeProviderWorkerRuntimeBinding(value: unknown) {
   const result = Schema.decodeUnknownExit(ProviderWorkerRuntimeBinding)(value);
-  return result._tag === "Success" ? result.value : undefined;
+  if (result._tag !== "Success") return undefined;
+  const binding = result.value;
+  if (binding.workspace.capacityKey !== undefined || binding.threadId === undefined) {
+    return binding;
+  }
+  return {
+    ...binding,
+    workspace: {
+      ...binding.workspace,
+      capacityKey: `${binding.threadId}:${binding.workspace.lifecycleGeneration}`,
+    },
+  };
 }

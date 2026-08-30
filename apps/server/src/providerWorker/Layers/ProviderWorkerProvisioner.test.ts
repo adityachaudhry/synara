@@ -124,6 +124,7 @@ describe("ProviderWorkerProvisioner", () => {
     );
 
     expect(harness.workspace.create).toHaveBeenCalledWith({
+      threadId,
       lifecycleGeneration: "generation-1",
       environment: {},
       networkIsolation: "ISOLATED",

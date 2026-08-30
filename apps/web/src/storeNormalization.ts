@@ -1478,6 +1478,7 @@ export function normalizeThreadSession(
     status: toLegacySessionStatus(incoming.status),
     orchestrationStatus: incoming.status,
     activeTurnId: incoming.activeTurnId ?? undefined,
+    ...(incoming.queuePosition === undefined ? {} : { queuePosition: incoming.queuePosition }),
     createdAt: incoming.updatedAt,
     updatedAt: incoming.updatedAt,
     ...(nextLastError ? { lastError: nextLastError } : {}),
@@ -1488,6 +1489,7 @@ export function normalizeThreadSession(
     previous.status === nextSession.status &&
     previous.orchestrationStatus === nextSession.orchestrationStatus &&
     previous.activeTurnId === nextSession.activeTurnId &&
+    previous.queuePosition === nextSession.queuePosition &&
     previous.createdAt === nextSession.createdAt &&
     previous.updatedAt === nextSession.updatedAt &&
     previous.lastError === nextSession.lastError
@@ -1917,6 +1919,7 @@ function toLegacySessionStatus(
   status: OrchestrationSessionStatus,
 ): "connecting" | "ready" | "running" | "error" | "closed" {
   switch (status) {
+    case "queued":
     case "starting":
       return "connecting";
     case "running":

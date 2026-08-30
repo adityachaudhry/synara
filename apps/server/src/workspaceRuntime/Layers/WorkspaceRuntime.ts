@@ -6,6 +6,11 @@ import {
   WorkspaceCreationIntentRepository,
   type WorkspaceCreationIntentRepositoryShape,
 } from "../../persistence/Services/WorkspaceCreationIntents";
+import {
+  ProviderSessionRuntimeRepository,
+  type ProviderSessionRuntimeRepositoryShape,
+} from "../../persistence/Services/ProviderSessionRuntime";
+import { decodeProviderWorkerRuntimeBinding } from "../../providerWorker/runtimeBinding";
 import { WorkspaceRuntimeError } from "../Errors";
 import { RailwaySandboxClient } from "../Services/RailwaySandboxClient";
 import {
@@ -16,6 +21,11 @@ import {
 } from "../Services/WorkspaceRuntime";
 import type { RailwaySandboxClientShape } from "../Services/RailwaySandboxClient";
 import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
+import {
+  SandboxCapacity,
+  reconcileSandboxCapacityInventory,
+  type SandboxCapacityLease,
+} from "../SandboxCapacity";
 
 function runtimeStatus(
   status: "CREATING" | "DESTROYING" | "RUNNING" | "STOPPED" | "DESTROYED" | "FAILED",
@@ -63,6 +73,7 @@ function requireEnabled(
 export interface WorkspaceRuntimeOptions {
   readonly createOperationId?: () => string;
   readonly reconcileIntervalMs?: number;
+  readonly capacity?: SandboxCapacity;
 }
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 10_000;
@@ -72,6 +83,7 @@ export function reconcileWorkspaceCreationIntents(input: {
   readonly client: RailwaySandboxClientShape;
   readonly intents: WorkspaceCreationIntentRepositoryShape;
   readonly ownedOperationIds: ReadonlySet<string>;
+  readonly onIntentCleaned?: (operationId: string) => Effect.Effect<void>;
 }) {
   return input.intents.list().pipe(
     Effect.flatMap(
@@ -89,11 +101,59 @@ export function reconcileWorkspaceCreationIntents(input: {
             .destroy(runtimeId)
             .pipe(Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void));
           yield* input.intents.remove(intent.operationId);
+          yield* input.onIntentCleaned?.(intent.operationId) ?? Effect.void;
         });
       }),
     ),
     Effect.asVoid,
   );
+}
+
+export function reconcileSandboxCapacityAtStartup(input: {
+  readonly client: RailwaySandboxClientShape;
+  readonly intents: WorkspaceCreationIntentRepositoryShape;
+  readonly runtimes: ProviderSessionRuntimeRepositoryShape;
+  readonly capacity: SandboxCapacity;
+}) {
+  return Effect.gen(function* () {
+    const [inventory, pendingCreationIntents, persistedRuntimes] = yield* Effect.all([
+      input.client.list,
+      input.intents.list(),
+      input.runtimes.list(),
+    ]);
+    const resolvedIntents = yield* Effect.forEach(pendingCreationIntents, (intent) =>
+      intent.runtimeId !== null
+        ? Effect.succeed(intent)
+        : input.client.findByCreateOperationId(intent.operationId).pipe(
+            Effect.map((runtimeId) => ({ ...intent, runtimeId })),
+          ),
+    );
+    const liveBindings = persistedRuntimes.flatMap((runtime) => {
+      if (runtime.status !== "starting" && runtime.status !== "running") return [];
+      const payload =
+        runtime.runtimePayload !== null &&
+        typeof runtime.runtimePayload === "object" &&
+        !Array.isArray(runtime.runtimePayload)
+          ? (runtime.runtimePayload as Record<string, unknown>)
+          : {};
+      const binding = decodeProviderWorkerRuntimeBinding(payload.distributedPiRuntime);
+      if (!binding) return [];
+      return [
+        {
+          threadId: runtime.threadId,
+          lifecycleGeneration: runtime.lifecycleGeneration,
+          runtimeId: binding.workspace.runtimeId,
+        },
+      ];
+    });
+    const report = reconcileSandboxCapacityInventory({
+      inventoryRuntimeIds: inventory.map((record) => record.id),
+      liveBindings,
+      pendingCreationIntents: resolvedIntents,
+    });
+    input.capacity.reconcile(report.reservations);
+    return report;
+  });
 }
 
 export function makeWorkspaceRuntimeLive(
@@ -105,12 +165,34 @@ export function makeWorkspaceRuntimeLive(
     Effect.gen(function* () {
       const client = yield* RailwaySandboxClient;
       const intents = yield* WorkspaceCreationIntentRepository;
+      const runtimes = options.capacity?.snapshot().reconciled === false
+        ? yield* ProviderSessionRuntimeRepository
+        : undefined;
       const ownedOperationIds = new Set<string>();
+      const capacityLeaseByOperationId = new Map<string, SandboxCapacityLease>();
       const reconcileIntervalMs =
         options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
 
       const reconcileLoop = (delayMs: number): Effect.Effect<void> =>
-        reconcileWorkspaceCreationIntents({ client, intents, ownedOperationIds }).pipe(
+        reconcileWorkspaceCreationIntents({
+          client,
+          intents,
+          ownedOperationIds,
+          ...(options.capacity === undefined
+            ? {}
+            : {
+                onIntentCleaned: (operationId: string) =>
+                  Effect.sync(() => {
+                    const lease = capacityLeaseByOperationId.get(operationId);
+                    if (lease) {
+                      lease.release();
+                      capacityLeaseByOperationId.delete(operationId);
+                    } else {
+                      options.capacity!.release(`create-intent:${operationId}`);
+                    }
+                  }),
+              }),
+        }).pipe(
           Effect.matchEffect({
             onFailure: (cause) =>
               Effect.logWarning("workspace creation intent reconciliation failed", {
@@ -128,6 +210,40 @@ export function makeWorkspaceRuntimeLive(
           }),
         );
 
+      const reconcileCapacityLoop = (delayMs: number): Effect.Effect<void> =>
+        runtimes === undefined || options.capacity === undefined
+          ? Effect.void
+          : reconcileSandboxCapacityAtStartup({
+              client,
+              intents,
+              runtimes,
+              capacity: options.capacity,
+            }).pipe(
+              Effect.tap((report) =>
+                report.orphanRuntimeIds.length === 0
+                  ? Effect.void
+                  : Effect.logWarning("unowned Railway sandbox inventory detected", {
+                      runtimeIds: report.orphanRuntimeIds,
+                    }),
+              ),
+              Effect.matchEffect({
+                onFailure: (cause) =>
+                  Effect.logWarning("sandbox capacity reconciliation failed", {
+                    cause: String(cause),
+                  }).pipe(
+                    Effect.andThen(Effect.sleep(delayMs)),
+                    Effect.andThen(
+                      reconcileCapacityLoop(Math.min(delayMs * 2, MAX_RECONCILE_BACKOFF_MS)),
+                    ),
+                  ),
+                onSuccess: () => Effect.void,
+              }),
+            );
+
+      if (runtimes !== undefined) {
+        yield* Effect.forkScoped(reconcileCapacityLoop(reconcileIntervalMs));
+      }
+
       yield* Effect.forkScoped(
         Effect.sleep(reconcileIntervalMs).pipe(
           Effect.andThen(reconcileLoop(reconcileIntervalMs)),
@@ -140,6 +256,24 @@ export function makeWorkspaceRuntimeLive(
           Effect.tap(() => Effect.sync(() => ownedOperationIds.delete(operationId))),
         );
 
+      const releaseCapacity = (input: {
+        readonly operationId?: string;
+        readonly capacityKey?: string;
+      }) =>
+        Effect.sync(() => {
+          const lease =
+            input.operationId === undefined
+              ? undefined
+              : capacityLeaseByOperationId.get(input.operationId);
+          lease?.release();
+          if (input.operationId !== undefined) {
+            capacityLeaseByOperationId.delete(input.operationId);
+          }
+          if (!lease && input.capacityKey !== undefined) {
+            options.capacity?.release(input.capacityKey);
+          }
+        });
+
       const destroyCreated = (runtimeId: string, operationId: string) =>
         client.destroy(runtimeId).pipe(
           Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
@@ -147,12 +281,34 @@ export function makeWorkspaceRuntimeLive(
           Effect.andThen(removeIntent(operationId)),
         );
 
-      const create: WorkspaceRuntimeShape["create"] = (input) =>
-        Effect.uninterruptibleMask((restore) =>
+      const create: WorkspaceRuntimeShape["create"] = (input) => {
+        const capacityKey = `${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
+        const acquire =
+          options.capacity === undefined
+            ? Effect.succeed(undefined)
+            : Effect.tryPromise({
+                try: (signal) =>
+                  options.capacity!.acquire({
+                    key: capacityKey,
+                    threadId: input.threadId ?? input.lifecycleGeneration,
+                    lifecycleGeneration: input.lifecycleGeneration,
+                    signal,
+                  }),
+                catch: (cause) =>
+                  new WorkspaceRuntimeError({
+                    operation: "capacity.acquire",
+                    detail: "Railway workspace capacity acquisition failed.",
+                    cause,
+                  }),
+              });
+        return acquire.pipe(
+          Effect.flatMap((capacityLease) =>
+            Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const enabled = yield* requireEnabled(config, "create");
             const operationId = (options.createOperationId ?? randomUUID)();
             if (ownedOperationIds.has(operationId)) {
+              capacityLease?.release();
               return yield* new WorkspaceRuntimeError({
                 operation: "create.reserve",
                 detail: `Workspace create operation '${operationId}' is already active.`,
@@ -166,7 +322,11 @@ export function makeWorkspaceRuntimeLive(
             );
             if (Exit.isFailure(putExit)) {
               ownedOperationIds.delete(operationId);
+              capacityLease?.release();
               return yield* Effect.failCause(putExit.cause);
+            }
+            if (capacityLease !== undefined) {
+              capacityLeaseByOperationId.set(operationId, capacityLease);
             }
 
             const createExit = yield* Effect.exit(
@@ -201,6 +361,9 @@ export function makeWorkspaceRuntimeLive(
                   Effect.andThen(removeIntent(operationId)),
                 ),
               );
+              if (Exit.isSuccess(cleanupExit)) {
+                yield* releaseCapacity({ operationId, capacityKey });
+              }
               return yield* Effect.failCause(
                 Exit.isFailure(cleanupExit) ? cleanupExit.cause : bindExit.cause,
               );
@@ -210,6 +373,7 @@ export function makeWorkspaceRuntimeLive(
               const cleanupExit = yield* Effect.exit(destroyCreated(record.id, operationId));
               ownedOperationIds.delete(operationId);
               if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause);
+              yield* releaseCapacity({ operationId, capacityKey });
               return yield* new WorkspaceRuntimeError({
                 operation: "create",
                 detail: `Created Railway Sandbox entered unexpected status ${record.status}.`,
@@ -221,12 +385,16 @@ export function makeWorkspaceRuntimeLive(
               runtimeKind: "railway-sandbox",
               runtimeId: record.id,
               creationOperationId: operationId,
+              ...(capacityLease === undefined ? {} : { capacityKey }),
               lifecycleGeneration: input.lifecycleGeneration,
               status: "running",
               region: record.region,
             } satisfies WorkspaceRuntimeBinding;
           }),
+            ),
+          ),
         );
+      };
 
       const connect: WorkspaceRuntimeShape["connect"] = (binding) =>
         Effect.gen(function* () {
@@ -251,7 +419,15 @@ export function makeWorkspaceRuntimeLive(
       const adopt: WorkspaceRuntimeShape["adopt"] = (binding) =>
         binding.creationOperationId === undefined
           ? Effect.void
-          : Effect.uninterruptible(removeIntent(binding.creationOperationId));
+          : Effect.uninterruptible(
+              removeIntent(binding.creationOperationId).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    capacityLeaseByOperationId.delete(binding.creationOperationId!);
+                  }),
+                ),
+              ),
+            );
 
       const exec: WorkspaceRuntimeShape["exec"] = (binding, input) =>
         requireEnabled(config, "exec").pipe(
@@ -308,6 +484,14 @@ export function makeWorkspaceRuntimeLive(
               binding.creationOperationId === undefined
                 ? Effect.void
                 : removeIntent(binding.creationOperationId),
+            ),
+            Effect.andThen(
+              releaseCapacity({
+                ...(binding.creationOperationId === undefined
+                  ? {}
+                  : { operationId: binding.creationOperationId }),
+                ...(binding.capacityKey === undefined ? {} : { capacityKey: binding.capacityKey }),
+              }),
             ),
             Effect.onError(() =>
               Effect.sync(() => {

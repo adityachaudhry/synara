@@ -293,6 +293,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             })
           : undefined;
         const workspace = yield* workspaceRuntime.create({
+          threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
           environment: {
             ...(options.environment ?? {}),
@@ -356,6 +357,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             })
           : undefined;
         const replacementWorkspace = yield* workspaceRuntime.create({
+          threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
           environment: {
             ...(options.environment ?? {}),

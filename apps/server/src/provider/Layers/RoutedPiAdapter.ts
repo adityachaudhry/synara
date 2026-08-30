@@ -1,11 +1,13 @@
 import {
   ProviderSession,
   ProviderTurnStartResult,
+  EventId,
   ThreadId,
   TurnId,
+  type ProviderRuntimeEvent,
   type ProviderWorkerMethod,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, PubSub, Schema, Stream } from "effect";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -20,6 +22,7 @@ import {
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
+import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -56,12 +59,61 @@ function adapterError(method: string, detail: string, cause?: unknown) {
   });
 }
 
-export const makeRoutedPiAdapter = Effect.gen(function* () {
+export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => Effect.gen(function* () {
   const local = yield* PiAdapter;
   const provisioner = yield* ProviderWorkerProvisioner;
   const broker = yield* ProviderWorkerBroker;
   const directory = yield* ProviderSessionDirectory;
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
+  const capacityEvents = capacity === undefined
+    ? undefined
+    : yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  if (capacity !== undefined && capacityEvents !== undefined) {
+    let sequence = 0;
+    let previousQueued = new Map<
+      string,
+      { readonly threadId: string; readonly lifecycleGeneration: string; readonly position: number }
+    >();
+    capacity.subscribe((snapshot) => {
+      const queued = new Map<
+        string,
+        { readonly threadId: string; readonly lifecycleGeneration: string; readonly position: number }
+      >();
+      for (const entry of snapshot.queued) {
+        const reservation = capacity.reservation(entry.key);
+        if (!reservation) continue;
+        const current = { ...reservation, position: entry.position };
+        queued.set(entry.key, current);
+        if (previousQueued.get(entry.key)?.position === entry.position) continue;
+        sequence += 1;
+        Effect.runSync(PubSub.publish(capacityEvents, {
+          type: "runtime.capacity.changed",
+          eventId: EventId.makeUnsafe(`sandbox-capacity-${Date.now()}-${sequence}`),
+          provider: "pi",
+          threadId: ThreadId.makeUnsafe(current.threadId),
+          lifecycleGeneration: current.lifecycleGeneration,
+          createdAt: new Date().toISOString() as never,
+          payload: { state: "queued", queuePosition: entry.position },
+        }));
+      }
+      for (const [key, previous] of previousQueued) {
+        if (queued.has(key)) continue;
+        sequence += 1;
+        Effect.runSync(PubSub.publish(capacityEvents, {
+          type: "runtime.capacity.changed",
+          eventId: EventId.makeUnsafe(`sandbox-capacity-${Date.now()}-${sequence}`),
+          provider: "pi",
+          threadId: ThreadId.makeUnsafe(previous.threadId),
+          lifecycleGeneration: previous.lifecycleGeneration,
+          createdAt: new Date().toISOString() as never,
+          payload: {
+            state: snapshot.activeKeys.includes(key) ? "acquired" : "cancelled",
+          },
+        }));
+      }
+      previousQueued = queued;
+    });
+  }
 
   const requestUnknown = (
     binding: ProviderWorkerRuntimeBinding,
@@ -400,13 +452,21 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     listCommands: local.listCommands,
     getComposerCapabilities: local.getComposerCapabilities,
     get streamEvents() {
-      return Stream.merge(local.streamEvents, broker.streamEvents);
+      const providerEvents = Stream.merge(local.streamEvents, broker.streamEvents);
+      return capacityEvents === undefined
+        ? providerEvents
+        : Stream.merge(providerEvents, Stream.fromPubSub(capacityEvents));
     },
   } satisfies PiAdapterShape;
 });
+
+export const makeRoutedPiAdapter = makeRoutedPiAdapterWithCapacity();
 
 function randomLifecycleGeneration(): string {
   return `remote-${Date.now().toString(36)}`;
 }
 
-export const RoutedPiAdapterLive = Layer.effect(PiAdapter, makeRoutedPiAdapter);
+export const makeRoutedPiAdapterLive = (capacity?: SandboxCapacity) =>
+  Layer.effect(PiAdapter, makeRoutedPiAdapterWithCapacity(capacity));
+
+export const RoutedPiAdapterLive = makeRoutedPiAdapterLive();

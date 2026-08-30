@@ -25,7 +25,10 @@ export function ThreadStatusPillChip({
           pill.pulse ? "animate-pulse" : "",
         )}
       />
-      <span className="truncate">{pill.label}</span>
+      <span className="truncate">
+        {pill.label}
+        {pill.queuePosition === undefined ? "" : ` #${pill.queuePosition}`}
+      </span>
     </span>
   );
 }

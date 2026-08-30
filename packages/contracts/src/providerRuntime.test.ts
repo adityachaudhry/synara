@@ -6,6 +6,23 @@ import { ProviderRuntimeEvent, type ProviderRuntimeEventType } from "./providerR
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
+  it("decodes explicit sandbox capacity queue transitions", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "runtime.capacity.changed",
+      eventId: "capacity-event-1",
+      provider: "pi",
+      createdAt: "2026-08-29T00:00:00.000Z",
+      threadId: "thread-1",
+      lifecycleGeneration: "generation-1",
+      payload: { state: "queued", queuePosition: 2 },
+    });
+
+    expect(parsed).toMatchObject({
+      type: "runtime.capacity.changed",
+      payload: { state: "queued", queuePosition: 2 },
+    });
+  });
+
   it("includes turn.steered in the exported event type", () => {
     const eventType: ProviderRuntimeEventType = "turn.steered";
     expect(eventType).toBe("turn.steered");

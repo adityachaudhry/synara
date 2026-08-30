@@ -4,6 +4,7 @@ export interface RailwaySandboxRuntimeConfigInput {
   readonly authType?: string;
   readonly region?: string;
   readonly idleTimeoutMinutes?: string;
+  readonly maxActiveSandboxes?: string;
 }
 
 export type RailwaySandboxRuntimeConfig =
@@ -15,6 +16,7 @@ export type RailwaySandboxRuntimeConfig =
       readonly authType: "bearer" | "project-token";
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
+      readonly maxActiveSandboxes: number;
     };
 
 export type RailwaySandboxRuntimeConfigDescription =
@@ -25,10 +27,14 @@ export type RailwaySandboxRuntimeConfigDescription =
       readonly authType: "bearer" | "project-token";
       readonly region?: string;
       readonly idleTimeoutMinutes: number;
+      readonly maxActiveSandboxes: number;
     };
 
 const TOKEN_ENV_KEY = "SYNARA_RAILWAY_SANDBOX_TOKEN";
 const ENVIRONMENT_ID_ENV_KEY = "SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID";
+// A missing capacity value must not turn an existing single-controller setup
+// into an unbounded Railway creator. Local/non-Railway sessions never consume it.
+export const DEFAULT_RAILWAY_MAX_ACTIVE_SANDBOXES = 1;
 
 function trimmed(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -43,12 +49,14 @@ export function resolveRailwaySandboxRuntimeConfig(
   const authTypeInput = trimmed(input.authType);
   const region = trimmed(input.region);
   const idleTimeoutInput = trimmed(input.idleTimeoutMinutes);
+  const maxActiveSandboxesInput = trimmed(input.maxActiveSandboxes);
   const hasAnyConfiguration =
     token !== undefined ||
     environmentId !== undefined ||
     authTypeInput !== undefined ||
     region !== undefined ||
-    idleTimeoutInput !== undefined;
+    idleTimeoutInput !== undefined ||
+    maxActiveSandboxesInput !== undefined;
 
   if (!hasAnyConfiguration) {
     return { enabled: false };
@@ -80,6 +88,14 @@ export function resolveRailwaySandboxRuntimeConfig(
     );
   }
 
+  const maxActiveSandboxes =
+    maxActiveSandboxesInput === undefined
+      ? DEFAULT_RAILWAY_MAX_ACTIVE_SANDBOXES
+      : Number(maxActiveSandboxesInput);
+  if (!Number.isInteger(maxActiveSandboxes) || maxActiveSandboxes < 1) {
+    throw new Error("SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES must be a positive integer.");
+  }
+
   return {
     enabled: true,
     token,
@@ -87,6 +103,7 @@ export function resolveRailwaySandboxRuntimeConfig(
     authType,
     ...(region === undefined ? {} : { region }),
     idleTimeoutMinutes,
+    maxActiveSandboxes,
   };
 }
 
@@ -103,5 +120,6 @@ export function describeRailwaySandboxRuntimeConfig(
     authType: config.authType,
     ...(config.region === undefined ? {} : { region: config.region }),
     idleTimeoutMinutes: config.idleTimeoutMinutes,
+    maxActiveSandboxes: config.maxActiveSandboxes,
   };
 }

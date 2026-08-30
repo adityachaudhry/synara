@@ -380,4 +380,5 @@ export interface ThreadSession {
   updatedAt: string;
   lastError?: string;
   orchestrationStatus: OrchestrationSessionStatus;
+  queuePosition?: number;
 }

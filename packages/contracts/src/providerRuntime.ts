@@ -202,6 +202,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "deprecation.notice",
   "files.persisted",
   "vcs.state.changed",
+  "runtime.capacity.changed",
   "runtime.warning",
   "runtime.error",
   "event.unmapped",
@@ -256,6 +257,7 @@ const ConfigWarningType = Schema.Literal("config.warning");
 const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
 const VcsStateChangedType = Schema.Literal("vcs.state.changed");
+const RuntimeCapacityChangedType = Schema.Literal("runtime.capacity.changed");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 const EventUnmappedType = Schema.Literal("event.unmapped");
@@ -736,6 +738,12 @@ const RuntimeWarningPayload = Schema.Struct({
 });
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 
+const RuntimeCapacityChangedPayload = Schema.Struct({
+  state: Schema.Literals(["queued", "acquired", "cancelled", "failed"]),
+  queuePosition: Schema.optional(PositiveInt),
+});
+export type RuntimeCapacityChangedPayload = typeof RuntimeCapacityChangedPayload.Type;
+
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   class: Schema.optional(RuntimeErrorClass),
@@ -1112,6 +1120,14 @@ const ProviderRuntimeWarningEvent = Schema.Struct({
 });
 export type ProviderRuntimeWarningEvent = typeof ProviderRuntimeWarningEvent.Type;
 
+const ProviderRuntimeCapacityChangedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: RuntimeCapacityChangedType,
+  payload: RuntimeCapacityChangedPayload,
+});
+export type ProviderRuntimeCapacityChangedEvent =
+  typeof ProviderRuntimeCapacityChangedEvent.Type;
+
 const ProviderRuntimeEventUnmappedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: EventUnmappedType,
@@ -1175,6 +1191,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeDeprecationNoticeEvent,
   ProviderRuntimeFilesPersistedEvent,
   ProviderRuntimeVcsStateChangedEvent,
+  ProviderRuntimeCapacityChangedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
   ProviderRuntimeEventUnmappedEvent,
