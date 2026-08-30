@@ -20,6 +20,7 @@ The external session uses the existing signed bearer credential, persisted sessi
 - Snapshot/project/thread outputs are filtered. Every supplied locator is independently checked, so an allowed project/thread cannot authorize a different cwd. Dispatch checks the real nested `{ command }` wire payload, and filesystem browse targets must remain inside the authorized cwd.
 - `thread.turn.start` also resolves every nested `thread://` mention at admission time. Same-project mentions are allowed; malformed, missing, and cross-project thread references fail closed before provider prompt context can load a transcript.
 - Scoped turns reject non-empty client-supplied `message.skills` and all `providerOptions`. Their optional model selection is limited to the two inert fields Glasswing needs, `{ provider, model }`; nested model options and executable overrides cannot reach controller file reads or provider startup.
+- The same model boundary applies to scoped edit-and-resend, thread creation, and thread metadata updates. Edit-and-resend cannot forward a provider binary override into its derived turn, and create/meta cannot persist model options for later provider use. The current create/meta contracts expose no `providerOptions`; admission nevertheless rejects the field if those contracts expand.
 - Scoped thread create/meta commands reject client-supplied worktree, working-directory, and associated-worktree paths. A non-null `parentThreadId` is independently resolved and must belong to the scope, preventing a private parent runtime from becoming an interrupt target.
 - Project-scoped sessions are denied controller-local terminal/dev-server execution, GitHub provisioning, path-bearing worktree operations, automation management, and the unscoped device-frame socket. Unscoped device-frame sessions retain the full authenticated session and run through the existing revocable connection lifecycle.
 - They are also denied provider discovery/compaction/plugin methods other than the safe composer-capabilities descriptor, provider-history import, every device RPC, and filesystem browse. The latter is deliberately denied rather than relying on symlink-unsafe lexical containment.
@@ -59,6 +60,7 @@ The hardening review additionally recorded RED before each minimal fix for:
 - a scoped turn loading another project's transcript through a nested `message.mentions` thread reference.
 - scoped thread path injection/private-parent assignment, provider discovery overrides, provider-history import, device RPCs, and symlink-capable filesystem browse being admitted.
 - scoped turn envelopes admitting an arbitrary controller skill path, provider executable override, and non-minimal model options.
+- scoped edit-and-resend forwarding a Codex `binaryPath`, and scoped create/meta persisting non-minimal model options.
 
 Each case is GREEN in the focused suites below.
 
@@ -73,6 +75,8 @@ Final verification used Node 24 and Bun 1.3.12 via `npx`:
 The nested-reference/fail-closed follow-up reran the focused project-scope, WebSocket admission, connection-lifecycle, and thread-mention projection suites: 4 files and 55 tests passed, followed by the server build and `git diff --check`. Inspection found no `replyTo` field on this command: assistant-selection attachments carry client-supplied text and do not resolve their message ID, binary attachments are claimed against the destination thread/principal, and `sourceProposedPlan.threadId` is independently required by the decider to belong to the destination project.
 
 The final scoped-turn follow-up recorded RED with real `thread.turn.start` envelopes: arbitrary `message.skills` and a Codex `binaryPath` were admitted before the gate, and a deliberately removed minimal-model-fields check admitted nested model options. GREEN restricts scoped turns to no skill references, no provider options, and optional `{ provider, model }` selection only. The focused project-scope, WebSocket admission/lifecycle, mention-context, and skill-prompt suites passed 5 files and 65 tests; the server build and `git diff --check` also passed.
+
+The edit/resend and persistence follow-up recorded RED with real command envelopes: edit-and-resend admitted a Codex `binaryPath`, while create and meta-update admitted a schema-valid Codex model option. GREEN reuses the same scoped model predicate for turn-start, edit-and-resend, create, and meta-update. Six focused project-scope, WebSocket lifecycle, provider-reactor, mention-context, and skill-prompt files passed 206 tests; the server build and `git diff --check` also passed.
 
 Per instruction, formatting, lint, and typecheck commands were not run.
 
