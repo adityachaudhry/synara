@@ -1767,11 +1767,20 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
           rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
-        [WS_METHODS.serverRefreshProviders]: () =>
-          rpcEffect(
-            providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
+        [WS_METHODS.serverRefreshProviders]: (_, { headers }) => {
+          const scope = lookupWsConnectionProjectScope(
+            connectionSessions,
+            Headers.get(headers, WS_CONNECTION_SESSION_HEADER),
+          );
+          return rpcEffect(
+            providerHealth.refresh.pipe(
+              Effect.map((providers) => ({
+                providers: filterProviderStatusesByProjectScope(providers, scope),
+              })),
+            ),
             "Failed to refresh providers",
-          ),
+          );
+        },
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(

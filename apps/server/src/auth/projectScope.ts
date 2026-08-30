@@ -84,6 +84,7 @@ const SCOPE_FILTERED_GLOBAL_METHODS = new Set([
   "projects.listDevServers",
   "projects.subscribeDevServerEvents",
   "provider.getComposerCapabilities",
+  "server.refreshProviders",
   "server.subscribeProviderStatuses",
 ]);
 
