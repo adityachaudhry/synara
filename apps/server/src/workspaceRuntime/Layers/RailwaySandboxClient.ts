@@ -85,6 +85,8 @@ export interface RailwaySdkFacade {
 export interface RailwaySandboxClientOptions {
   readonly durableSessionWaitMs?: number;
   readonly createProcessId?: () => string;
+  readonly createReconcileAttempts?: number;
+  readonly createReconcileDelayMs?: number;
 }
 
 interface AttachedProcess {
@@ -93,6 +95,12 @@ interface AttachedProcess {
 }
 
 const DEFAULT_DURABLE_SESSION_WAIT_MS = 1_500;
+const DEFAULT_CREATE_RECONCILE_ATTEMPTS = 30;
+const DEFAULT_CREATE_RECONCILE_DELAY_MS = 1_000;
+export const WORKSPACE_CREATE_OPERATION_ENV_KEY =
+  "SYNARA_WORKSPACE_CREATE_OPERATION_ID";
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 const liveRailwaySdk: RailwaySdkFacade = {
   create: (input) => Sandbox.create(input),
@@ -136,6 +144,10 @@ export function makeRailwaySandboxClient(
   const durableSessionWaitMs =
     options.durableSessionWaitMs ?? DEFAULT_DURABLE_SESSION_WAIT_MS;
   const createProcessId = options.createProcessId ?? randomUUID;
+  const createReconcileAttempts =
+    options.createReconcileAttempts ?? DEFAULT_CREATE_RECONCILE_ATTEMPTS;
+  const createReconcileDelayMs =
+    options.createReconcileDelayMs ?? DEFAULT_CREATE_RECONCILE_DELAY_MS;
   const connectionInput: RailwaySdkConnectionInput = {
     token: config.token,
     authType: config.authType,
@@ -164,22 +176,63 @@ export function makeRailwaySandboxClient(
       catch: (cause) => clientFailure(sdk, "connect", runtimeId, cause),
     });
 
-  const create: RailwaySandboxClientShape["create"] = (input: RailwaySandboxCreateInput) =>
+  const reconcileFailedCreate = (operationId: string) =>
     Effect.tryPromise({
       try: async () => {
-        const sandbox = await sdk.create({
-          ...connectionInput,
-          networkIsolation: input.networkIsolation,
-          idleTimeoutMinutes: input.idleTimeoutMinutes,
-          ...(input.region === undefined ? {} : { region: input.region }),
-          env: { ...input.environment },
-        });
-        handles.set(sandbox.id, sandbox);
-        return toRecord(sandbox);
+        for (let attempt = 0; attempt < createReconcileAttempts; attempt += 1) {
+          const records = await sdk.list(connectionInput);
+          let found = false;
+          for (const record of records) {
+            let sandbox: RailwaySdkSandbox;
+            try {
+              sandbox = await sdk.connect(record.id, connectionInput);
+            } catch {
+              continue;
+            }
+            const probe = await sandbox.exec(
+              `test "$${WORKSPACE_CREATE_OPERATION_ENV_KEY}" = ${shellQuote(operationId)}`,
+              { timeoutSec: 10 },
+            );
+            if (probe.exitCode !== 0) continue;
+            found = true;
+            await sandbox.destroy();
+            handles.delete(record.id);
+          }
+          if (found || attempt === createReconcileAttempts - 1) return;
+          await new Promise<void>((resolve) => setTimeout(resolve, createReconcileDelayMs));
+        }
       },
       catch: (cause) =>
-        clientFailure(sdk, "create", undefined, cause) as RailwaySandboxClientError,
+        clientFailure(sdk, "create.reconcile", undefined, cause) as RailwaySandboxClientError,
     });
+
+  const create: RailwaySandboxClientShape["create"] = (input: RailwaySandboxCreateInput) =>
+    Effect.suspend(() =>
+      Effect.tryPromise({
+        try: async () => {
+          const sandbox = await sdk.create({
+            ...connectionInput,
+            networkIsolation: input.networkIsolation,
+            idleTimeoutMinutes: input.idleTimeoutMinutes,
+            ...(input.region === undefined ? {} : { region: input.region }),
+            env: {
+              ...input.environment,
+              [WORKSPACE_CREATE_OPERATION_ENV_KEY]: input.operationId,
+            },
+          });
+          handles.set(sandbox.id, sandbox);
+          return toRecord(sandbox);
+        },
+        catch: (cause) =>
+          clientFailure(sdk, "create", undefined, cause) as RailwaySandboxClientError,
+      }).pipe(
+        Effect.onExit((exit) =>
+          exit._tag === "Success"
+            ? Effect.void
+            : reconcileFailedCreate(input.operationId),
+        ),
+      ),
+    );
 
   const connect: RailwaySandboxClientShape["connect"] = (runtimeId) =>
     Effect.tryPromise({

@@ -2,9 +2,9 @@ import path from "node:path";
 
 import type { ProjectRepositoryBinding } from "@synara/contracts";
 
-export const REPOSITORY_AUTHORIZATION_ENV_KEY =
-  "SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION";
 export const REPOSITORY_CHECKOUT_ROOT = "/workspace/repository";
+export const REPOSITORY_CREDENTIAL_CONFIG_PATH =
+  "/tmp/synara-repository-credential.gitconfig";
 
 const COMMIT_MARKER = "__SYNARA_CHECKOUT_COMMIT__=";
 const CHECKOUT_MODE_MARKER = "__SYNARA_CHECKOUT_MODE__=";
@@ -23,15 +23,15 @@ function sparseCheckoutPattern(bindingPath: string): string {
 
 export function makeRepositoryCheckoutPlan(input: {
   readonly binding: ProjectRepositoryBinding;
-  readonly authorization?: string;
+  readonly credentialConfigPath?: string;
   readonly checkoutRoot?: string;
 }) {
   const checkoutRoot = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
   const cwd = path.posix.join(checkoutRoot, input.binding.path);
   const repositoryUrl = `${input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
-  const authenticatedGit = input.authorization
-    ? `GIT_TERMINAL_PROMPT=0 ${git} -c http.extraHeader="Authorization: $${REPOSITORY_AUTHORIZATION_ENV_KEY}"`
+  const authenticatedGit = input.credentialConfigPath
+    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
     : `GIT_TERMINAL_PROMPT=0 ${git}`;
   const sparseGit = `${authenticatedGit} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true`;
   const sparsePath = path.posix.join(checkoutRoot, ".git", "info", "sparse-checkout");
@@ -50,10 +50,17 @@ export function makeRepositoryCheckoutPlan(input: {
   return {
     command,
     cwd,
-    environment: input.authorization
-      ? { [REPOSITORY_AUTHORIZATION_ENV_KEY]: input.authorization }
-      : {},
+    environment: {},
   } as const;
+}
+
+export function makeRepositoryCredentialConfig(
+  binding: ProjectRepositoryBinding,
+  authorization: string,
+): string {
+  const origin = new URL(binding.origin);
+  const scopedOrigin = `${origin.origin}/`;
+  return `[http ${JSON.stringify(scopedOrigin)}]\n\textraHeader = Authorization: ${authorization}\n`;
 }
 
 export function parseRepositoryCheckoutResult(stdout: string): {

@@ -19,11 +19,30 @@ describe("provider worker protocol", () => {
     const decoded = Schema.decodeUnknownSync(ProviderWorkerClientFrame)({
       ...fence,
       type: "register",
-      bootstrapCredential: "one-time-secret",
     });
 
     expect(decoded.type).toBe("register");
     expect(decoded.protocolVersion).toBe(1);
+  });
+
+  it("keeps bootstrap credentials out of protocol frames", () => {
+    const decoded = Schema.decodeUnknownSync(ProviderWorkerClientFrame)({
+      ...fence,
+      type: "register",
+      bootstrapCredential: "must-not-cross-the-protocol",
+    });
+
+    expect(JSON.stringify(decoded)).not.toContain("must-not-cross-the-protocol");
+  });
+
+  it("decodes response acknowledgement frames used to retire replay state", () => {
+    const decoded = Schema.decodeUnknownSync(ProviderWorkerServerFrame)({
+      ...fence,
+      type: "response.ack",
+      requestId: "request-1",
+    });
+
+    expect(decoded.type).toBe("response.ack");
   });
 
   it("decodes a supported adapter request", () => {
@@ -62,6 +81,18 @@ describe("provider worker protocol", () => {
         requestId: "request-1",
         method: "database.query",
         params: {},
+      }),
+    ).toThrow();
+  });
+
+  it("rejects unused discovery methods that stay on the local Pi adapter", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ProviderWorkerServerFrame)({
+        ...fence,
+        type: "request",
+        requestId: "request-1",
+        method: "models.list",
+        params: { provider: "pi" },
       }),
     ).toThrow();
   });

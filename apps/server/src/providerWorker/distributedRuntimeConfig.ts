@@ -26,6 +26,7 @@ export type DistributedPiRuntimeConfig =
       readonly enabled: true;
       readonly railway: Extract<RailwaySandboxRuntimeConfig, { readonly enabled: true }>;
       readonly controlUrl: string;
+      readonly networkIsolation: "ISOLATED" | "PRIVATE";
       readonly workerEnvironment: Readonly<Record<string, string>>;
       readonly repositoryAuthorization?: string;
     };
@@ -76,10 +77,19 @@ export function resolveDistributedPiRuntimeConfig(input: {
     if (value) workerEnvironment[key] = value;
   }
 
+  const networkIsolationInput =
+    environment.SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION?.trim().toUpperCase() || "ISOLATED";
+  if (networkIsolationInput !== "ISOLATED" && networkIsolationInput !== "PRIVATE") {
+    throw new Error(
+      "SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION must be ISOLATED or PRIVATE.",
+    );
+  }
+
   return {
     enabled: true,
     railway,
     controlUrl: controlUrl.toString(),
+    networkIsolation: networkIsolationInput,
     workerEnvironment,
     ...(environment.SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION?.trim()
       ? {

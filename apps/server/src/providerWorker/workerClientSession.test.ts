@@ -10,6 +10,7 @@ import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter"
 import type { ProviderWorkerSocket } from "./providerWorkerConnection";
 import { makeProviderWorkerClientSession } from "./workerClientSession";
 import { makeProviderWorkerOutbox } from "./workerOutbox";
+import { makeProviderWorkerRequestLedger } from "./workerRequestLedger";
 
 const fence = {
   sandboxId: "ef1b4542-d435-4aae-b8bb-e531685e3cc6",
@@ -104,16 +105,16 @@ describe("ProviderWorkerClientSession", () => {
     outbox.push(event);
     const session = makeProviderWorkerClientSession({
       fence,
-      bootstrapCredential: "bootstrap-secret",
       adapter: makeAdapter(),
       outbox,
+      requestLedger: makeProviderWorkerRequestLedger({ fence, adapter: makeAdapter() }),
       socket: fake.socket,
     });
 
     await Effect.runPromise(session.run);
 
     expect(fake.sent[0]).toMatchObject({ type: "register", ...fence });
-    expect(fake.sent[0]).toMatchObject({ bootstrapCredential: "bootstrap-secret" });
+    expect(fake.sent[0]).not.toHaveProperty("bootstrapCredential");
     expect(fake.sent[1]).toMatchObject({ type: "event", sequence: 1 });
     expect(fake.sent[2]).toMatchObject({
       type: "response",
@@ -136,9 +137,9 @@ describe("ProviderWorkerClientSession", () => {
     ]);
     const session = makeProviderWorkerClientSession({
       fence,
-      bootstrapCredential: "bootstrap-secret",
       adapter: makeAdapter(),
       outbox: makeProviderWorkerOutbox(fence),
+      requestLedger: makeProviderWorkerRequestLedger({ fence, adapter: makeAdapter() }),
       socket: fake.socket,
     });
 
@@ -154,9 +155,9 @@ describe("ProviderWorkerClientSession", () => {
     const fake = makeReorderingSocket([frame({ type: "registered", acknowledgedSequence: 0 })]);
     const session = makeProviderWorkerClientSession({
       fence,
-      bootstrapCredential: "bootstrap-secret",
       adapter: makeAdapter(),
       outbox: makeProviderWorkerOutbox(fence),
+      requestLedger: makeProviderWorkerRequestLedger({ fence, adapter: makeAdapter() }),
       socket: fake.socket,
     });
     await Effect.runPromise(session.run);

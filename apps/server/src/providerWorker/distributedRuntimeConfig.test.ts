@@ -34,6 +34,7 @@ describe("resolveDistributedPiRuntimeConfig", () => {
     expect(config).toMatchObject({
       enabled: true,
       controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+      networkIsolation: "ISOLATED",
       workerEnvironment: { OPENAI_API_KEY: "openai-secret" },
       repositoryAuthorization: "token repository-secret",
     });
@@ -41,5 +42,19 @@ describe("resolveDistributedPiRuntimeConfig", () => {
     expect(JSON.stringify(config.workerEnvironment)).not.toContain("railway-secret");
     expect(JSON.stringify(config.workerEnvironment)).not.toContain("repository-secret");
     expect(JSON.stringify(config.workerEnvironment)).not.toContain("must-not-forward");
+  });
+
+  it("requires an explicit opt-in before provider workers join the private network", () => {
+    const config = resolveDistributedPiRuntimeConfig({
+      environment: {
+        SYNARA_RAILWAY_SANDBOX_TOKEN: "railway-secret",
+        SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID: "environment",
+        SYNARA_PROVIDER_WORKER_CONTROL_URL:
+          "http://synara.railway.internal:3000/internal/provider-worker",
+        SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION: "PRIVATE",
+      },
+    });
+
+    expect(config).toMatchObject({ enabled: true, networkIsolation: "PRIVATE" });
   });
 });

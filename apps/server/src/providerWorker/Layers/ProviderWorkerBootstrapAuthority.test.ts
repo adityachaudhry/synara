@@ -14,16 +14,9 @@ describe("ProviderWorkerBootstrapAuthority", () => {
     const authority = await Effect.runPromise(makeProviderWorkerBootstrapAuthority());
     const credential = await Effect.runPromise(authority.issue(fence));
 
+    await expect(Effect.runPromise(authority.authorize(credential))).resolves.toEqual(fence);
     await expect(
-      Effect.runPromise(authority.authorize(fence, credential)),
-    ).resolves.toBeUndefined();
-    await expect(
-      Effect.runPromise(authority.authorize(fence, "wrong-credential")),
-    ).rejects.toMatchObject({ operation: "authorize" });
-    await expect(
-      Effect.runPromise(
-        authority.authorize({ ...fence, lifecycleGeneration: "generation-2" }, credential),
-      ),
+      Effect.runPromise(authority.authorize("wrong-credential")),
     ).rejects.toMatchObject({ operation: "authorize" });
   });
 
@@ -31,12 +24,12 @@ describe("ProviderWorkerBootstrapAuthority", () => {
     const authority = await Effect.runPromise(makeProviderWorkerBootstrapAuthority());
     const credential = await Effect.runPromise(authority.issue(fence));
 
-    await Effect.runPromise(authority.authorize(fence, credential));
-    await Effect.runPromise(authority.authorize(fence, credential));
+    await expect(Effect.runPromise(authority.authorize(credential))).resolves.toEqual(fence);
+    await expect(Effect.runPromise(authority.authorize(credential))).resolves.toEqual(fence);
     await Effect.runPromise(authority.revoke(fence));
 
     await expect(
-      Effect.runPromise(authority.authorize(fence, credential)),
+      Effect.runPromise(authority.authorize(credential)),
     ).rejects.toMatchObject({ operation: "authorize" });
   });
 
@@ -47,10 +40,10 @@ describe("ProviderWorkerBootstrapAuthority", () => {
 
     expect(first).not.toBe(second);
     await expect(
-      Effect.runPromise(authority.authorize(fence, first)),
+      Effect.runPromise(authority.authorize(first)),
     ).rejects.toMatchObject({ operation: "authorize" });
     await expect(
-      Effect.runPromise(authority.authorize(fence, second)),
-    ).resolves.toBeUndefined();
+      Effect.runPromise(authority.authorize(second)),
+    ).resolves.toEqual(fence);
   });
 });

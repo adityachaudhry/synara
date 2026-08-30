@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Effect, Layer } from "effect";
 
 import { WorkspaceRuntimeError } from "../Errors";
@@ -53,7 +55,14 @@ function requireEnabled(
       );
 }
 
-export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
+export interface WorkspaceRuntimeOptions {
+  readonly createOperationId?: () => string;
+}
+
+export function makeWorkspaceRuntimeLive(
+  config: RailwaySandboxRuntimeConfig,
+  options: WorkspaceRuntimeOptions = {},
+) {
   return Layer.effect(
     WorkspaceRuntime,
     Effect.gen(function* () {
@@ -64,7 +73,8 @@ export function makeWorkspaceRuntimeLive(config: RailwaySandboxRuntimeConfig) {
           const enabled = yield* requireEnabled(config, "create");
           const record = yield* client
             .create({
-              networkIsolation: "PRIVATE",
+              operationId: (options.createOperationId ?? randomUUID)(),
+              networkIsolation: input.networkIsolation ?? "ISOLATED",
               idleTimeoutMinutes: enabled.idleTimeoutMinutes,
               ...(enabled.region === undefined ? {} : { region: enabled.region }),
               environment: input.environment,

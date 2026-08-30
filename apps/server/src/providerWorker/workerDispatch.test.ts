@@ -86,20 +86,4 @@ describe("dispatchProviderWorkerRequest", () => {
     ]);
   });
 
-  it("returns a structured failure when an optional capability is absent", async () => {
-    const result = await Effect.runPromise(
-      dispatchProviderWorkerRequest(
-        makeAdapter(),
-        request("models.list", { provider: "pi", cwd: "/workspace" }),
-      ).pipe(Effect.result),
-    );
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        provider: "pi",
-        method: "models.list",
-      });
-    }
-  });
 });

@@ -67,6 +67,19 @@ function makeHarness(
     provider: "pi",
     capabilities: { sessionModelSwitch: "in-session" },
     startSession: localStart,
+    sendTurn: vi.fn(() => Effect.fail(new Error("local session unavailable"))),
+    listSessions: vi.fn(() =>
+      Effect.succeed([
+        {
+          provider: "pi" as const,
+          threadId: "22222222-2222-4222-8222-222222222222" as never,
+          status: "ready" as const,
+          runtimeMode: "full-access" as const,
+          createdAt: "2026-08-05T01:00:00.000Z",
+          updatedAt: "2026-08-05T01:00:00.000Z",
+        },
+      ]),
+    ),
     stopSession: vi.fn(() => Effect.void),
     stopAll: vi.fn(() => Effect.void),
     streamEvents: Stream.empty,
@@ -215,5 +228,41 @@ describe("RoutedPiAdapter", () => {
 
     await expect(Effect.runPromise(adapter.stopSession(threadId))).resolves.toBeUndefined();
     expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
+  });
+
+  it("destroys the remote runtime when a sent turn becomes uncertain", async () => {
+    const harness = makeHarness();
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    await Effect.runPromise(adapter.startSession(startInput({ repositoryBound: true })));
+    harness.request.mockImplementation((_fence, method: string) =>
+      method === "turn.send"
+        ? Effect.fail(new Error("response lost after dispatch"))
+        : Effect.succeed(null),
+    );
+
+    const result = await Effect.runPromise(
+      adapter
+        .sendTurn({ threadId, prompt: "ambiguous" } as never)
+        .pipe(Effect.result),
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
+  });
+
+  it("keeps local session discovery available when a remote worker is down", async () => {
+    const harness = makeHarness();
+    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    await Effect.runPromise(adapter.startSession(startInput({ repositoryBound: true })));
+    harness.request.mockImplementation((_fence, method: string) =>
+      method === "session.list"
+        ? Effect.fail(new Error("worker unavailable"))
+        : Effect.succeed(null),
+    );
+
+    const sessions = await Effect.runPromise(adapter.listSessions());
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.threadId).toBe("22222222-2222-4222-8222-222222222222");
   });
 });

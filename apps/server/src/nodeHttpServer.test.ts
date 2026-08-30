@@ -7,7 +7,22 @@ import { Deferred, Effect, Exit, Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
-import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
+import {
+  MAX_PROVIDER_WORKER_MESSAGE_BYTES,
+  MAX_WEBSOCKET_MESSAGE_BYTES,
+  makeBoundedNodeHttpServer,
+  upgradePathMaxPayload,
+} from "./nodeHttpServer";
+
+describe("bounded Node HTTP server WebSocket admission", () => {
+  it("gives the private worker route a smaller payload cap", () => {
+    expect(upgradePathMaxPayload("/internal/provider-worker")).toBe(
+      MAX_PROVIDER_WORKER_MESSAGE_BYTES,
+    );
+    expect(MAX_PROVIDER_WORKER_MESSAGE_BYTES).toBeLessThan(MAX_WEBSOCKET_MESSAGE_BYTES);
+    expect(upgradePathMaxPayload("/ws")).toBe(MAX_WEBSOCKET_MESSAGE_BYTES);
+  });
+});
 
 function waitForConnect(socket: Socket): Promise<void> {
   return new Promise((resolve, reject) => {

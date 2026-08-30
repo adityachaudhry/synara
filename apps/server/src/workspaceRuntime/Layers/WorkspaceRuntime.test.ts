@@ -19,12 +19,14 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
   let creates = 0;
   const writes: unknown[] = [];
   const durableProcesses: unknown[] = [];
+  const createInputs: unknown[] = [];
 
   const client: RailwaySandboxClientShape = {
     create: (input) =>
       Effect.gen(function* () {
+        createInputs.push(input);
         if (
-          input.networkIsolation !== "PRIVATE" ||
+          (input.networkIsolation !== "ISOLATED" && input.networkIsolation !== "PRIVATE") ||
           input.idleTimeoutMinutes !== 30 ||
           input.region !== "us-east4-eqdc4a"
         ) {
@@ -88,7 +90,7 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
     list: Effect.sync(() => Array.from(sandboxes.values())),
   };
 
-  return { client, sandboxes, writes, durableProcesses, get creates() { return creates; } };
+  return { client, sandboxes, writes, durableProcesses, createInputs, get creates() { return creates; } };
 }
 
 const enabledConfig = {
@@ -112,7 +114,7 @@ function runWorkspace<A>(
 }
 
 describe("WorkspaceRuntime", () => {
-  it("creates a private sandbox with the configured idle timeout", async () => {
+  it("creates an isolated sandbox by default", async () => {
     const fake = makeFakeRailwayClient();
 
     const binding = await runWorkspace(
@@ -133,6 +135,25 @@ describe("WorkspaceRuntime", () => {
       status: "running",
       region: "us-east4-eqdc4a",
     });
+    expect(fake.createInputs[0]).toMatchObject({ networkIsolation: "ISOLATED" });
+  });
+
+  it("uses private networking only when the caller explicitly requests it", async () => {
+    const fake = makeFakeRailwayClient();
+
+    await runWorkspace(
+      fake.client,
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        yield* runtime.create({
+          lifecycleGeneration: "generation-private",
+          environment: {},
+          networkIsolation: "PRIVATE",
+        });
+      }),
+    );
+
+    expect(fake.createInputs[0]).toMatchObject({ networkIsolation: "PRIVATE" });
   });
 
   it("connects only to a running sandbox", async () => {

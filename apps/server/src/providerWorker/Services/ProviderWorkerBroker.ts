@@ -37,7 +37,10 @@ export interface ProviderWorkerBrokerShape {
   readonly accept: (
     frame: ProviderWorkerClientFrame,
   ) => Effect.Effect<void, ProviderWorkerBrokerError>;
-  readonly disconnect: (fence: ProviderWorkerFence) => Effect.Effect<void>;
+  readonly disconnect: (
+    fence: ProviderWorkerFence,
+    connection?: ProviderWorkerConnection,
+  ) => Effect.Effect<void>;
   readonly retire: (
     fence: ProviderWorkerFence,
     reason?: string,

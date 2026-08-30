@@ -6,8 +6,7 @@ import { Duration, Effect, Schema } from "effect";
 
 import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
 import { ProviderWorkerBrokerError, ProviderWorkerTransportError } from "./Errors";
-import type { ProviderWorkerFence } from "./fence";
-import type { ProviderWorkerBootstrapAuthorityShape } from "./Services/ProviderWorkerBootstrapAuthority";
+import { sameProviderWorkerFence, type ProviderWorkerFence } from "./fence";
 import type {
   ProviderWorkerBrokerShape,
   ProviderWorkerConnection,
@@ -54,7 +53,7 @@ const fenceFromFrame = (frame: {
 
 export function runProviderWorkerConnection(input: {
   readonly socket: ProviderWorkerSocket;
-  readonly authority: ProviderWorkerBootstrapAuthorityShape;
+  readonly authenticatedFence: ProviderWorkerFence;
   readonly broker: ProviderWorkerBrokerShape;
   readonly registrationTimeoutMs?: number;
 }) {
@@ -92,11 +91,12 @@ export function runProviderWorkerConnection(input: {
                 );
               }
               const fence = fenceFromFrame(frame);
-              yield* input.authority.authorize(fence, frame.bootstrapCredential).pipe(
-                Effect.mapError((cause) =>
-                  transportError("register.auth", "Worker authentication failed.", cause),
-                ),
-              );
+              if (!sameProviderWorkerFence(input.authenticatedFence, fence)) {
+                return yield* transportError(
+                  "register.fence",
+                  "Worker registration does not match its authenticated generation.",
+                );
+              }
               yield* input.broker
                 .register(fence, brokerConnection)
                 .pipe(
@@ -145,7 +145,7 @@ export function runProviderWorkerConnection(input: {
     yield* input.socket.run(handleFrame).pipe(
       Effect.ensuring(
         Effect.suspend(() =>
-          registeredFence ? input.broker.disconnect(registeredFence) : Effect.void,
+          registeredFence ? input.broker.disconnect(registeredFence, brokerConnection) : Effect.void,
         ),
       ),
     );

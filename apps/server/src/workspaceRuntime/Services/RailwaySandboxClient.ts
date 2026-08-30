@@ -20,6 +20,7 @@ export interface RailwaySandboxRecord {
 }
 
 export interface RailwaySandboxCreateInput {
+  readonly operationId: string;
   readonly networkIsolation: "PRIVATE" | "ISOLATED";
   readonly idleTimeoutMinutes: number;
   readonly region?: string;

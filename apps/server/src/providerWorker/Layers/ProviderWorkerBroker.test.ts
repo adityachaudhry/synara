@@ -136,22 +136,76 @@ describe("ProviderWorkerBroker", () => {
     expect(second.closeCount).toBe(1);
   });
 
-  it("fails outstanding requests when the worker disconnects", async () => {
+  it("retains and replays an in-flight request across a transient reconnect", async () => {
     const broker = await Effect.runPromise(makeProviderWorkerBroker({ requestTimeoutMs: 1_000 }));
-    const fake = makeConnection();
+    const first = makeConnection();
     await Effect.runPromise(broker.expectWorker(fence));
-    await Effect.runPromise(broker.register(fence, fake.connection));
-    fake.sent.length = 0;
+    await Effect.runPromise(broker.register(fence, first.connection));
+    first.sent.length = 0;
 
     const pending = Effect.runPromise(
-      broker.request(fence, "session.has", { threadId: "thread-1" }).pipe(Effect.result),
+      broker.request(fence, "turn.send", {
+        threadId: "thread-1",
+        prompt: "hello",
+      }),
     );
-    await viWaitFor(() => fake.sent.length === 1);
-    await Effect.runPromise(broker.disconnect(fence));
+    await viWaitFor(() => first.sent.length === 1);
+    const original = first.sent[0];
+    if (!original || original.type !== "request") throw new Error("request frame not sent");
+    await Effect.runPromise(broker.disconnect(fence, first.connection));
 
-    const result = await pending;
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.operation).toBe("disconnect");
+    const second = makeConnection();
+    await Effect.runPromise(broker.register(fence, second.connection));
+    const replay = second.sent.find((frame) => frame.type === "request");
+    expect(replay).toMatchObject({
+      type: "request",
+      requestId: original.requestId,
+      method: "turn.send",
+    });
+    await Effect.runPromise(
+      broker.accept({
+        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+        ...fence,
+        type: "response",
+        requestId: original.requestId,
+        ok: true,
+        result: { turnId: "turn-1" },
+      }),
+    );
+
+    await expect(pending).resolves.toEqual({ turnId: "turn-1" });
+    expect(second.sent.at(-1)).toMatchObject({
+      type: "response.ack",
+      requestId: original.requestId,
+    });
+  });
+
+  it("ignores a stale socket close after the same fence has reconnected", async () => {
+    const broker = await Effect.runPromise(makeProviderWorkerBroker());
+    const first = makeConnection();
+    const second = makeConnection();
+    await Effect.runPromise(broker.expectWorker(fence));
+    await Effect.runPromise(broker.register(fence, first.connection));
+    await Effect.runPromise(broker.disconnect(fence, first.connection));
+    await Effect.runPromise(broker.register(fence, second.connection));
+
+    await Effect.runPromise(broker.disconnect(fence, first.connection));
+
+    const request = Effect.runPromise(broker.request(fence, "session.has", { threadId: "thread-1" }));
+    await viWaitFor(() => second.sent.some((frame) => frame.type === "request"));
+    const frame = second.sent.find((sent) => sent.type === "request");
+    if (!frame || frame.type !== "request") throw new Error("request frame not sent");
+    await Effect.runPromise(
+      broker.accept({
+        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+        ...fence,
+        type: "response",
+        requestId: frame.requestId,
+        ok: true,
+        result: true,
+      }),
+    );
+    await expect(request).resolves.toBe(true);
   });
 
   it("publishes canonical events once and rejects sequence gaps", async () => {

@@ -4,7 +4,10 @@ import { Socket } from "effect/unstable/socket";
 
 import { ProviderWorkerTransportError } from "./Errors";
 import { runProviderWorkerConnection, type ProviderWorkerSocket } from "./providerWorkerConnection";
-import { ProviderWorkerBootstrapAuthority } from "./Services/ProviderWorkerBootstrapAuthority";
+import {
+  ProviderWorkerBootstrapAuthority,
+  type ProviderWorkerBootstrapAuthorityShape,
+} from "./Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "./Services/ProviderWorkerBroker";
 
 export const PROVIDER_WORKER_WEBSOCKET_PATH = "/internal/provider-worker";
@@ -20,6 +23,39 @@ export function mapProviderWorkerSocketRunError(cause: unknown) {
   return cause instanceof ProviderWorkerTransportError
     ? cause
     : toTransportError("read")(cause);
+}
+
+export function authenticateProviderWorkerUpgrade(
+  headers: Readonly<Record<string, string | undefined>>,
+  authority: ProviderWorkerBootstrapAuthorityShape,
+) {
+  if (headers.origin !== undefined) {
+    return Effect.fail(
+      new ProviderWorkerTransportError({
+        operation: "upgrade.origin",
+        detail: "Browser-origin provider worker connections are forbidden.",
+      }),
+    );
+  }
+  const match = /^Bearer ([^\s]+)$/iu.exec(headers.authorization ?? "");
+  if (!match?.[1]) {
+    return Effect.fail(
+      new ProviderWorkerTransportError({
+        operation: "upgrade.auth",
+        detail: "Provider worker authorization is required.",
+      }),
+    );
+  }
+  return authority.authorize(match[1]).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ProviderWorkerTransportError({
+          operation: "upgrade.auth",
+          detail: "Provider worker authorization failed.",
+          cause,
+        }),
+    ),
+  );
 }
 
 export const makeProviderWorkerSocket = Effect.fn(function* (
@@ -46,9 +82,20 @@ export const providerWorkerRouteLayer = Layer.effectDiscard(
       PROVIDER_WORKER_WEBSOCKET_PATH,
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const authenticatedFence = yield* authenticateProviderWorkerUpgrade(
+          request.headers,
+          authority,
+        ).pipe(Effect.option);
+        if (authenticatedFence._tag === "None") {
+          return HttpServerResponse.empty({ status: 401 });
+        }
         const effectSocket = yield* request.upgrade;
         const socket = yield* makeProviderWorkerSocket(effectSocket);
-        yield* runProviderWorkerConnection({ socket, authority, broker }).pipe(
+        yield* runProviderWorkerConnection({
+          socket,
+          authenticatedFence: authenticatedFence.value,
+          broker,
+        }).pipe(
           Effect.catch((error) =>
             Effect.logWarning("provider worker websocket closed", {
               operation: error.operation,

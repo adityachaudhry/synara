@@ -17,11 +17,6 @@ import {
   ProviderSteerTurnInput,
   ProviderStopSessionInput,
 } from "./provider";
-import {
-  ProviderListCommandsInput,
-  ProviderListModelsInput,
-  ProviderListSkillsInput,
-} from "./providerDiscovery";
 import { ProviderRuntimeEvent } from "./providerRuntime";
 
 export const PROVIDER_WORKER_PROTOCOL_VERSION = 1 as const;
@@ -29,7 +24,6 @@ export const PROVIDER_WORKER_PROTOCOL_VERSION = 1 as const;
 const ProviderWorkerProtocolVersion = Schema.Literal(PROVIDER_WORKER_PROTOCOL_VERSION);
 const ProviderWorkerUuid = Schema.String.check(Schema.isUUID(undefined));
 const ProviderWorkerBoundedString = TrimmedNonEmptyString.check(Schema.isMaxLength(4_096));
-const ProviderWorkerCredential = TrimmedNonEmptyString.check(Schema.isMaxLength(2_048));
 const ProviderWorkerRequestId = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
 
 export const ProviderWorkerMethod = Schema.Literals([
@@ -46,10 +40,6 @@ export const ProviderWorkerMethod = Schema.Literals([
   "thread.rollback",
   "thread.compact",
   "runtime.stopAll",
-  "models.list",
-  "skills.list",
-  "commands.list",
-  "composer.get",
 ]);
 export type ProviderWorkerMethod = typeof ProviderWorkerMethod.Type;
 
@@ -93,17 +83,12 @@ export const ProviderWorkerRequest = Schema.Union([
   request("thread.rollback", RollbackThreadParams),
   request("thread.compact", ProviderCompactThreadInput),
   request("runtime.stopAll", EmptyParams),
-  request("models.list", ProviderListModelsInput),
-  request("skills.list", ProviderListSkillsInput),
-  request("commands.list", ProviderListCommandsInput),
-  request("composer.get", EmptyParams),
 ]);
 export type ProviderWorkerRequest = typeof ProviderWorkerRequest.Type;
 
 export const ProviderWorkerRegister = Schema.Struct({
   ...FenceFields,
   type: Schema.Literal("register"),
-  bootstrapCredential: ProviderWorkerCredential,
   lastAcknowledgedSequence: Schema.optional(NonNegativeInt),
 });
 export type ProviderWorkerRegister = typeof ProviderWorkerRegister.Type;
@@ -167,6 +152,14 @@ export const ProviderWorkerRegistered = Schema.Struct({
 });
 export type ProviderWorkerRegistered = typeof ProviderWorkerRegistered.Type;
 
+export const ProviderWorkerResponseAcknowledged = Schema.Struct({
+  ...FenceFields,
+  type: Schema.Literal("response.ack"),
+  requestId: ProviderWorkerRequestId,
+});
+export type ProviderWorkerResponseAcknowledged =
+  typeof ProviderWorkerResponseAcknowledged.Type;
+
 export const ProviderWorkerClientFrame = Schema.Union([
   ProviderWorkerRegister,
   ProviderWorkerResponse,
@@ -180,5 +173,6 @@ export const ProviderWorkerServerFrame = Schema.Union([
   ProviderWorkerRequest,
   ProviderWorkerHeartbeat,
   ProviderWorkerRetire,
+  ProviderWorkerResponseAcknowledged,
 ]);
 export type ProviderWorkerServerFrame = typeof ProviderWorkerServerFrame.Type;

@@ -60,21 +60,5 @@ export function dispatchProviderWorkerRequest<TError>(
         : unsupported(request.method);
     case "runtime.stopAll":
       return adapter.stopAll();
-    case "models.list":
-      return adapter.listModels
-        ? adapter.listModels(request.params)
-        : unsupported(request.method);
-    case "skills.list":
-      return adapter.listSkills
-        ? adapter.listSkills(request.params)
-        : unsupported(request.method);
-    case "commands.list":
-      return adapter.listCommands
-        ? adapter.listCommands(request.params)
-        : unsupported(request.method);
-    case "composer.get":
-      return adapter.getComposerCapabilities
-        ? adapter.getComposerCapabilities()
-        : unsupported(request.method);
   }
 }

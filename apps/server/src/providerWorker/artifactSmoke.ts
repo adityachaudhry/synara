@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -33,7 +34,11 @@ export async function runProviderWorkerArtifactSmoke(input: {
   const httpServer = createServer();
   const webSocketServer = new WebSocketServer({ noServer: true });
   httpServer.on("upgrade", (request, socket, head) => {
-    if (request.url !== "/internal/provider-worker") {
+    if (
+      request.url !== "/internal/provider-worker" ||
+      request.headers.authorization !== `Bearer ${bootstrapCredential}` ||
+      request.headers.origin !== undefined
+    ) {
       socket.destroy();
       return;
     }
@@ -74,9 +79,12 @@ export async function runProviderWorkerArtifactSmoke(input: {
             frame.sandboxId !== sandboxId ||
             frame.workerId !== workerId ||
             frame.lifecycleGeneration !== lifecycleGeneration ||
-            frame.bootstrapCredential !== bootstrapCredential
+            "bootstrapCredential" in frame
           ) {
             throw new Error("Worker registration did not match its fenced configuration.");
+          }
+          if (existsSync(configPath)) {
+            throw new Error("Worker did not consume its bootstrap credential file before connecting.");
           }
           registered = true;
           client.send(
@@ -155,6 +163,7 @@ export async function runProviderWorkerArtifactSmoke(input: {
       exitCode,
       protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
       artifactPath,
+      credentialFileConsumed: !existsSync(configPath),
     } as const;
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : "Artifact smoke failed.";

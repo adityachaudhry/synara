@@ -40,6 +40,7 @@ describe("server release archive", () => {
       retired: true,
       exitCode: 0,
       artifactPath: workerPath,
+      credentialFileConsumed: true,
     });
   }, 30_000);
 });

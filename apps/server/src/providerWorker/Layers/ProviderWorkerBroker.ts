@@ -24,6 +24,7 @@ interface ExpectedWorker {
   readonly ready: Deferred.Deferred<void, ProviderWorkerBrokerError>;
   lastSequence: number;
   threadId?: string;
+  readonly completedRequestIds: Set<string>;
 }
 
 interface ActiveWorker {
@@ -37,6 +38,7 @@ interface ActiveWorker {
 interface PendingRequest {
   readonly workerKey: string;
   readonly deferred: Deferred.Deferred<unknown, ProviderWorkerBrokerError>;
+  readonly frame: ProviderWorkerServerFrame & { readonly type: "request" };
 }
 
 export interface ProviderWorkerBrokerOptions {
@@ -73,6 +75,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           fence,
           ready: yield* Deferred.make<void, ProviderWorkerBrokerError>(),
           lastSequence: 0,
+          completedRequestIds: new Set(),
         });
       });
 
@@ -117,6 +120,12 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
               }),
             ),
           );
+        yield* Effect.forEach(
+          Array.from(pending.values()),
+          (entry) =>
+            entry.workerKey === key ? connection.send(entry.frame) : Effect.void,
+          { discard: true },
+        );
         yield* Deferred.succeed(reservation.ready, undefined);
         return reservation.lastSequence;
       });
@@ -191,7 +200,6 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
         }
         const requestId = randomUUID();
         const deferred = yield* Deferred.make<unknown, ProviderWorkerBrokerError>();
-        pending.set(requestId, { workerKey: key, deferred });
         const frame = {
           protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
           ...fence,
@@ -200,6 +208,10 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           method,
           params,
         } as ProviderWorkerServerFrame;
+        if (frame.type !== "request") {
+          return yield* registrationError("request", fence, "Invalid worker request frame.");
+        }
+        pending.set(requestId, { workerKey: key, deferred, frame });
 
         return yield* worker.connection.send(frame).pipe(
           Effect.andThen(Deferred.await(deferred)),
@@ -261,7 +273,16 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                   return Effect.void;
                 case "response": {
                   const entry = pending.get(frame.requestId);
+                  const reservation = expected.get(key);
                   if (!entry || entry.workerKey !== key) {
+                    if (reservation?.completedRequestIds.has(frame.requestId)) {
+                      return worker.connection.send({
+                        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+                        ...worker.fence,
+                        type: "response.ack",
+                        requestId: frame.requestId,
+                      });
+                    }
                     return Effect.fail(
                       registrationError(
                         "response",
@@ -270,12 +291,27 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
                       ),
                     );
                   }
-                  return frame.ok
+                  reservation?.completedRequestIds.add(frame.requestId);
+                  if ((reservation?.completedRequestIds.size ?? 0) > 2_048) {
+                    const oldest = reservation?.completedRequestIds.values().next().value;
+                    if (oldest !== undefined) reservation?.completedRequestIds.delete(oldest);
+                  }
+                  const complete = frame.ok
                     ? Deferred.succeed(entry.deferred, frame.result).pipe(Effect.asVoid)
                     : Deferred.fail(
                         entry.deferred,
                         registrationError("worker.response", frame, frame.error.message),
                       ).pipe(Effect.asVoid);
+                  return complete.pipe(
+                    Effect.andThen(
+                      worker.connection.send({
+                        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+                        ...worker.fence,
+                        type: "response.ack",
+                        requestId: frame.requestId,
+                      }),
+                    ),
+                  );
                 }
                 case "event": {
                   if (
@@ -327,28 +363,13 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
             }),
           );
 
-    const disconnect: ProviderWorkerBrokerShape["disconnect"] = (fence) =>
+    const disconnect: ProviderWorkerBrokerShape["disconnect"] = (fence, connection) =>
       Effect.gen(function* () {
         const key = providerWorkerFenceKey(fence);
         const worker = active.get(key);
         if (!worker || !sameProviderWorkerFence(worker.fence, fence)) return;
+        if (connection !== undefined && worker.connection !== connection) return;
         active.delete(key);
-        const failure = registrationError(
-          "disconnect",
-          fence,
-          "Provider worker disconnected before the request completed.",
-        );
-        yield* Effect.forEach(
-          Array.from(pending.entries()),
-          ([requestId, entry]) =>
-            entry.workerKey === key
-              ? Deferred.fail(entry.deferred, failure).pipe(
-                  Effect.tap(() => Effect.sync(() => pending.delete(requestId))),
-                  Effect.asVoid,
-                )
-              : Effect.void,
-          { discard: true },
-        );
       });
 
     const retire: ProviderWorkerBrokerShape["retire"] = (fence, reason) =>
@@ -363,8 +384,24 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
             ...(reason === undefined ? {} : { reason }),
           });
           yield* worker.connection.close();
-          yield* disconnect(fence);
+          yield* disconnect(fence, worker.connection);
         }
+        const failure = registrationError(
+          "retire",
+          fence,
+          "Provider worker retired before the request completed.",
+        );
+        yield* Effect.forEach(
+          Array.from(pending.entries()),
+          ([requestId, entry]) =>
+            entry.workerKey === key
+              ? Deferred.fail(entry.deferred, failure).pipe(
+                  Effect.tap(() => Effect.sync(() => pending.delete(requestId))),
+                  Effect.asVoid,
+                )
+              : Effect.void,
+          { discard: true },
+        );
         expected.delete(key);
       });
 

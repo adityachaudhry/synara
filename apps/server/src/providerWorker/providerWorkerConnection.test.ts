@@ -15,12 +15,11 @@ const fence = {
   lifecycleGeneration: "generation-1",
 } as const;
 
-const registerFrame = (credential: string) =>
+const registerFrame = () =>
   JSON.stringify({
     protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
     ...fence,
     type: "register",
-    bootstrapCredential: credential,
   });
 
 const makeSocket = (frames: ReadonlyArray<string>, holdOpen = false) =>
@@ -49,13 +48,12 @@ describe("runProviderWorkerConnection", () => {
       Effect.gen(function* () {
         const authority = yield* makeProviderWorkerBootstrapAuthority();
         const broker = yield* makeProviderWorkerBroker();
-        const credential = yield* authority.issue(fence);
         yield* broker.expectWorker(fence);
-        const fake = yield* makeSocket([registerFrame(credential)]);
+        const fake = yield* makeSocket([registerFrame()]);
 
         yield* runProviderWorkerConnection({
           socket: fake.socket,
-          authority,
+          authenticatedFence: fence,
           broker,
           registrationTimeoutMs: 100,
         });
@@ -76,20 +74,19 @@ describe("runProviderWorkerConnection", () => {
       Effect.gen(function* () {
         const authority = yield* makeProviderWorkerBootstrapAuthority();
         const broker = yield* makeProviderWorkerBroker();
-        const credential = yield* authority.issue(fence);
         yield* broker.expectWorker(fence);
-        const first = yield* makeSocket([registerFrame(credential)]);
-        const second = yield* makeSocket([registerFrame(credential)]);
+        const first = yield* makeSocket([registerFrame()]);
+        const second = yield* makeSocket([registerFrame()]);
 
         yield* runProviderWorkerConnection({
           socket: first.socket,
-          authority,
+          authenticatedFence: fence,
           broker,
           registrationTimeoutMs: 100,
         });
         const secondExit = yield* runProviderWorkerConnection({
           socket: second.socket,
-          authority,
+          authenticatedFence: fence,
           broker,
           registrationTimeoutMs: 100,
         }).pipe(Effect.result);
@@ -104,17 +101,24 @@ describe("runProviderWorkerConnection", () => {
     });
   });
 
-  it("closes a worker that presents the wrong bootstrap credential", async () => {
+  it("closes a worker whose registration does not match the pre-authenticated fence", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const authority = yield* makeProviderWorkerBootstrapAuthority();
         const broker = yield* makeProviderWorkerBroker();
-        yield* authority.issue(fence);
         yield* broker.expectWorker(fence);
-        const fake = yield* makeSocket([registerFrame("wrong-credential")]);
+        const fake = yield* makeSocket([
+          JSON.stringify({
+            protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+            ...fence,
+            workerId: "6905e5b9-64d2-42b3-807d-48dc3d5f9c61",
+            type: "register",
+            lastAcknowledgedSequence: 0,
+          }),
+        ]);
         const exit = yield* runProviderWorkerConnection({
           socket: fake.socket,
-          authority,
+          authenticatedFence: fence,
           broker,
           registrationTimeoutMs: 100,
         }).pipe(Effect.result);
@@ -136,7 +140,7 @@ describe("runProviderWorkerConnection", () => {
         const fake = yield* makeSocket(["not-json"]);
         const exit = yield* runProviderWorkerConnection({
           socket: fake.socket,
-          authority,
+          authenticatedFence: fence,
           broker,
           registrationTimeoutMs: 100,
         }).pipe(Effect.result);
@@ -157,7 +161,7 @@ describe("runProviderWorkerConnection", () => {
         const fake = yield* makeSocket([], true);
         const exit = yield* runProviderWorkerConnection({
           socket: fake.socket,
-          authority,
+          authenticatedFence: fence,
           broker,
           registrationTimeoutMs: 5,
         }).pipe(Effect.result);

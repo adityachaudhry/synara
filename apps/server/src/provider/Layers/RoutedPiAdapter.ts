@@ -194,7 +194,26 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
   const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
     route(
       input.threadId,
-      (binding) => requestDecoded(binding, "turn.send", input, ProviderTurnStartResult),
+      (binding) =>
+        requestDecoded(binding, "turn.send", input, ProviderTurnStartResult).pipe(
+          Effect.catch((cause) =>
+            provisioner.stop(binding).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  remoteByThread.delete(input.threadId);
+                }),
+              ),
+              Effect.mapError((cleanupCause) =>
+                adapterError(
+                  "turn.send.cleanup",
+                  "A remote Pi turn became uncertain and its sandbox could not be destroyed.",
+                  cleanupCause,
+                ),
+              ),
+              Effect.andThen(Effect.fail(cause)),
+            ),
+          ),
+        ),
       local.sendTurn(input),
     );
 
@@ -276,7 +295,14 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
     Effect.all([
       local.listSessions(),
       Effect.forEach(Array.from(remoteByThread.values()), (binding) =>
-        requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession)),
+        requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession)).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("remote Pi session discovery unavailable", {
+              sandboxId: binding.fence.sandboxId,
+              detail: cause.detail,
+            }).pipe(Effect.as([] as const)),
+          ),
+        ),
       ).pipe(Effect.map((groups) => groups.flat())),
     ]).pipe(Effect.map(([localSessions, remoteSessions]) => [...localSessions, ...remoteSessions]));
 

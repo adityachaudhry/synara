@@ -1,3 +1,5 @@
+import { readFileSync, unlinkSync } from "node:fs";
+
 import { Schema } from "effect";
 
 const uuid = Schema.is(Schema.String.check(Schema.isUUID(undefined)));
@@ -41,6 +43,15 @@ export function parseProviderWorkerConfigFile(raw: string): ProviderWorkerConfig
     result[key] = field;
   }
   return result;
+}
+
+export function readAndConsumeProviderWorkerConfigFile(path: string) {
+  const raw = readFileSync(path, "utf8");
+  try {
+    return resolveProviderWorkerConfig(parseProviderWorkerConfigFile(raw));
+  } finally {
+    unlinkSync(path);
+  }
 }
 
 function required(input: ProviderWorkerConfigInput, key: keyof ProviderWorkerConfigInput): string {

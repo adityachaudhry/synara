@@ -1,8 +1,8 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Effect, Layer } from "effect";
 
 import { ProviderWorkerAuthError } from "../Errors";
-import { providerWorkerFenceKey, sameProviderWorkerFence } from "../fence";
+import { providerWorkerFenceKey } from "../fence";
 import {
   ProviderWorkerBootstrapAuthority,
   type ProviderWorkerBootstrapAuthorityShape,
@@ -10,7 +10,6 @@ import {
 
 interface CredentialRecord {
   readonly fence: Parameters<ProviderWorkerBootstrapAuthorityShape["issue"]>[0];
-  readonly digest: Buffer;
 }
 
 const digestCredential = (credential: string) =>
@@ -18,41 +17,39 @@ const digestCredential = (credential: string) =>
 
 export const makeProviderWorkerBootstrapAuthority = () => Effect.sync(() => {
   const credentials = new Map<string, CredentialRecord>();
+  const credentialByFence = new Map<string, string>();
 
   const issue: ProviderWorkerBootstrapAuthorityShape["issue"] = (fence) =>
     Effect.sync(() => {
       const credential = randomBytes(32).toString("base64url");
-      credentials.set(providerWorkerFenceKey(fence), {
-        fence,
-        digest: digestCredential(credential),
-      });
+      const fenceKey = providerWorkerFenceKey(fence);
+      const priorCredential = credentialByFence.get(fenceKey);
+      if (priorCredential) credentials.delete(priorCredential);
+      const credentialKey = digestCredential(credential).toString("hex");
+      credentials.set(credentialKey, { fence });
+      credentialByFence.set(fenceKey, credentialKey);
       return credential;
     });
 
-  const authorize: ProviderWorkerBootstrapAuthorityShape["authorize"] = (
-    fence,
-    credential,
-  ) =>
+  const authorize: ProviderWorkerBootstrapAuthorityShape["authorize"] = (credential) =>
     Effect.gen(function* () {
-      const record = credentials.get(providerWorkerFenceKey(fence));
       const receivedDigest = digestCredential(credential);
-      if (
-        !record ||
-        !sameProviderWorkerFence(record.fence, fence) ||
-        record.digest.byteLength !== receivedDigest.byteLength ||
-        !timingSafeEqual(record.digest, receivedDigest)
-      ) {
+      const record = credentials.get(receivedDigest.toString("hex"));
+      if (!record) {
         return yield* new ProviderWorkerAuthError({
           operation: "authorize",
           detail: "Provider worker bootstrap credential is invalid or revoked.",
-          sandboxId: fence.sandboxId,
         });
       }
+      return record.fence;
     });
 
   const revoke: ProviderWorkerBootstrapAuthorityShape["revoke"] = (fence) =>
     Effect.sync(() => {
-      credentials.delete(providerWorkerFenceKey(fence));
+      const fenceKey = providerWorkerFenceKey(fence);
+      const credentialKey = credentialByFence.get(fenceKey);
+      if (credentialKey) credentials.delete(credentialKey);
+      credentialByFence.delete(fenceKey);
     });
 
   return { issue, authorize, revoke } satisfies ProviderWorkerBootstrapAuthorityShape;

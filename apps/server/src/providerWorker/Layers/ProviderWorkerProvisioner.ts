@@ -13,8 +13,10 @@ import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBoot
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import {
+  makeRepositoryCredentialConfig,
   makeRepositoryCheckoutPlan,
   parseRepositoryCheckoutResult,
+  REPOSITORY_CREDENTIAL_CONFIG_PATH,
 } from "../repositoryCheckout";
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
@@ -35,6 +37,7 @@ export interface ProviderWorkerProvisionerOptions {
   readonly controlUrl: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly repositoryAuthorization?: string;
+  readonly networkIsolation?: "ISOLATED" | "PRIVATE";
 }
 
 function provisionError(operation: string, detail: string, cause: unknown, sandboxId?: string) {
@@ -78,6 +81,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         Parameters<ProviderWorkerProvisionerShape["start"]>[0]["repositoryBinding"]
       >;
       readonly checkoutCommand?: string;
+      readonly repositoryCredential?: string;
     }) {
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
@@ -97,12 +101,48 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const repositoryCheckout =
           input.repositoryBinding === undefined || input.checkoutCommand === undefined
             ? undefined
-            : yield* workspaceRuntime
-                .exec(input.workspace, {
-                  command: input.checkoutCommand,
-                  timeoutSeconds: 120,
-                })
-                .pipe(
+            : yield* Effect.gen(function* () {
+                if (input.repositoryCredential !== undefined) {
+                  yield* workspaceRuntime.writeFile(input.workspace, {
+                    path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+                    data: input.repositoryCredential,
+                    mode: 0o600,
+                  });
+                }
+                const cleanupCredential =
+                  input.repositoryCredential === undefined
+                    ? Effect.void
+                    : workspaceRuntime
+                        .exec(input.workspace, {
+                          command: `rm -f '${REPOSITORY_CREDENTIAL_CONFIG_PATH}'`,
+                          timeoutSeconds: 10,
+                        })
+                        .pipe(
+                          Effect.flatMap((cleanup) =>
+                            cleanup.exitCode === 0 && !cleanup.timedOut
+                              ? Effect.void
+                              : Effect.fail(
+                                  provisionError(
+                                    "checkout.cleanup",
+                                    "Repository credential erasure could not be confirmed.",
+                                    new Error(cleanup.stderr || cleanup.stdout || "cleanup failed"),
+                                    input.workspace.runtimeId,
+                                  ),
+                                ),
+                          ),
+                        );
+                return yield* workspaceRuntime
+                  .exec(input.workspace, {
+                    command: input.checkoutCommand,
+                    timeoutSeconds: 120,
+                  })
+                  .pipe(
+                    Effect.matchEffect({
+                      onFailure: (cause) => cleanupCredential.pipe(Effect.andThen(Effect.fail(cause))),
+                      onSuccess: (result) => cleanupCredential.pipe(Effect.as(result)),
+                    }),
+                  );
+              }).pipe(
                   Effect.flatMap((result) =>
                     result.exitCode === 0 && !result.timedOut
                       ? Effect.try({
@@ -218,7 +258,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ? makeRepositoryCheckoutPlan({
               binding: input.repositoryBinding,
               ...(options.repositoryAuthorization
-                ? { authorization: options.repositoryAuthorization }
+                ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
                 : {}),
             })
           : undefined;
@@ -226,8 +266,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           lifecycleGeneration: input.lifecycleGeneration,
           environment: {
             ...(options.environment ?? {}),
-            ...(checkout?.environment ?? {}),
           },
+          networkIsolation: options.networkIsolation ?? "ISOLATED",
         });
         return yield* provisionConnectedWorker({
           workspace,
@@ -239,6 +279,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ? {}
             : { repositoryBinding: input.repositoryBinding }),
           ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
+          ...(input.repositoryBinding === undefined || options.repositoryAuthorization === undefined
+            ? {}
+            : {
+                repositoryCredential: makeRepositoryCredentialConfig(
+                  input.repositoryBinding,
+                  options.repositoryAuthorization,
+                ),
+              }),
         }).pipe(
           Effect.onError(() => workspaceRuntime.destroy(workspace).pipe(Effect.catch(() => Effect.void))),
         );
@@ -275,7 +323,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ? makeRepositoryCheckoutPlan({
               binding: repositoryBinding,
               ...(options.repositoryAuthorization
-                ? { authorization: options.repositoryAuthorization }
+                ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
                 : {}),
             })
           : undefined;
@@ -283,8 +331,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           lifecycleGeneration: input.lifecycleGeneration,
           environment: {
             ...(options.environment ?? {}),
-            ...(checkout?.environment ?? {}),
           },
+          networkIsolation: options.networkIsolation ?? "ISOLATED",
         });
         return yield* provisionConnectedWorker({
           workspace: replacementWorkspace,
@@ -294,6 +342,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           homeDir: binding.homeDir,
           ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
           ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
+          ...(repositoryBinding === undefined || options.repositoryAuthorization === undefined
+            ? {}
+            : {
+                repositoryCredential: makeRepositoryCredentialConfig(
+                  repositoryBinding,
+                  options.repositoryAuthorization,
+                ),
+              }),
         }).pipe(
           Effect.onError(() =>
             workspaceRuntime.destroy(replacementWorkspace).pipe(Effect.catch(() => Effect.void)),
@@ -442,6 +498,9 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
         ...(options.repositoryAuthorization === undefined
           ? {}
           : { repositoryAuthorization: options.repositoryAuthorization }),
+        ...(options.networkIsolation === undefined
+          ? {}
+          : { networkIsolation: options.networkIsolation }),
       });
     }),
   );

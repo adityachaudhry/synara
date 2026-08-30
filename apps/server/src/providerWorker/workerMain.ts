@@ -1,8 +1,8 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { existsSync, readFileSync } from "node:fs";
 import { Duration, Effect, FileSystem, Layer, Stream } from "effect";
 import { Socket } from "effect/unstable/socket";
+import WebSocket from "ws";
 
 import { ServerConfig, type ServerConfigShape } from "../config";
 import { makePiAdapterLive } from "../provider/Layers/PiAdapter";
@@ -11,30 +11,11 @@ import { ProviderWorkerTransportError } from "./Errors";
 import type { ProviderWorkerSocket } from "./providerWorkerConnection";
 import { makeProviderWorkerClientSession } from "./workerClientSession";
 import {
-  parseProviderWorkerConfigFile,
   PROVIDER_WORKER_CONFIG_PATH,
-  resolveProviderWorkerConfig,
+  readAndConsumeProviderWorkerConfigFile,
 } from "./workerConfig";
 import { makeProviderWorkerOutbox } from "./workerOutbox";
-
-function configFromEnvironment() {
-  const environmentConfig = {
-    controlUrl: process.env.SYNARA_PROVIDER_WORKER_CONTROL_URL,
-    bootstrapCredential: process.env.SYNARA_PROVIDER_WORKER_BOOTSTRAP_CREDENTIAL,
-    sandboxId: process.env.SYNARA_PROVIDER_WORKER_SANDBOX_ID,
-    workerId: process.env.SYNARA_PROVIDER_WORKER_ID,
-    lifecycleGeneration: process.env.SYNARA_PROVIDER_WORKER_LIFECYCLE_GENERATION,
-    cwd: process.env.SYNARA_PROVIDER_WORKER_CWD,
-    homeDir: process.env.SYNARA_PROVIDER_WORKER_HOME_DIR,
-  };
-  const configPath =
-    process.env.SYNARA_PROVIDER_WORKER_CONFIG_PATH?.trim() || PROVIDER_WORKER_CONFIG_PATH;
-  return resolveProviderWorkerConfig(
-    existsSync(configPath)
-      ? parseProviderWorkerConfigFile(readFileSync(configPath, "utf8"))
-      : environmentConfig,
-  );
-}
+import { makeProviderWorkerRequestLedger } from "./workerRequestLedger";
 
 function makeWorkerServerConfig(
   config: ReturnType<typeof resolveProviderWorkerConfig>,
@@ -122,7 +103,6 @@ const makeClientSocket = Effect.fn(function* (
 });
 
 const main = Effect.gen(function* () {
-  const config = configFromEnvironment();
   yield* Effect.logInfo("provider worker booting", config.safeDescription);
   const fileSystem = yield* FileSystem.FileSystem;
   yield* fileSystem.makeDirectory(config.homeDir, { recursive: true });
@@ -135,6 +115,7 @@ const main = Effect.gen(function* () {
     lifecycleGeneration: config.lifecycleGeneration,
   };
   const outbox = makeProviderWorkerOutbox(fence);
+  const requestLedger = makeProviderWorkerRequestLedger({ fence, adapter });
   let publishEvent = (event: Parameters<typeof outbox.push>[0]) =>
     Effect.try({
       try: () => {
@@ -156,9 +137,9 @@ const main = Effect.gen(function* () {
         const socket = yield* makeClientSocket(config.controlUrl);
         const session = makeProviderWorkerClientSession({
           fence,
-          bootstrapCredential: config.bootstrapCredential,
           adapter,
           outbox,
+          requestLedger,
           socket,
         });
         publishEvent = session.publishEvent;
@@ -183,17 +164,30 @@ const main = Effect.gen(function* () {
   }
 });
 
-const config = configFromEnvironment();
+const configPath =
+  process.env.SYNARA_PROVIDER_WORKER_CONFIG_PATH?.trim() || PROVIDER_WORKER_CONFIG_PATH;
+const config = readAndConsumeProviderWorkerConfigFile(configPath);
 const workerConfigLayer = Layer.succeed(ServerConfig, makeWorkerServerConfig(config));
 const piLayer = makePiAdapterLive().pipe(
   Layer.provide(workerConfigLayer),
   Layer.provide(NodeServices.layer),
 );
+const workerWebSocketLayer = Layer.succeed(
+  Socket.WebSocketConstructor,
+  (url, protocols) =>
+    (protocols === undefined
+      ? new WebSocket(url, {
+          headers: { Authorization: `Bearer ${config.bootstrapCredential}` },
+        })
+      : new WebSocket(url, protocols, {
+          headers: { Authorization: `Bearer ${config.bootstrapCredential}` },
+        })) as unknown as globalThis.WebSocket,
+);
 
 NodeRuntime.runMain(
   main.pipe(
     Effect.provide(piLayer),
-    Effect.provide(Socket.layerWebSocketConstructorGlobal),
+    Effect.provide(workerWebSocketLayer),
     Effect.provide(NodeServices.layer),
     Effect.scoped,
   ),

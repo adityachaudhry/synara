@@ -6,9 +6,8 @@ import type { ProviderWorkerFence } from "../fence";
 export interface ProviderWorkerBootstrapAuthorityShape {
   readonly issue: (fence: ProviderWorkerFence) => Effect.Effect<string>;
   readonly authorize: (
-    fence: ProviderWorkerFence,
     credential: string,
-  ) => Effect.Effect<void, ProviderWorkerAuthError>;
+  ) => Effect.Effect<ProviderWorkerFence, ProviderWorkerAuthError>;
   readonly revoke: (fence: ProviderWorkerFence) => Effect.Effect<void>;
 }
 

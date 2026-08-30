@@ -5,7 +5,6 @@ import { WorkspaceRuntime, type WorkspaceRuntimeBinding } from "../../workspaceR
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
-import { REPOSITORY_AUTHORIZATION_ENV_KEY } from "../repositoryCheckout";
 import { makeProviderWorkerProvisioner } from "./ProviderWorkerProvisioner";
 
 const workspaceBinding: WorkspaceRuntimeBinding = {
@@ -17,15 +16,20 @@ const workspaceBinding: WorkspaceRuntimeBinding = {
 };
 const threadId = "11111111-1111-4111-8111-111111111111" as never;
 
-function makeHarness(options?: { readonly failConnection?: boolean }) {
+function makeHarness(options?: {
+  readonly failConnection?: boolean;
+}) {
   const calls: string[] = [];
+  const files = new Map<string, string>();
   const workspace = {
     create: vi.fn(() => Effect.succeed(workspaceBinding)),
     connect: vi.fn(() => Effect.succeed(workspaceBinding)),
     exec: vi.fn(),
-    writeFile: vi.fn((_binding, input: { readonly path: string }) =>
-      Effect.sync(() => calls.push(`write:${input.path}`)),
-    ),
+    writeFile: vi.fn((_binding, input: { readonly path: string; readonly data: string | Uint8Array }) =>
+      Effect.sync(() => {
+        calls.push(`write:${input.path}`);
+        files.set(input.path, String(input.data));
+      })),
     startDurableProcess: vi.fn(() =>
       Effect.sync(() => {
         calls.push("start");
@@ -61,14 +65,25 @@ function makeHarness(options?: { readonly failConnection?: boolean }) {
     Layer.succeed(ProviderWorkerBroker, broker as never),
     Layer.succeed(ProviderWorkerBootstrapAuthority, authority as never),
   );
-  return { calls, workspace, broker, authority, layer };
+  return { calls, files, workspace, broker, authority, layer };
 }
 
 describe("ProviderWorkerProvisioner", () => {
   it("checks out only the admitted repository binding before starting the worker", async () => {
     const harness = makeHarness();
-    harness.workspace.exec.mockImplementation(() =>
+    harness.workspace.exec.mockImplementation((_binding, input) =>
       Effect.sync(() => {
+        if (input.command.startsWith("rm -f ")) {
+          harness.calls.push("checkout-cleanup");
+          harness.files.delete("/tmp/synara-repository-credential.gitconfig");
+          return {
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            truncated: false,
+          };
+        }
         harness.calls.push("checkout");
         return {
           exitCode: 0,
@@ -102,13 +117,22 @@ describe("ProviderWorkerProvisioner", () => {
 
     expect(harness.workspace.create).toHaveBeenCalledWith({
       lifecycleGeneration: "generation-1",
-      environment: {
-        [REPOSITORY_AUTHORIZATION_ENV_KEY]: "token repository-secret",
-      },
+      environment: {},
+      networkIsolation: "ISOLATED",
     });
     const checkoutCommand = harness.workspace.exec.mock.calls[0]?.[1]?.command;
-    expect(checkoutCommand).toContain(`$${REPOSITORY_AUTHORIZATION_ENV_KEY}`);
+    expect(checkoutCommand).not.toContain("SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION");
     expect(checkoutCommand).not.toContain("repository-secret");
+    const credentialWrite = harness.workspace.writeFile.mock.calls.find(([, input]) =>
+      String(input.path).includes("repository-credential"),
+    );
+    expect(String(credentialWrite?.[1]?.data)).toContain("repository-secret");
+    const cleanupIndex = harness.calls.findIndex((call) => call === "checkout-cleanup");
+    const workerStartIndex = harness.calls.findIndex((call) => call === "start");
+    expect(cleanupIndex).toBeGreaterThan(-1);
+    expect(workerStartIndex).toBeGreaterThan(cleanupIndex);
+    expect([...harness.files.values()].join("\n")).not.toContain("repository-secret");
+    expect(harness.files.has("/tmp/synara-repository-credential.gitconfig")).toBe(false);
     expect(binding).toMatchObject({
       cwd: "/workspace/repository/companies/acme",
       repositoryCheckout: {
@@ -119,12 +143,60 @@ describe("ProviderWorkerProvisioner", () => {
     });
     expect(harness.calls).toEqual([
       "expect",
+      "write:/tmp/synara-repository-credential.gitconfig",
       "checkout",
+      "checkout-cleanup",
       "write:/opt/synara/provider-worker.mjs",
       "write:/opt/synara/provider-worker.json",
       "start",
       "connected",
     ]);
+  });
+
+  it("does not start Pi when checkout credential erasure cannot be confirmed", async () => {
+    const harness = makeHarness();
+    harness.workspace.exec.mockImplementation((_binding, input) => {
+      if (input.command.startsWith("rm -f ")) {
+        harness.calls.push("checkout-cleanup");
+        return Effect.fail(new Error("cleanup failed"));
+      }
+      harness.calls.push("checkout");
+      return Effect.succeed({
+        exitCode: 0,
+        stdout:
+          "__SYNARA_CHECKOUT_MODE__=partial\n__SYNARA_CHECKOUT_COMMIT__=0123456789abcdef0123456789abcdef01234567\n",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+      });
+    });
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+        repositoryAuthorization: "token repository-secret",
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    await expect(
+      Effect.runPromise(
+        provisioner.start({
+          threadId,
+          lifecycleGeneration: "generation-1",
+          repositoryBinding: {
+            kind: "git-subdirectory",
+            origin: "https://git.example.com",
+            owner: "acme",
+            repository: "portfolio",
+            ref: "main",
+            path: "companies/acme",
+          },
+        }),
+      ),
+    ).rejects.toBeDefined();
+    expect(harness.calls).toContain("checkout-cleanup");
+    expect(harness.calls).not.toContain("start");
+    expect(harness.calls.at(-1)).toBe("destroy");
   });
 
   it("uploads an atomic worker and private config before waiting for its fenced connection", async () => {

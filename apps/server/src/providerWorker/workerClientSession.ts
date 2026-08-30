@@ -3,7 +3,6 @@ import {
   ProviderWorkerServerFrame,
   type ProviderRuntimeEvent,
   type ProviderWorkerRegister,
-  type ProviderWorkerResponse,
 } from "@synara/contracts";
 import { Effect, Schema, Semaphore } from "effect";
 
@@ -12,8 +11,8 @@ import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
 import { ProviderWorkerTransportError } from "./Errors";
 import { sameProviderWorkerFence, type ProviderWorkerFence } from "./fence";
 import type { ProviderWorkerSocket } from "./providerWorkerConnection";
-import { dispatchProviderWorkerRequest } from "./workerDispatch";
 import type { ProviderWorkerOutbox } from "./workerOutbox";
+import type { ProviderWorkerRequestLedger } from "./workerRequestLedger";
 
 const clientError = (operation: string, detail: string, cause?: unknown) =>
   new ProviderWorkerTransportError({
@@ -37,9 +36,9 @@ const decodeServerFrame = (raw: string | Uint8Array) =>
 
 export function makeProviderWorkerClientSession<TError>(input: {
   readonly fence: ProviderWorkerFence;
-  readonly bootstrapCredential: string;
   readonly adapter: ProviderAdapterShape<TError>;
   readonly outbox: ProviderWorkerOutbox;
+  readonly requestLedger: ProviderWorkerRequestLedger;
   readonly socket: ProviderWorkerSocket;
 }) {
   let registered = false;
@@ -67,24 +66,15 @@ export function makeProviderWorkerClientSession<TError>(input: {
       method: frame.method,
       requestId: frame.requestId,
     }).pipe(
-      Effect.andThen(dispatchProviderWorkerRequest(input.adapter, frame)),
+      Effect.andThen(input.requestLedger.execute(frame)),
       Effect.matchEffect({
-        onSuccess: (result) =>
+        onSuccess: (response) =>
           Effect.logInfo("provider worker request completed", {
             method: frame.method,
             requestId: frame.requestId,
-            ok: true,
+            ok: response.ok,
           }).pipe(
-            Effect.andThen(
-              send({
-                protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
-                ...input.fence,
-                type: "response",
-                requestId: frame.requestId,
-                ok: true,
-                result: result ?? null,
-              } satisfies ProviderWorkerResponse),
-            ),
+            Effect.andThen(send(response)),
           ),
         onFailure: () =>
           Effect.logWarning("provider worker request completed", {
@@ -93,18 +83,9 @@ export function makeProviderWorkerClientSession<TError>(input: {
             ok: false,
           }).pipe(
             Effect.andThen(
-              send({
-                protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
-                ...input.fence,
-                type: "response",
-                requestId: frame.requestId,
-                ok: false,
-                error: {
-                  code: "provider_request_failed",
-                  message: `Provider worker request '${frame.method}' failed.`,
-                  retryable: false,
-                },
-              } satisfies ProviderWorkerResponse),
+              Effect.fail(
+                clientError("request.ledger", "Provider worker request ledger failed."),
+              ),
             ),
           ),
       }),
@@ -135,6 +116,11 @@ export function makeProviderWorkerClientSession<TError>(input: {
                 Effect.andThen(
                   Effect.forEach(input.outbox.pending(), sendUnlocked, { discard: true }),
                 ),
+                Effect.andThen(
+                  Effect.forEach(input.requestLedger.pending(), sendUnlocked, {
+                    discard: true,
+                  }),
+                ),
               ),
             );
             return;
@@ -160,6 +146,9 @@ export function makeProviderWorkerClientSession<TError>(input: {
               );
               yield* input.socket.close(1000, "Provider worker retired");
               return;
+            case "response.ack":
+              input.requestLedger.acknowledge(frame.requestId);
+              return;
             case "request":
               yield* handleRequest(frame);
               return;
@@ -178,7 +167,6 @@ export function makeProviderWorkerClientSession<TError>(input: {
     protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
     ...input.fence,
     type: "register",
-    bootstrapCredential: input.bootstrapCredential,
     lastAcknowledgedSequence: input.outbox.lastAcknowledgedSequence(),
   };
 

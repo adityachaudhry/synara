@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { RailwaySandboxNotFoundError } from "../Errors";
@@ -58,6 +58,7 @@ describe("RailwaySandboxClient", () => {
 
     const record = await Effect.runPromise(
       client.create({
+        operationId: "11111111-1111-4111-8111-111111111111",
         networkIsolation: "PRIVATE",
         idleTimeoutMinutes: 30,
         region: "us-east4-eqdc4a",
@@ -72,13 +73,141 @@ describe("RailwaySandboxClient", () => {
       networkIsolation: "PRIVATE",
       idleTimeoutMinutes: 30,
       region: "us-east4-eqdc4a",
-      env: { WORKER_TOKEN: "scoped" },
+      env: {
+        WORKER_TOKEN: "scoped",
+        SYNARA_WORKSPACE_CREATE_OPERATION_ID: "11111111-1111-4111-8111-111111111111",
+      },
     });
     expect(record).toEqual({
       id: "sandbox-1",
       status: "RUNNING",
       region: "us-east4-eqdc4a",
     });
+  });
+
+  it("reconciles and destroys a tagged sandbox when create completes remotely but its response is lost", async () => {
+    const operationId = "11111111-1111-4111-8111-111111111111";
+    let createdEnvironment: Record<string, string> | undefined;
+    let remotelyCreated = false;
+    let destroyed = false;
+    const sandbox = makeSdkSandbox({
+      exec: (command) =>
+        Promise.resolve({
+          exitCode:
+            typeof command === "string" &&
+            command.includes(operationId) &&
+            createdEnvironment?.SYNARA_WORKSPACE_CREATE_OPERATION_ID === operationId
+              ? 0
+              : 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          truncated: false,
+        }) as never,
+      destroy: async () => {
+        destroyed = true;
+      },
+    });
+    const sdk: RailwaySdkFacade = {
+      create: async (input) => {
+        createdEnvironment = input.env;
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        remotelyCreated = true;
+        throw new Error("create response lost");
+      },
+      connect: async () => sandbox,
+      list: async () =>
+        remotelyCreated
+          ? ([
+              {
+                id: sandbox.id,
+                status: sandbox.status,
+                region: sandbox.region,
+              },
+            ] as never)
+          : [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk, {
+      createReconcileAttempts: 3,
+      createReconcileDelayMs: 1,
+    });
+
+    await expect(
+      Effect.runPromise(
+        client.create({
+          operationId,
+          networkIsolation: "ISOLATED",
+          idleTimeoutMinutes: 30,
+          environment: {},
+        }),
+      ),
+    ).rejects.toBeDefined();
+
+    expect(createdEnvironment).toEqual({
+      SYNARA_WORKSPACE_CREATE_OPERATION_ID: operationId,
+    });
+    expect(destroyed).toBe(true);
+  });
+
+  it("destroys a delayed tagged sandbox when create is interrupted before returning a binding", async () => {
+    const operationId = "22222222-2222-4222-8222-222222222222";
+    let createdEnvironment: Record<string, string> | undefined;
+    let remotelyCreated = false;
+    let destroyed = false;
+    const sandbox = makeSdkSandbox({
+      exec: (command) =>
+        Promise.resolve({
+          exitCode:
+            typeof command === "string" &&
+            command.includes(operationId) &&
+            createdEnvironment?.SYNARA_WORKSPACE_CREATE_OPERATION_ID === operationId
+              ? 0
+              : 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          truncated: false,
+        }) as never,
+      destroy: async () => {
+        destroyed = true;
+      },
+    });
+    const sdk: RailwaySdkFacade = {
+      create: async (input) => {
+        createdEnvironment = input.env;
+        await new Promise<void>((resolve) => setTimeout(resolve, 15));
+        remotelyCreated = true;
+        return sandbox;
+      },
+      connect: async () => sandbox,
+      list: async () =>
+        remotelyCreated
+          ? ([{ id: sandbox.id, status: sandbox.status, region: sandbox.region }] as never)
+          : [],
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk, {
+      createReconcileAttempts: 30,
+      createReconcileDelayMs: 1,
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* client
+          .create({
+            operationId,
+            networkIsolation: "ISOLATED",
+            idleTimeoutMinutes: 30,
+            environment: {},
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.sleep(1);
+        yield* Fiber.interrupt(fiber);
+      }),
+    );
+
+    expect(destroyed).toBe(true);
   });
 
   it("preserves the complete exec result", async () => {
@@ -217,6 +346,7 @@ describe("RailwaySandboxClient", () => {
     const client = makeRailwaySandboxClient(config, sdk);
     await Effect.runPromise(
       client.create({
+        operationId: "33333333-3333-4333-8333-333333333333",
         networkIsolation: "PRIVATE",
         idleTimeoutMinutes: 30,
         environment: {},
@@ -325,6 +455,7 @@ describe("RailwaySandboxClient", () => {
     const client = makeRailwaySandboxClient(config, sdk);
     await Effect.runPromise(
       client.create({
+        operationId: "44444444-4444-4444-8444-444444444444",
         networkIsolation: "PRIVATE",
         idleTimeoutMinutes: 30,
         environment: {},

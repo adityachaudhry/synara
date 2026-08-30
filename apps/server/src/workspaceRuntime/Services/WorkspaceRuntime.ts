@@ -26,6 +26,7 @@ export interface WorkspaceRuntimeInventoryRecord {
 export interface WorkspaceRuntimeCreateInput {
   readonly lifecycleGeneration: string;
   readonly environment: Readonly<Record<string, string>>;
+  readonly networkIsolation?: "ISOLATED" | "PRIVATE";
 }
 
 export interface WorkspaceExecInput {

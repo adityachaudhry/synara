@@ -9,6 +9,8 @@ import { ServeError } from "effect/unstable/http/HttpServerError";
 import { WebSocketServer } from "ws";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_PROVIDER_WORKER_MESSAGE_BYTES = 256 * 1024;
+const PROVIDER_WORKER_UPGRADE_PATH = "/internal/provider-worker";
 
 /**
  * Node's HTTP parser owns the socket error listener until an upgrade starts.
@@ -115,6 +117,12 @@ export function upgradePathAllowsCompression(requestUrl: string | undefined): bo
   return normalizeUpgradePath(requestUrl) === COMPRESSED_UPGRADE_PATH;
 }
 
+export function upgradePathMaxPayload(requestUrl: string | undefined): number {
+  return normalizeUpgradePath(requestUrl) === PROVIDER_WORKER_UPGRADE_PATH
+    ? MAX_PROVIDER_WORKER_MESSAGE_BYTES
+    : MAX_WEBSOCKET_MESSAGE_BYTES;
+}
+
 /**
  * Owns the Node HTTP/WebSocket transport so Synara, rather than the platform
  * adapter's 100 MiB default, controls admission before a message is decoded.
@@ -155,13 +163,16 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   });
 
   const address = server.address()!;
-  const makeBoundedWebSocketServer = (perMessageDeflate: boolean) =>
+  const makeBoundedWebSocketServer = (
+    perMessageDeflate: boolean,
+    maxPayload = MAX_WEBSOCKET_MESSAGE_BYTES,
+  ) =>
     Effect.acquireRelease(
       Effect.sync(
         () =>
           new WebSocketServer({
             noServer: true,
-            maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES,
+            maxPayload,
             perMessageDeflate: perMessageDeflate ? PER_MESSAGE_DEFLATE_OPTIONS : false,
           }),
       ),
@@ -175,6 +186,10 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   // on authenticated feature-socket paths (see PER_MESSAGE_DEFLATE_OPTIONS).
   const featureWebSocketServer = yield* makeBoundedWebSocketServer(true);
   const bootstrapWebSocketServer = yield* makeBoundedWebSocketServer(false);
+  const providerWorkerWebSocketServer = yield* makeBoundedWebSocketServer(
+    false,
+    MAX_PROVIDER_WORKER_MESSAGE_BYTES,
+  );
 
   return HttpServer.make({
     address:
@@ -209,14 +224,25 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
           scope: serveScope,
         },
       );
+      const providerWorkerUpgradeHandler = yield* NodeHttpServer.makeUpgradeHandler(
+        Effect.succeed(providerWorkerWebSocketServer),
+        httpApp,
+        {
+          middleware: middleware as any,
+          scope: serveScope,
+        },
+      );
       const upgradeHandler = (
         nodeRequest: http.IncomingMessage,
         socket: Parameters<typeof featureUpgradeHandler>[1],
         head: Parameters<typeof featureUpgradeHandler>[2],
       ) => {
-        const dispatch = upgradePathAllowsCompression(nodeRequest.url)
-          ? featureUpgradeHandler
-          : bootstrapUpgradeHandler;
+        const dispatch =
+          upgradePathMaxPayload(nodeRequest.url) === MAX_PROVIDER_WORKER_MESSAGE_BYTES
+            ? providerWorkerUpgradeHandler
+            : upgradePathAllowsCompression(nodeRequest.url)
+              ? featureUpgradeHandler
+              : bootstrapUpgradeHandler;
         dispatch(nodeRequest, socket, head);
       };
 

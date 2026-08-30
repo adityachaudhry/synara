@@ -1,6 +1,14 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { parseProviderWorkerConfigFile, resolveProviderWorkerConfig } from "./workerConfig";
+import {
+  parseProviderWorkerConfigFile,
+  readAndConsumeProviderWorkerConfigFile,
+  resolveProviderWorkerConfig,
+} from "./workerConfig";
 
 const valid = {
   controlUrl: "http://synara.railway.internal:3773/internal/provider-worker",
@@ -44,5 +52,25 @@ describe("resolveProviderWorkerConfig", () => {
     expect(() => parseProviderWorkerConfigFile('{"controlUrl":7}')).toThrow(
       /configuration file/,
     );
+  });
+
+  it("deletes the bootstrap file immediately after reading it into worker memory", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "synara-worker-config-"));
+    const configPath = path.join(directory, "worker.json");
+    writeFileSync(configPath, JSON.stringify(valid), { mode: 0o600 });
+
+    const config = readAndConsumeProviderWorkerConfigFile(configPath);
+
+    expect(config.bootstrapCredential).toBe("bootstrap-secret");
+    expect(() => readFileSync(configPath, "utf8")).toThrow();
+  });
+
+  it("deletes malformed bootstrap material before reporting the parse failure", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "synara-worker-config-"));
+    const configPath = path.join(directory, "worker.json");
+    writeFileSync(configPath, '{"bootstrapCredential":"secret",', { mode: 0o600 });
+
+    expect(() => readAndConsumeProviderWorkerConfigFile(configPath)).toThrow(/valid JSON/);
+    expect(() => readFileSync(configPath, "utf8")).toThrow();
   });
 });
