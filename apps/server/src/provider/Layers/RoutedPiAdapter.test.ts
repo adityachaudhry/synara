@@ -306,6 +306,63 @@ describe("RoutedPiAdapter", () => {
     }),
   );
 
+  effectIt.effect("returns success when launch wins after the timeout decision", () => {
+    const completeLaunch = Deferred.makeUnsafe<void>();
+    return Effect.gen(function* () {
+      const harness = makeHarness();
+      const capacity = new SandboxCapacity(1);
+      let lease: SandboxCapacityLease | undefined;
+      harness.provisioner.start.mockImplementation((input: ProviderWorkerProvisionInput) =>
+        Effect.tryPromise({
+          try: (signal) =>
+            capacity.acquire({
+              key: `${input.threadId}:${input.lifecycleGeneration}`,
+              threadId: input.threadId,
+              lifecycleGeneration: input.lifecycleGeneration,
+              signal,
+            }),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.tap((acquired) =>
+            Effect.sync(() => {
+              lease = acquired;
+              input.onCapacityAdmitted?.();
+            }),
+          ),
+          Effect.andThen(
+            Effect.withFiber((fiber) =>
+              Effect.sync(() => {
+                const launchFiber = fiber as typeof fiber & {
+                  interruptUnsafe: () => void;
+                };
+                launchFiber.interruptUnsafe = () => {
+                  Effect.runSync(Deferred.succeed(completeLaunch, undefined));
+                };
+              }),
+            ),
+          ),
+          Effect.andThen(Deferred.await(completeLaunch)),
+          Effect.as(runtimeBinding),
+        ) as never,
+      );
+      const adapter = yield* makeRoutedPiAdapterWithCapacity(capacity).pipe(
+        Effect.provide(harness.layer),
+      );
+      const resultFiber = yield* adapter
+        .startSession(startInput({ repositoryBound: true }))
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("61 seconds");
+      expect(yield* Fiber.join(resultFiber)).toMatchObject({ _tag: "Success" });
+      expect(harness.provisioner.stop).not.toHaveBeenCalled();
+      expect(harness.upsert).toHaveBeenCalledOnce();
+      expect(harness.provisioner.adopt).toHaveBeenCalledOnce();
+      expect(capacity.snapshot().activeKeys).toEqual([`${threadId}:generation-1`]);
+      lease?.release();
+    });
+  });
+
   effectIt.effect("surfaces failed authoritative teardown and retains uncertain ownership", () =>
     Effect.gen(function* () {
       const harness = makeHarness();

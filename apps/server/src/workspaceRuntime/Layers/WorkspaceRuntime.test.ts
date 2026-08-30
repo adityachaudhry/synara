@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Layer } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option } from "effect";
 import { it as effectIt } from "@effect/vitest";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,7 @@ import {
 } from "../../persistence/Services/ProviderSessionRuntime";
 import {
   makeWorkspaceRuntimeLive,
+  reconcileSandboxCapacityAtStartup,
   reconcileWorkspaceCreationIntents,
 } from "./WorkspaceRuntime";
 import { SandboxCapacity } from "../SandboxCapacity";
@@ -422,6 +423,170 @@ describe("WorkspaceRuntime", () => {
         expect(removeCalls).toBe(2);
         expect(intents.records.has("operation-adopt-timeout")).toBe(false);
         expect(capacity.snapshot().activeKeys).toEqual([]);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
+  effectIt.effect("removes a committed intent when publication completion is lost", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeRailwayClient();
+      const capacity = new SandboxCapacity(1);
+      const intents = makeIntentRepository();
+      intents.repository.put = (input) =>
+        Effect.sync(() => {
+          intents.records.set(input.operationId, { ...input, runtimeId: null });
+        }).pipe(Effect.andThen(Effect.fail(new Error("publication completion lost") as never)));
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => "operation-lost-publication",
+        reconcileIntervalMs: 60_000,
+        capacity,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+        Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const result = yield* runtime
+          .create({
+            threadId: "thread-lost-publication",
+            lifecycleGeneration: "generation-lost-publication",
+            environment: {},
+          })
+          .pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { operation: "creation-intent.put" },
+        });
+        expect(fake.creates).toBe(0);
+        expect(intents.records.has("operation-lost-publication")).toBe(false);
+        expect(capacity.snapshot().activeKeys).toEqual([]);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
+  effectIt.effect("finishes blocked publication cleanup after the launch deadline", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeRailwayClient();
+      const capacity = new SandboxCapacity(1);
+      const publicationStarted = yield* Deferred.make<void>();
+      const releasePublication = yield* Deferred.make<void>();
+      const order: string[] = [];
+      const intents = makeIntentRepository();
+      intents.repository.put = (input) =>
+        Deferred.succeed(publicationStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releasePublication)),
+          Effect.andThen(
+            Effect.sync(() => {
+              order.push("commit");
+              intents.records.set(input.operationId, { ...input, runtimeId: null });
+            }),
+          ),
+        );
+      intents.repository.remove = (operationId) =>
+        Effect.sync(() => {
+          order.push("remove");
+          intents.records.delete(operationId);
+        });
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => "operation-blocked-publication",
+        reconcileIntervalMs: 60_000,
+        capacity,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+        Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const createFiber = yield* runtime
+          .create({
+            threadId: "thread-blocked-publication",
+            lifecycleGeneration: "generation-blocked-publication",
+            environment: {},
+          })
+          .pipe(
+            Effect.timeoutOption("60 seconds"),
+            Effect.forkChild({ startImmediately: true }),
+          );
+        yield* Deferred.await(publicationStarted);
+        yield* TestClock.adjust("61 seconds");
+        const timeoutBeforePublicationSettled = createFiber.pollUnsafe();
+        yield* Deferred.succeed(releasePublication, undefined);
+        const result = yield* Fiber.join(createFiber);
+
+        expect(timeoutBeforePublicationSettled).toBeUndefined();
+        expect(Option.isNone(result)).toBe(true);
+        expect(order).toEqual(["commit", "remove"]);
+        expect(fake.creates).toBe(0);
+        expect(intents.records.has("operation-blocked-publication")).toBe(false);
+        expect(capacity.snapshot().activeKeys).toEqual([]);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
+  effectIt.effect("retains failed publication cleanup for restart accounting", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeRailwayClient();
+      const capacity = new SandboxCapacity(1);
+      const intents = makeIntentRepository();
+      intents.repository.put = (input) =>
+        Effect.sync(() => {
+          intents.records.set(input.operationId, { ...input, runtimeId: null });
+        }).pipe(Effect.andThen(Effect.fail(new Error("publication completion lost") as never)));
+      intents.repository.remove = () =>
+        Effect.fail(new Error("intent removal unavailable") as never);
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => "operation-failed-publication-cleanup",
+        reconcileIntervalMs: 60_000,
+        capacity,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+        Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const result = yield* runtime
+          .create({
+            threadId: "thread-failed-publication-cleanup",
+            lifecycleGeneration: "generation-failed-publication-cleanup",
+            environment: {},
+          })
+          .pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { operation: "creation-intent.remove" },
+        });
+        expect(fake.creates).toBe(0);
+        expect(intents.records.has("operation-failed-publication-cleanup")).toBe(true);
+        expect(capacity.snapshot().activeKeys).toEqual([
+          "thread-failed-publication-cleanup:generation-failed-publication-cleanup",
+        ]);
+
+        const recoveredCapacity = new SandboxCapacity(1, {
+          reconcileBeforeAdmission: true,
+        });
+        const report = yield* reconcileSandboxCapacityAtStartup({
+          client: fake.client,
+          intents: intents.repository,
+          runtimes: { list: () => Effect.succeed([]) } as ProviderSessionRuntimeRepositoryShape,
+          capacity: recoveredCapacity,
+        });
+        expect(report.reservations).toEqual([
+          {
+            key: "create-intent:operation-failed-publication-cleanup",
+            threadId: "create-intent:operation-failed-publication-cleanup",
+            lifecycleGeneration: "operation-failed-publication-cleanup",
+          },
+        ]);
+        expect(recoveredCapacity.snapshot().activeKeys).toEqual([
+          "create-intent:operation-failed-publication-cleanup",
+        ]);
+        capacity.release(
+          "thread-failed-publication-cleanup:generation-failed-publication-cleanup",
+        );
+        recoveredCapacity.release("create-intent:operation-failed-publication-cleanup");
       }).pipe(Effect.provide(layer), Effect.scoped);
     }),
   );

@@ -216,6 +216,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       }
       yield* Fiber.interrupt(launchFiber);
       const interrupted = yield* Fiber.await(launchFiber);
+      if (Exit.isSuccess(interrupted)) return interrupted.value;
       if (Exit.isFailure(interrupted) && !Cause.hasInterruptsOnly(interrupted.cause)) {
         return yield* Effect.failCause(interrupted.cause);
       }

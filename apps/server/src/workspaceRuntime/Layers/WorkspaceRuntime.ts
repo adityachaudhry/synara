@@ -335,37 +335,53 @@ export function makeWorkspaceRuntimeLive(
               });
             }
             ownedOperationIds.add(operationId);
-            const putExit = yield* Effect.exit(
-              restore(
-                intents
-                  .put({ operationId, createdAt: new Date().toISOString() })
-                  .pipe(Effect.mapError(toRuntimeError("creation-intent.put"))),
-              ),
-            );
-            if (Exit.isFailure(putExit)) {
-              ownedOperationIds.delete(operationId);
-              capacityLease?.release();
-              return yield* Effect.failCause(putExit.cause);
-            }
             if (capacityLease !== undefined) {
               capacityLeaseByOperationId.set(operationId, capacityLease);
             }
+            const putExit = yield* Effect.exit(
+              intents
+                .put({ operationId, createdAt: new Date().toISOString() })
+                .pipe(Effect.mapError(toRuntimeError("creation-intent.put"))),
+            );
+            if (Exit.isFailure(putExit)) {
+              const cleanupExit = yield* Effect.exit(removeIntent(operationId));
+              if (Exit.isFailure(cleanupExit)) {
+                ownedOperationIds.delete(operationId);
+                return yield* Effect.failCause(cleanupExit.cause);
+              }
+              yield* releaseCapacity({ operationId, capacityKey });
+              return yield* Effect.failCause(putExit.cause);
+            }
 
+            let createStarted = false;
             const createExit = yield* Effect.exit(
               restore(
-                client
-                  .create({
-                    operationId,
-                    networkIsolation: input.networkIsolation ?? "ISOLATED",
-                    idleTimeoutMinutes: enabled.idleTimeoutMinutes,
-                    ...(enabled.region === undefined ? {} : { region: enabled.region }),
-                    environment: input.environment,
-                  })
-                  .pipe(Effect.mapError(toRuntimeError("create"))),
+                Effect.sync(() => {
+                  createStarted = true;
+                }).pipe(
+                  Effect.andThen(
+                    client
+                      .create({
+                        operationId,
+                        networkIsolation: input.networkIsolation ?? "ISOLATED",
+                        idleTimeoutMinutes: enabled.idleTimeoutMinutes,
+                        ...(enabled.region === undefined ? {} : { region: enabled.region }),
+                        environment: input.environment,
+                      })
+                      .pipe(Effect.mapError(toRuntimeError("create"))),
+                  ),
+                ),
               ),
             );
             if (Exit.isFailure(createExit)) {
               ownedOperationIds.delete(operationId);
+              if (!createStarted) {
+                const cleanupExit = yield* Effect.exit(removeIntent(operationId));
+                if (Exit.isFailure(cleanupExit)) {
+                  return yield* Effect.failCause(cleanupExit.cause);
+                }
+                yield* releaseCapacity({ operationId, capacityKey });
+              }
               return yield* Effect.failCause(createExit.cause);
             }
             const record = createExit.value;
