@@ -101,7 +101,7 @@ export const makeServerAuth = Effect.gen(function* () {
         allowedProjectIds: assertion.allowedProjectIds,
         client: {
           label: assertion.email,
-          deviceType: "browser",
+          deviceType: "unknown",
         },
       }),
   });

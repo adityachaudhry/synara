@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ProjectId } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -21,6 +22,22 @@ const authControlPlaneLayer = AuthControlPlaneLive.pipe(
   Layer.provide(BootstrapCredentialServiceLive),
   Layer.provide(sessionCredentialLayer),
 );
+const testConfigLayer = Layer.effect(
+  ServerConfig,
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    return {
+      ...config,
+      externalAuthSecret: "external-auth-test-secret",
+    };
+  }),
+).pipe(
+  Layer.provide(
+    ServerConfig.layerTest(process.cwd(), {
+      prefix: "synara-auth-server-test-",
+    }),
+  ),
+);
 const testLayer = ServerAuthLive.pipe(
   Layer.provide(ServerAuthPolicyLive),
   Layer.provide(BootstrapCredentialServiceLive),
@@ -28,11 +45,7 @@ const testLayer = ServerAuthLive.pipe(
   Layer.provide(authControlPlaneLayer),
   Layer.provide(SqlitePersistenceMemory),
   Layer.provide(ServerSecretStoreLive),
-  Layer.provide(
-    ServerConfig.layerTest(process.cwd(), {
-      prefix: "synara-auth-server-test-",
-    }),
-  ),
+  Layer.provide(testConfigLayer),
   Layer.provide(NodeServices.layer),
 );
 
@@ -98,6 +111,33 @@ describe("ServerAuthLive", () => {
         expect(verified.sessionId.length).toBeGreaterThan(0);
         expect(verified.role).toBe("client");
         expect(verified.subject).toBe("one-time-token");
+      }),
+    );
+  });
+
+  it("issues project-scoped sessions for external identities", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const projectId = ProjectId.makeUnsafe("external-project");
+        const exchanged = yield* serverAuth.exchangeExternalIdentity({
+          authorization: "Bearer external-auth-test-secret",
+          payload: {
+            subject: "external-user",
+            email: "external-user@example.com",
+            allowedProjectIds: [projectId],
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            nonce: "external-session-test-nonce",
+          },
+          client: requestMetadata,
+        });
+        const verified = yield* serverAuth.authenticateHttpRequest({
+          headers: { authorization: `Bearer ${exchanged.sessionToken}` },
+          cookies: {},
+        });
+
+        expect(verified.subject).toBe("external-user");
+        expect(verified.allowedProjectIds).toEqual([projectId]);
       }),
     );
   });
