@@ -10,11 +10,13 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect, Layer, Scope, ServiceMap } from "effect";
+import type { ProjectId } from "@synara/contracts";
 
 import {
   CurrentManagedAttachmentPrincipal,
   type ManagedAttachmentPrincipal,
 } from "./managedAttachmentPrincipal";
+import { CurrentProjectScope, toProjectScope } from "./auth/projectScope";
 
 export type WsSessionRole = "owner" | "client";
 
@@ -26,6 +28,7 @@ export const CurrentWsSessionRole = ServiceMap.Reference<WsSessionRole>(
 export interface WsConnectionSession {
   readonly role: WsSessionRole;
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
+  readonly allowedProjectIds?: ReadonlyArray<ProjectId>;
 }
 
 /**
@@ -78,6 +81,7 @@ export function provideWsConnectionSession<A, E, R>(
     ? effect.pipe(
         Effect.provideService(CurrentWsSessionRole, session.role),
         Effect.provideService(CurrentManagedAttachmentPrincipal, session.attachmentPrincipal),
+        Effect.provideService(CurrentProjectScope, toProjectScope(session.allowedProjectIds)),
       )
     : effect;
 }

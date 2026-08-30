@@ -72,6 +72,14 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         expiresAt,
         sessionToken: "bearer-token",
       }),
+    exchangeExternalIdentity: () =>
+      mutate({
+        authenticated: true,
+        role: "client",
+        sessionMethod: "bearer-session-token",
+        expiresAt,
+        sessionToken: "external-session-token",
+      }),
     issuePairingCredential: () =>
       mutate({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),
@@ -185,6 +193,39 @@ function mutationRequest(input: {
 }
 
 describe("authEffectRouteLayer", () => {
+  it("exposes the server-to-server external session seam without setting a cookie", async () => {
+    const sideEffects = { count: 0 };
+    const config = {
+      host: "127.0.0.1",
+      publicUrl: undefined,
+      externalAuthSecret: "shared-secret",
+    } as ServerConfigShape;
+    await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
+      const response = await fetch(`${serverOrigin}/api/auth/external/session`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer shared-secret",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: "glasswing:user-1",
+          email: "person@example.com",
+          allowedProjectIds: ["external-project-1"],
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          nonce: "nonce-12345678",
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        role: "client",
+        sessionMethod: "bearer-session-token",
+        sessionToken: "external-session-token",
+      });
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(sideEffects.count).toBe(1);
+    });
+  });
+
   it("rejects declared and chunked oversized bootstrap JSON before auth exchange", async () => {
     const sideEffects = { count: 0 };
     const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;

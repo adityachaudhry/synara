@@ -94,6 +94,28 @@ describe("SessionCredentialServiceLive", () => {
     );
   });
 
+  it("preserves an explicit project scope through bearer and one-use websocket credentials", async () => {
+    await runSessionTest(
+      Effect.gen(function* () {
+        const sessions = yield* SessionCredentialService;
+        const allowedProjectIds = ["external-project-1", "external-project-2"] as const;
+        const issued = yield* sessions.issue({
+          method: "bearer-session-token",
+          allowedProjectIds,
+        });
+        const verifiedBearer = yield* sessions.verify(issued.token);
+        const websocket = yield* sessions.issueWebSocketToken(verifiedBearer);
+        const verifiedWebSocket = yield* sessions.verifyWebSocketToken(websocket.token);
+
+        expect(verifiedBearer.allowedProjectIds).toEqual(allowedProjectIds);
+        expect(verifiedWebSocket.allowedProjectIds).toEqual(allowedProjectIds);
+        expect(yield* Effect.result(sessions.verifyWebSocketToken(websocket.token))).toMatchObject({
+          _tag: "Failure",
+        });
+      }),
+    );
+  });
+
   it("consumes websocket tickets exactly once under concurrent verification", async () => {
     await runSessionTest(
       Effect.gen(function* () {

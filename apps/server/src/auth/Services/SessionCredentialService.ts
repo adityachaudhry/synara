@@ -2,6 +2,7 @@ import type {
   AuthClientMetadata,
   AuthClientSession,
   AuthSessionId,
+  ProjectId,
   ServerAuthSessionMethod,
 } from "@synara/contracts";
 import { Data, DateTime, Duration, ServiceMap } from "effect";
@@ -16,6 +17,7 @@ export interface IssuedSession {
   readonly client: AuthClientMetadata;
   readonly expiresAt: DateTime.DateTime;
   readonly role: SessionRole;
+  readonly allowedProjectIds?: ReadonlyArray<ProjectId>;
 }
 
 export interface VerifiedSession {
@@ -26,6 +28,7 @@ export interface VerifiedSession {
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
   readonly role: SessionRole;
+  readonly allowedProjectIds?: ReadonlyArray<ProjectId>;
 }
 
 export type SessionCredentialChange =
@@ -54,15 +57,17 @@ export class SessionCapacityError extends Data.TaggedError("SessionCapacityError
 export interface SessionCredentialServiceShape {
   readonly cookieName: string;
   readonly issue: (input?: {
+    readonly sessionId?: AuthSessionId;
     readonly ttl?: Duration.Duration;
     readonly subject?: string;
     readonly method?: ServerAuthSessionMethod;
     readonly role?: SessionRole;
     readonly client?: AuthClientMetadata;
+    readonly allowedProjectIds?: ReadonlyArray<ProjectId>;
   }) => Effect.Effect<IssuedSession, SessionCredentialError>;
   readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
   readonly issueWebSocketToken: (
-    sessionId: AuthSessionId,
+    session: AuthSessionId | Pick<VerifiedSession, "sessionId" | "allowedProjectIds">,
     input?: { readonly ttl?: Duration.Duration },
   ) => Effect.Effect<
     { readonly token: string; readonly expiresAt: DateTime.DateTime },

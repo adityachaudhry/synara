@@ -57,6 +57,7 @@ describe("writeEmbedPackage", () => {
     const input = {
       version: "0.7.3",
       synaraCommit: "synara-sha",
+      protocolVersion: 1,
       routerVersion: "^1.160.2",
     };
 
@@ -105,7 +106,13 @@ describe("writeEmbedPackage", () => {
 
     expect(
       JSON.parse(await fs.readFile(path.join(first.outputDir, "synara-provenance.json"), "utf8")),
-    ).toEqual({ packageVersion: "0.7.3", synaraCommit: "synara-sha" });
+    ).toEqual({
+      packageVersion: "0.7.3",
+      synaraCommit: "synara-sha",
+      release: "0.7.3",
+      commit: "synara-sha",
+      protocolVersion: 1,
+    });
 
     const declarations = await fs.readFile(path.join(first.outputDir, "index.d.ts"), "utf8");
     expect(declarations).toContain("export interface SynaraRuntimeConfig");
@@ -121,6 +128,7 @@ describe("writeEmbedPackage", () => {
       ...fixture,
       version: "0.7.3",
       synaraCommit: "synara-sha",
+      protocolVersion: 1,
       routerVersion: "^1.160.2",
     });
 
@@ -149,6 +157,7 @@ describe("writeEmbedPackage", () => {
         ...fixture,
         version: "0.7.3",
         synaraCommit: "",
+        protocolVersion: 1,
         routerVersion: "^1.160.2",
       }),
     ).rejects.toThrow("SYNARA_COMMIT");
@@ -166,6 +175,7 @@ describe("writeEmbedPackage", () => {
         ...fixture,
         version: "0.7.3",
         synaraCommit: "synara-sha",
+        protocolVersion: 1,
         routerVersion: "^1.160.2",
       }),
     ).rejects.toThrow("dynamically requires peer React");

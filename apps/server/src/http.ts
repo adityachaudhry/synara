@@ -28,10 +28,16 @@ import {
 } from "./attachmentPaths";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
-import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
+import { authorizeExternalServiceRequest } from "./auth/externalIdentity";
+import {
+  AuthError,
+  ServerAuth,
+  type AuthenticatedHttpSession,
+} from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { ExternalProjectResolver } from "./externalProjectResolver";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
@@ -51,6 +57,8 @@ import {
   reserveManagedAttachmentUpload,
 } from "./managedAttachmentStore";
 import { ManagedAttachmentRepository } from "./persistence/Services/ManagedAttachments";
+import { ProjectionProjectRepository } from "./persistence/Services/ProjectionProjects";
+import { getReleaseProvenance } from "./releaseProvenance";
 import {
   authorizeDesktopShutdown,
   DESKTOP_SHUTDOWN_ROUTE_PATH,
@@ -195,6 +203,8 @@ export function makeEffectHttpRouteLayer(
 ) {
   return Layer.mergeAll(
     makeHealthEffectRouteLayer(readiness),
+    versionEffectRouteLayer,
+    externalApiEffectRouteLayer,
     makeDesktopShutdownEffectRouteLayer(shutdownController),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
@@ -276,10 +286,110 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
   );
 }
 
+export const versionEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/version",
+  Effect.succeed(
+    HttpServerResponse.jsonUnsafe(getReleaseProvenance(), {
+      status: 200,
+      headers: { "Cache-Control": "no-store" },
+    }),
+  ),
+);
+
+export const externalApiEffectRouteLayer = HttpRouter.add(
+  "*",
+  "/api/external/*",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const config = yield* ServerConfig;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    if (
+      !authorizeExternalServiceRequest(config.externalAuthSecret, request.headers.authorization)
+    ) {
+      return HttpServerResponse.jsonUnsafe({ error: "Unauthorized." }, { status: 401 });
+    }
+    if (request.method !== "POST" || url.pathname !== "/api/external/projects/resolve") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const payload = yield* readEffectJson(request, "Invalid external project payload.").pipe(
+      Effect.mapError((cause) => mapPayloadError("Invalid external project payload.", cause)),
+    );
+    const resolver = yield* ExternalProjectResolver;
+    const projects = yield* ProjectionProjectRepository;
+    const projectId = yield* resolver.resolveExternalProject(
+      payload as Parameters<typeof resolver.resolveExternalProject>[0],
+    );
+    const project = Option.getOrThrow(yield* projects.getById({ projectId }));
+    return HttpServerResponse.jsonUnsafe({
+      projectId,
+      repositoryBinding: project.repositoryBinding,
+    });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.succeed(
+        HttpServerResponse.jsonUnsafe(
+          { error: error instanceof Error ? error.message : "External project resolution failed." },
+          {
+            status:
+              typeof (error as { status?: unknown }).status === "number"
+                ? (error as { status: number }).status
+                : error && typeof error === "object" && "_tag" in error
+                  ? 400
+                  : 500,
+          },
+        ),
+      ),
+    ),
+  ),
+);
+
 const requireAuthenticatedRequest = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const serverAuth = yield* ServerAuth;
-  yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+  return yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+});
+
+const requireProjectScopeAccess = Effect.fn(function* (input: {
+  readonly session: AuthenticatedHttpSession;
+  readonly threadId?: string;
+  readonly workspaceRoot?: string;
+}) {
+  if (input.session.allowedProjectIds === undefined) return;
+  const allowed = new Set(input.session.allowedProjectIds);
+  const snapshots = yield* ProjectionSnapshotQuery;
+  const permitted = input.threadId
+    ? Option.match(yield* snapshots.getThreadShellById(ThreadId.makeUnsafe(input.threadId)), {
+        onNone: () => false,
+        onSome: (thread) => allowed.has(thread.projectId),
+      })
+    : input.workspaceRoot
+      ? yield* snapshots.getActiveProjectByWorkspaceRoot(input.workspaceRoot).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                snapshots.getShellSnapshot().pipe(
+                  Effect.map((snapshot) =>
+                    snapshot.threads.some(
+                      (thread) =>
+                        allowed.has(thread.projectId) &&
+                        (thread.worktreePath === input.workspaceRoot ||
+                          thread.workingDirectory === input.workspaceRoot),
+                    ),
+                  ),
+                ),
+              onSome: (project) => Effect.succeed(allowed.has(project.id)),
+            }),
+          ),
+        )
+      : false;
+  if (!permitted) {
+    return yield* new AuthError({
+      message: "This session is not authorized for the requested project resource.",
+      status: 403,
+    });
+  }
 });
 
 const requireAuthenticatedMutationRequest = Effect.gen(function* () {
@@ -475,6 +585,22 @@ export const authEffectRouteLayer = HttpRouter.add(
       );
     }
 
+    if (request.method === "POST" && url.pathname === "/api/auth/external/session") {
+      const payload = yield* readEffectJson(request, "Invalid external identity payload.").pipe(
+        Effect.mapError((cause) => mapPayloadError("Invalid external identity payload.", cause)),
+      );
+      return HttpServerResponse.jsonUnsafe(
+        yield* serverAuth.exchangeExternalIdentity({
+          authorization: request.headers.authorization,
+          payload,
+          client: deriveAuthClientMetadata({
+            headers: request.headers,
+            remoteAddress: request.remoteAddress ?? null,
+          }),
+        }),
+      );
+    }
+
     const authenticatedMutationSession = requireAuthenticatedMutationRequest;
 
     if (request.method === "POST" && url.pathname === "/api/auth/ws-token") {
@@ -604,7 +730,7 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest.pipe(
+    const session = yield* requireAuthenticatedRequest.pipe(
       Effect.catchTag("AuthError", (error) => Effect.fail(error)),
     );
     const request = yield* HttpServerRequest.HttpServerRequest;
@@ -612,6 +738,7 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
     const projectCwd = url.searchParams.get("cwd");
     if (!projectCwd) return HttpServerResponse.text("Missing cwd parameter", { status: 400 });
+    yield* requireProjectScopeAccess({ session, workspaceRoot: projectCwd });
     const resolver = yield* ProjectFaviconResolver;
     const faviconPath = yield* resolver.resolvePath(projectCwd);
     if (!faviconPath) {
@@ -657,9 +784,7 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
     // same startup-token rule the local-image/attachments routes use so favicons
     // load in local dev without a session cookie.
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
-      yield* requireAuthenticatedRequest;
-    }
+    if (!isLegacyTokenAuthorized({ config, url })) yield* requireAuthenticatedRequest;
 
     const domainParam = url.searchParams.get("domain") ?? url.searchParams.get("url");
     if (!domainParam) return HttpServerResponse.text("Missing domain parameter", { status: 400 });
@@ -703,9 +828,9 @@ const threadExportEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
-      yield* requireAuthenticatedRequest;
-    }
+    const session = isLegacyTokenAuthorized({ config, url })
+      ? undefined
+      : yield* requireAuthenticatedRequest;
 
     // Error responses need the trusted-origin CORS headers too: the desktop
     // app fetches cross-origin (synara://app), and without them the browser masks
@@ -718,6 +843,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
         status: 400,
         headers: corsHeaders,
       });
+    if (session) yield* requireProjectScopeAccess({ session, threadId: threadIdParam });
 
     const snapshotQuery = yield* ProjectionSnapshotQuery;
     const threadOption = yield* snapshotQuery.getThreadDetailForExportById(
@@ -758,9 +884,7 @@ export const editorIconEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
-      yield* requireAuthenticatedRequest;
-    }
+    if (!isLegacyTokenAuthorized({ config, url })) yield* requireAuthenticatedRequest;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const payload = yield* resolveEditorIconHttpPayload({
@@ -801,8 +925,12 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
-      yield* requireAuthenticatedRequest;
+    const session = isLegacyTokenAuthorized({ config, url })
+      ? undefined
+      : yield* requireAuthenticatedRequest;
+    if (session) {
+      const cwd = url.searchParams.get("cwd")?.trim();
+      yield* requireProjectScopeAccess({ session, ...(cwd ? { workspaceRoot: cwd } : {}) });
     }
 
     const previewFile = yield* Effect.promise(() =>
@@ -863,9 +991,12 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
-  const attachmentPrincipal = isLegacyTokenAuthorized({ config, url })
-    ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL
-    : attachmentPrincipalForSession((yield* requireAuthenticatedMutationRequest).sessionId);
+  const authenticatedSession = isLegacyTokenAuthorized({ config, url })
+    ? undefined
+    : yield* requireAuthenticatedMutationRequest;
+  const attachmentPrincipal = authenticatedSession
+    ? attachmentPrincipalForSession(authenticatedSession.sessionId)
+    : LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL;
 
   if (url.pathname === ATTACHMENT_UPLOAD_ROUTE_PATH) {
     const type = url.searchParams.get("type");
@@ -877,6 +1008,9 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         { error: "Attachment upload metadata is invalid." },
         { status: 400, headers: corsHeaders },
       );
+    }
+    if (authenticatedSession) {
+      yield* requireProjectScopeAccess({ session: authenticatedSession, threadId });
     }
     const maxBytes =
       type === "image" ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
@@ -984,6 +1118,12 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         { status: 400, headers: corsHeaders },
       );
     }
+    if (authenticatedSession) {
+      yield* requireProjectScopeAccess({
+        session: authenticatedSession,
+        ...(threadId ? { threadId } : { workspaceRoot: cwd }),
+      });
+    }
     const releaseUpload = voiceUploadAdmissionGate.tryAcquire();
     if (!releaseUpload) {
       return HttpServerResponse.jsonUnsafe(
@@ -1057,9 +1197,9 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     const config = yield* ServerConfig;
     // Desktop image tags cannot attach Authorization headers; preserve the same
     // startup token rule that the WebSocket route already accepts.
-    if (!isLegacyTokenAuthorized({ config, url })) {
-      yield* requireAuthenticatedRequest;
-    }
+    const session = isLegacyTokenAuthorized({ config, url })
+      ? undefined
+      : yield* requireAuthenticatedRequest;
 
     const rawRelativePath = url.pathname.slice(ATTACHMENTS_ROUTE_PREFIX.length);
     const normalizedRelativePath = normalizeAttachmentRelativePath(rawRelativePath);
@@ -1081,6 +1221,13 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
             attachmentId: normalizedRelativePath,
           })
         : Option.none();
+    if (session?.allowedProjectIds !== undefined) {
+      if (Option.isNone(managedBlob)) return HttpServerResponse.text("Not Found", { status: 404 });
+      yield* requireProjectScopeAccess({
+        session,
+        threadId: managedBlob.value.ownerThreadId,
+      });
+    }
     const filePath = Option.isSome(managedBlob)
       ? resolveAttachmentRelativePath({
           attachmentsDir: config.attachmentsDir,

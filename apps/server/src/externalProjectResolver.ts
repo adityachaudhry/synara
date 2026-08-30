@@ -84,7 +84,7 @@ function bindingsEqual(
 }
 
 export const makeExternalProjectResolverLive = (
-  policy: RepositoryBindingAdmissionPolicy,
+  policy?: RepositoryBindingAdmissionPolicy,
 ): Layer.Layer<
   ExternalProjectResolver,
   never,
@@ -96,6 +96,12 @@ export const makeExternalProjectResolverLive = (
       const engine = yield* OrchestrationEngineService;
       const projects = yield* ProjectionProjectRepository;
       const config = yield* ServerConfig;
+      const admissionPolicy =
+        policy ??
+        ({
+          allowedOrigins: config.externalRepositoryAllowedOrigins ?? [],
+          allowedOwners: config.externalRepositoryAllowedOwners ?? [],
+        } satisfies RepositoryBindingAdmissionPolicy);
 
       const resolveExisting = (
         externalKey: string,
@@ -129,7 +135,7 @@ export const makeExternalProjectResolverLive = (
           );
           const repositoryBinding = yield* admitRepositoryBinding(
             decoded.repositoryBinding,
-            policy,
+            admissionPolicy,
           );
           const existing = yield* resolveExisting(decoded.externalKey, repositoryBinding);
           if (Option.isSome(existing)) return existing.value;

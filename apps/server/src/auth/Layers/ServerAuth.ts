@@ -7,6 +7,8 @@ import type {
   AuthWebSocketTokenResult,
 } from "@synara/contracts";
 import { DateTime, Effect, Layer } from "effect";
+import { ServerConfig } from "../../config";
+import { makeExternalIdentityExchange } from "../externalIdentity";
 
 import { AuthControlPlane } from "../Services/AuthControlPlane";
 import {
@@ -66,6 +68,7 @@ function toAuthenticatedSession(session: {
   readonly method: AuthenticatedSession["method"];
   readonly role: AuthenticatedSession["role"];
   readonly expiresAt?: DateTime.DateTime;
+  readonly allowedProjectIds?: AuthenticatedSession["allowedProjectIds"];
 }): AuthenticatedSession {
   return {
     sessionId: session.sessionId,
@@ -73,15 +76,35 @@ function toAuthenticatedSession(session: {
     method: session.method,
     role: session.role,
     ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+    ...(session.allowedProjectIds === undefined
+      ? {}
+      : { allowedProjectIds: session.allowedProjectIds }),
   };
 }
 
 export const makeServerAuth = Effect.gen(function* () {
+  const config = yield* ServerConfig;
   const policy = yield* ServerAuthPolicy;
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
   const descriptor = yield* policy.getDescriptor();
+  const externalIdentity = yield* makeExternalIdentityExchange({
+    secret: config.externalAuthSecret,
+    issueSession: (assertion) =>
+      sessions.issue({
+        sessionId: assertion.sessionId,
+        ttl: assertion.ttl,
+        subject: assertion.subject,
+        method: "bearer-session-token",
+        role: "client",
+        allowedProjectIds: assertion.allowedProjectIds,
+        client: {
+          label: assertion.email,
+          deviceType: "browser",
+        },
+      }),
+  });
 
   const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
     sessions.verify(token).pipe(
@@ -220,6 +243,19 @@ export const makeServerAuth = Effect.gen(function* () {
         ),
       );
 
+  const exchangeExternalIdentity: ServerAuthShape["exchangeExternalIdentity"] = (input) =>
+    externalIdentity
+      .exchange({ authorization: input.authorization, payload: input.payload })
+      .pipe(
+        Effect.map((session) => ({
+          authenticated: true,
+          role: session.role,
+          sessionMethod: "bearer-session-token",
+          expiresAt: DateTime.toUtc(session.expiresAt),
+          sessionToken: session.token,
+        })),
+      );
+
   const issuePairingCredential: ServerAuthShape["issuePairingCredential"] = (input) =>
     authControlPlane
       .createPairingLink({
@@ -346,7 +382,7 @@ export const makeServerAuth = Effect.gen(function* () {
     );
 
   const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
-    sessions.issueWebSocketToken(session.sessionId).pipe(
+    sessions.issueWebSocketToken(session).pipe(
       Effect.mapError((cause) =>
         cause instanceof SessionCapacityError
           ? new AuthError({
@@ -406,6 +442,7 @@ export const makeServerAuth = Effect.gen(function* () {
     getSessionState,
     exchangeBootstrapCredential,
     exchangeBootstrapCredentialForBearerSession,
+    exchangeExternalIdentity,
     issuePairingCredential,
     listPairingLinks,
     revokePairingLink,

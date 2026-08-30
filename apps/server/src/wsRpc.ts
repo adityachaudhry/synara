@@ -47,6 +47,12 @@ import {
   type ServerAuthShape,
 } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
+import {
+  authorizeProjectScopedRpc,
+  CurrentProjectScope,
+  filterReadModelByProjectScope,
+  filterShellSnapshotByProjectScope,
+} from "./auth/projectScope";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
@@ -191,17 +197,34 @@ const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   Effect.gen(function* () {
     const admission = yield* makeWsRequestAdmission;
     const connectionSessions = yield* WsConnectionSessions;
+    const projection = yield* ProjectionSnapshotQuery;
     return ((effect, options) => {
       // Handler fibers descend from the RPC server fiber (forked at layer build),
       // not from the connection's HTTP upgrade fiber, so connection-scoped
       // services must be re-provided here from the connection-session registry.
-      const scoped = provideWsConnectionSession(
-        effect,
+      const authorized = Effect.gen(function* () {
+        const allowed = yield* authorizeProjectScopedRpc({
+          method: options.rpc._tag,
+          payload: options.payload,
+          scope: yield* CurrentProjectScope,
+          query: projection,
+        });
+        if (!allowed) {
+          return yield* new WsRpcError({
+            message: "This session is not authorized for the requested project resource.",
+            code: "PROJECT_SCOPE_FORBIDDEN",
+            retryable: false,
+          });
+        }
+        return yield* effect;
+      });
+      const authorizedScoped = provideWsConnectionSession(
+        authorized,
         connectionSessions.lookup(Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER)),
       );
       return RpcSchema.isStreamSchema(options.rpc.successSchema)
-        ? scoped
-        : admission.guard(options.clientId, options.rpc._tag, scoped);
+        ? authorizedScoped
+        : admission.guard(options.clientId, options.rpc._tag, authorizedScoped);
     }) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>;
   }),
 );
@@ -617,6 +640,33 @@ const makeWsRpcHandlersLayer = () =>
           );
         });
 
+      const scopeDomainEvents = <A extends OrchestrationEvent>(stream: Stream.Stream<A>) =>
+        Stream.unwrap(
+          CurrentProjectScope.pipe(
+            Effect.map((scope) =>
+              scope === undefined
+                ? stream
+                : stream.pipe(
+                    Stream.filterEffect((event) =>
+                      authorizeProjectScopedRpc({
+                        method: "orchestration.event",
+                        payload: {
+                          ...(event.payload as Record<string, unknown>),
+                          ...(event.aggregateKind === "project"
+                            ? { projectId: event.aggregateId }
+                            : event.aggregateKind === "thread"
+                              ? { threadId: event.aggregateId }
+                              : {}),
+                        },
+                        scope,
+                        query: projectionReadModelQuery,
+                      }),
+                    ),
+                  ),
+            ),
+          ),
+        );
+
       // Terminal-first threads are created with the generic "New terminal" placeholder.
       // The tracker buffers per-terminal input and, once a meaningful command is submitted,
       // surfaces a safe title used to auto-rename the thread on its first command.
@@ -880,12 +930,24 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(importThread(input), "Failed to import thread"),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getSnapshot(),
+            Effect.gen(function* () {
+              const scope = yield* CurrentProjectScope;
+              return filterReadModelByProjectScope(
+                yield* projectionReadModelQuery.getSnapshot(),
+                scope,
+              );
+            }),
             "Failed to load orchestration snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getShellSnapshot(),
+            Effect.gen(function* () {
+              const scope = yield* CurrentProjectScope;
+              return filterShellSnapshotByProjectScope(
+                yield* projectionReadModelQuery.getShellSnapshot(),
+                scope,
+              );
+            }),
             "Failed to load orchestration shell snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
@@ -981,28 +1043,38 @@ const makeWsRpcHandlersLayer = () =>
               },
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
-                  bufferLiveUiStream(stream.pipe(Stream.filter(isShellRelevantEvent)), {
-                    label: "orchestration.shell",
-                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
-                  }),
+                  bufferLiveUiStream(
+                    scopeDomainEvents(stream).pipe(Stream.filter(isShellRelevantEvent)),
+                    {
+                      label: "orchestration.shell",
+                      onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                    },
+                  ),
                 ),
               ),
-              snapshot: projectionReadModelQuery
-                .getShellSnapshot()
-                .pipe(
-                  Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
-                ),
+              snapshot: Effect.gen(function* () {
+                const scope = yield* CurrentProjectScope;
+                return filterShellSnapshotByProjectScope(
+                  yield* projectionReadModelQuery.getShellSnapshot(),
+                  scope,
+                );
+              }).pipe(
+                Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
+              ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
-                orchestrationEngine
-                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
-                  .pipe(
-                    Stream.filter(isShellRelevantEvent),
-                    Stream.mapError((cause) =>
-                      toWsRpcError(cause, "Failed to replay shell events"),
-                    ),
+                scopeDomainEvents(
+                  orchestrationEngine.readEventsThrough(
+                    fromSequenceExclusive,
+                    throughSequenceInclusive,
                   ),
+                ).pipe(
+                  Stream.filter(isShellRelevantEvent),
+                  Stream.mapError((cause) =>
+                    toWsRpcError(cause, "Failed to replay shell events"),
+                  ),
+                ),
             }).pipe(
               Stream.mapEffect((item) =>
                 item.kind === "snapshot"
@@ -1131,7 +1203,7 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "orchestration.domain-events" },
-            bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
+            bufferLiveUiStream(scopeDomainEvents(orchestrationEngine.streamDomainEvents), {
               label: "orchestration.domain-events",
             }),
           ),
@@ -1200,26 +1272,55 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.projectsStopDevServer]: (input) =>
           rpcEffect(devServerManager.stop(input), "Failed to stop dev server"),
         [WS_METHODS.projectsListDevServers]: () =>
-          rpcEffect(devServerManager.list, "Failed to list dev servers"),
+          rpcEffect(
+            Effect.gen(function* () {
+              const scope = yield* CurrentProjectScope;
+              const result = yield* devServerManager.list;
+              return scope === undefined
+                ? result
+                : { servers: result.servers.filter((server) => scope.has(server.projectId)) };
+            }),
+            "Failed to list dev servers",
+          ),
         [WS_METHODS.subscribeProjectDevServerEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,
             { key: "projects.dev-servers" },
-            Stream.concat(
-              Stream.fromEffect(
-                devServerManager.list.pipe(
-                  Effect.map(
-                    (result): ProjectDevServerEvent => ({
-                      type: "snapshot",
-                      servers: result.servers,
-                    }),
+            Stream.unwrap(
+              CurrentProjectScope.pipe(
+                Effect.map((scope) =>
+                  Stream.concat(
+                    Stream.fromEffect(
+                      devServerManager.list.pipe(
+                        Effect.map(
+                          (result): ProjectDevServerEvent => ({
+                            type: "snapshot",
+                            servers:
+                              scope === undefined
+                                ? result.servers
+                                : result.servers.filter((server) =>
+                                    scope.has(server.projectId),
+                                  ),
+                          }),
+                        ),
+                      ),
+                    ),
+                    bufferLiveUiStream(devServerManager.stream, {
+                      label: "projects.dev-servers",
+                      onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                    }).pipe(
+                      Stream.filter(
+                        (event) =>
+                          scope === undefined ||
+                          event.type === "snapshot" ||
+                          scope.has(
+                            event.type === "removed" ? event.projectId : event.server.projectId,
+                          ),
+                      ),
+                    ),
                   ),
                 ),
               ),
-              bufferLiveUiStream(devServerManager.stream, {
-                label: "projects.dev-servers",
-                onDroppedEvents: failLiveUiStreamForSnapshotResync,
-              }),
             ),
           ),
         [WS_METHODS.projectsProvisionFromGitHub]: (input) =>
@@ -1639,6 +1740,19 @@ const makeWsRpcHandlersLayer = () =>
                 });
                 yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
               }),
+            ).pipe(
+              Stream.filterEffect((event) =>
+                CurrentProjectScope.pipe(
+                  Effect.flatMap((scope) =>
+                    authorizeProjectScopedRpc({
+                      method: "terminal.event",
+                      payload: event,
+                      scope,
+                      query: projectionReadModelQuery,
+                    }),
+                  ),
+                ),
+              ),
             ),
           ),
 
@@ -2205,6 +2319,9 @@ export function makeWebsocketRpcRouteLayer<R>(
             runWithConnectionSession(request, {
               role: authenticatedSession.role,
               attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+              ...(authenticatedSession.allowedProjectIds === undefined
+                ? {}
+                : { allowedProjectIds: authenticatedSession.allowedProjectIds }),
             }),
           );
         }).pipe(

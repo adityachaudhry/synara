@@ -158,6 +158,16 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  externalAuthSecret: Config.string("SYNARA_EXTERNAL_AUTH_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  externalRepositoryAllowedOrigins: Config.string(
+    "SYNARA_EXTERNAL_REPOSITORY_ALLOWED_ORIGINS",
+  ).pipe(Config.option, Config.map(Option.getOrUndefined)),
+  externalRepositoryAllowedOwners: Config.string(
+    "SYNARA_EXTERNAL_REPOSITORY_ALLOWED_OWNERS",
+  ).pipe(Config.option, Config.map(Option.getOrUndefined)),
   desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -284,6 +294,17 @@ const ServerConfigLive = (input: CliInput) =>
         allowInsecureRemote,
         noBrowser,
         authToken,
+        externalAuthSecret: env.externalAuthSecret?.trim() || undefined,
+        externalRepositoryAllowedOrigins:
+          env.externalRepositoryAllowedOrigins
+            ?.split(",")
+            .map((value) => value.trim())
+            .filter(Boolean) ?? [],
+        externalRepositoryAllowedOwners:
+          env.externalRepositoryAllowedOwners
+            ?.split(",")
+            .map((value) => value.trim())
+            .filter(Boolean) ?? [],
         desktopShutdownToken,
         autoBootstrapProjectFromCwd,
         logProviderEvents,
@@ -324,6 +345,7 @@ const LayerLive = (input: CliInput) => {
 export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
   const safeConfig: Record<string, unknown> = { ...config };
   delete safeConfig.authToken;
+  delete safeConfig.externalAuthSecret;
   delete safeConfig.desktopShutdownToken;
   delete safeConfig.devUrl;
 

@@ -375,6 +375,10 @@ it.layer(testLayer)("server CLI command", (it) => {
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         SYNARA_NO_BROWSER: "true",
         SYNARA_AUTH_TOKEN: "env-token",
+        SYNARA_EXTERNAL_AUTH_SECRET: "external-secret",
+        SYNARA_EXTERNAL_REPOSITORY_ALLOWED_ORIGINS:
+          "https://git.example.com,https://git2.example.com",
+        SYNARA_EXTERNAL_REPOSITORY_ALLOWED_OWNERS: "acme,platform",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
       });
 
@@ -387,6 +391,12 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
+      assert.equal(resolvedConfig?.externalAuthSecret, "external-secret");
+      assert.deepEqual(resolvedConfig?.externalRepositoryAllowedOrigins, [
+        "https://git.example.com",
+        "https://git2.example.com",
+      ]);
+      assert.deepEqual(resolvedConfig?.externalRepositoryAllowedOwners, ["acme", "platform"]);
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
@@ -522,10 +532,11 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("omits both server authority secrets from startup log data", () =>
+  it.effect("omits every server authority secret from startup log data", () =>
     Effect.gen(function* () {
       yield* runCli([], {
         SYNARA_AUTH_TOKEN: "browser-secret",
+        SYNARA_EXTERNAL_AUTH_SECRET: "external-secret",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-secret",
       });
       const config = resolvedConfig;
@@ -533,9 +544,11 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       const logData = makeServerStartupLogData(config);
       assert.equal(Object.hasOwn(logData, "authToken"), false);
+      assert.equal(Object.hasOwn(logData, "externalAuthSecret"), false);
       assert.equal(Object.hasOwn(logData, "desktopShutdownToken"), false);
       assert.equal(logData.authEnabled, true);
       assert.notInclude(JSON.stringify(logData), "browser-secret");
+      assert.notInclude(JSON.stringify(logData), "external-secret");
       assert.notInclude(JSON.stringify(logData), "shutdown-secret");
     }),
   );

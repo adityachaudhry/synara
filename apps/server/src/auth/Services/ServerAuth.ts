@@ -7,6 +7,7 @@ import type {
   AuthPairingCredentialResult,
   AuthPairingLink,
   AuthSessionId,
+  ProjectId,
   AuthSessionState,
   AuthWebSocketTokenResult,
   ServerAuthDescriptor,
@@ -16,6 +17,7 @@ import { Data, DateTime, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { SessionRole } from "./SessionCredentialService";
+import type { ExternalIdentityError } from "../externalIdentity";
 
 export interface AuthRequest {
   readonly headers: Record<string, string | undefined>;
@@ -29,6 +31,7 @@ export interface AuthenticatedSession {
   readonly method: ServerAuthSessionMethod;
   readonly role: SessionRole;
   readonly expiresAt?: DateTime.DateTime;
+  readonly allowedProjectIds?: ReadonlyArray<ProjectId>;
 }
 
 export interface AuthenticatedHttpSession extends AuthenticatedSession {
@@ -58,6 +61,11 @@ export interface ServerAuthShape {
     credential: string,
     requestMetadata: AuthClientMetadata,
   ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
+  readonly exchangeExternalIdentity: (input: {
+    readonly authorization?: string;
+    readonly payload: unknown;
+    readonly client: AuthClientMetadata;
+  }) => Effect.Effect<AuthBearerBootstrapResult, ExternalIdentityError>;
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly role?: SessionRole;

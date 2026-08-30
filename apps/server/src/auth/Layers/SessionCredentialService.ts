@@ -1,4 +1,9 @@
-import { AuthSessionId, type AuthClientMetadata, type AuthClientSession } from "@synara/contracts";
+import {
+  AuthSessionId,
+  ProjectId,
+  type AuthClientMetadata,
+  type AuthClientSession,
+} from "@synara/contracts";
 import * as Crypto from "node:crypto";
 import {
   Clock,
@@ -53,6 +58,7 @@ const SessionClaims = Schema.Struct({
   method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
   iat: Schema.Number,
   exp: Schema.Number,
+  allowedProjectIds: Schema.optional(Schema.Array(ProjectId)),
 });
 type SessionClaims = typeof SessionClaims.Type;
 
@@ -63,6 +69,7 @@ const WebSocketClaims = Schema.Struct({
   jti: Schema.String,
   iat: Schema.Number,
   exp: Schema.Number,
+  allowedProjectIds: Schema.optional(Schema.Array(ProjectId)),
 });
 type WebSocketClaims = typeof WebSocketClaims.Type;
 
@@ -311,7 +318,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
 
   const issue: SessionCredentialServiceShape["issue"] = (input) =>
     Effect.gen(function* () {
-      const sessionId = AuthSessionId.makeUnsafe(Crypto.randomUUID());
+      const sessionId = input?.sessionId ?? AuthSessionId.makeUnsafe(Crypto.randomUUID());
       const issuedAt = yield* DateTime.now;
       const expiresAt = DateTime.addDuration(issuedAt, input?.ttl ?? DEFAULT_SESSION_TTL);
       const client = input?.client ?? createDefaultClientMetadata();
@@ -324,6 +331,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         method: input?.method ?? "browser-session-cookie",
         iat: DateTime.toEpochMillis(issuedAt),
         exp: DateTime.toEpochMillis(expiresAt),
+        ...(input?.allowedProjectIds === undefined
+          ? {}
+          : { allowedProjectIds: Array.from(new Set(input.allowedProjectIds)) }),
       };
       const encodedPayload = base64UrlEncode(JSON.stringify(claims));
       const signature = signPayload(encodedPayload, signingSecret);
@@ -365,6 +375,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         client,
         expiresAt,
         role: claims.role,
+        ...(claims.allowedProjectIds === undefined
+          ? {}
+          : { allowedProjectIds: claims.allowedProjectIds }),
       } satisfies IssuedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -403,6 +416,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: DateTime.makeUnsafe(claims.exp),
         subject: claims.sub,
         role: claims.role,
+        ...(claims.allowedProjectIds === undefined
+          ? {}
+          : { allowedProjectIds: claims.allowedProjectIds }),
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -413,12 +429,15 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     );
 
   const issueWebSocketToken: SessionCredentialServiceShape["issueWebSocketToken"] = (
-    sessionId,
+    session,
     input,
   ) =>
     activeConnectionsSemaphore
       .withPermit(
         Effect.gen(function* () {
+          const sessionId = typeof session === "string" ? session : session.sessionId;
+          const allowedProjectIds =
+            typeof session === "string" ? undefined : session.allowedProjectIds;
           const row = yield* authSessions.getById({ sessionId });
           const issuedAt = yield* DateTime.now;
           const issuedAtMillis = DateTime.toEpochMillis(issuedAt);
@@ -475,6 +494,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
             jti: ticketId,
             iat: issuedAtMillis,
             exp: expiresAtMillis,
+            ...(allowedProjectIds === undefined ? {} : { allowedProjectIds }),
           };
           const encodedPayload = base64UrlEncode(JSON.stringify(claims));
           const signature = signPayload(encodedPayload, signingSecret);
@@ -542,6 +562,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
             expiresAt: row.value.expiresAt,
             subject: row.value.subject,
             role: row.value.role,
+            ...(claims.allowedProjectIds === undefined
+              ? {}
+              : { allowedProjectIds: claims.allowedProjectIds }),
           } satisfies VerifiedSession;
         }),
       );

@@ -67,6 +67,8 @@ import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedR
 import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
 import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
 import { SandboxCapacity } from "./workspaceRuntime/SandboxCapacity";
+import { makeExternalProjectResolverLive } from "./externalProjectResolver";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -172,6 +174,10 @@ export function makeServerRuntimeServicesLayer(
     authControlPlaneLayer,
     serverAuthLayer,
   );
+  const externalProjectResolverLayer = makeExternalProjectResolverLive().pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ProjectionProjectRepositoryLive),
+  );
   const automationServiceLayer = AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
@@ -254,6 +260,7 @@ export function makeServerRuntimeServicesLayer(
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     authServicesLayer,
+    externalProjectResolverLayer,
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,

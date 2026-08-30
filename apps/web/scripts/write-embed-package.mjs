@@ -64,6 +64,10 @@ export async function writeEmbedPackage(input) {
   const version = requireValue("PACKAGE_VERSION", input.version);
   const synaraCommit = requireValue("SYNARA_COMMIT", input.synaraCommit);
   const routerVersion = requireValue("TANSTACK_ROUTER_VERSION", input.routerVersion);
+  const protocolVersion = input.protocolVersion;
+  if (!Number.isSafeInteger(protocolVersion) || protocolVersion <= 0) {
+    throw new Error("SYNARA_PROTOCOL_VERSION must be a positive integer.");
+  }
 
   await assertNoDynamicPeerReactRequire(input.buildDir);
   await fs.rm(input.outputDir, { recursive: true, force: true });
@@ -107,7 +111,13 @@ export async function writeEmbedPackage(input) {
       "react-dom": ">=19 <20",
     },
   };
-  const provenance = { packageVersion: version, synaraCommit };
+  const provenance = {
+    packageVersion: version,
+    synaraCommit,
+    release: version,
+    commit: synaraCommit,
+    protocolVersion,
+  };
   await Promise.all([
     fs.writeFile(
       path.join(input.outputDir, "package.json"),
@@ -132,6 +142,7 @@ if (invokedPath === import.meta.url) {
     readmePath: path.join(webDir, "README.embed.md"),
     version: packageManifest.version,
     synaraCommit: process.env.SYNARA_COMMIT,
+    protocolVersion: Number(process.env.SYNARA_PROTOCOL_VERSION ?? "1"),
     routerVersion: packageManifest.dependencies["@tanstack/react-router"],
   });
 }

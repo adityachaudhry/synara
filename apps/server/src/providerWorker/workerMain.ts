@@ -16,6 +16,7 @@ import {
 } from "./workerConfig";
 import { makeProviderWorkerOutbox } from "./workerOutbox";
 import { makeProviderWorkerRequestLedger } from "./workerRequestLedger";
+import { getProviderWorkerReleaseProvenance } from "./releaseProvenance";
 
 function makeWorkerServerConfig(
   config: ReturnType<typeof resolveProviderWorkerConfig>,
@@ -103,7 +104,10 @@ const makeClientSocket = Effect.fn(function* (
 });
 
 const main = Effect.gen(function* () {
-  yield* Effect.logInfo("provider worker booting", config.safeDescription);
+  yield* Effect.logInfo("provider worker booting", {
+    ...config.safeDescription,
+    ...getProviderWorkerReleaseProvenance(),
+  });
   const fileSystem = yield* FileSystem.FileSystem;
   yield* fileSystem.makeDirectory(config.homeDir, { recursive: true });
   yield* fileSystem.makeDirectory(config.cwd, { recursive: true });

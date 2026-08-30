@@ -53,6 +53,8 @@ import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { providerWorkerRouteLayer } from "./providerWorker/httpRoute";
 import { ProviderWorkerBootstrapAuthority } from "./providerWorker/Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "./providerWorker/Services/ProviderWorkerBroker";
+import { ExternalProjectResolver } from "./externalProjectResolver";
+import { ProjectionProjectRepository } from "./persistence/Services/ProjectionProjects";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -83,6 +85,8 @@ export interface ServerShape {
     | ServerSettingsService
     | ThreadDeletionReactor
     | SqlClient.SqlClient
+    | ExternalProjectResolver
+    | ProjectionProjectRepository
   >;
   readonly stopSignal: Effect.Effect<void, never>;
 }
