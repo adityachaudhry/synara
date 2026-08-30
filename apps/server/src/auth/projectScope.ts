@@ -1,9 +1,10 @@
-import type {
-  OrchestrationEvent,
-  OrchestrationReadModel,
-  OrchestrationShellSnapshot,
-  ProjectId,
-  ServerProviderStatus,
+import {
+  PI_THINKING_LEVEL_OPTIONS,
+  type OrchestrationEvent,
+  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
+  type ServerProviderStatus,
 } from "@synara/contracts";
 import {
   isThreadMentionPath,
@@ -130,13 +131,36 @@ function scopedPayload(method: string, payload: unknown): unknown {
 function hasSafeScopedModelConfiguration(payload: Record<string, unknown>): boolean {
   if (payload.providerOptions !== undefined) return false;
   const modelSelection = payload.modelSelection;
+  if (modelSelection === undefined) return true;
+  if (
+    modelSelection === null ||
+    typeof modelSelection !== "object" ||
+    stringField(modelSelection, "provider") === undefined ||
+    stringField(modelSelection, "model") === undefined
+  ) {
+    return false;
+  }
+  const selection = modelSelection as Record<string, unknown>;
+  if (selection.options === undefined) {
+    return Object.keys(selection).every((key) => key === "provider" || key === "model");
+  }
+  if (
+    selection.provider !== "pi" ||
+    !Object.keys(selection).every(
+      (key) => key === "provider" || key === "model" || key === "options",
+    ) ||
+    selection.options === null ||
+    typeof selection.options !== "object" ||
+    Array.isArray(selection.options)
+  ) {
+    return false;
+  }
+  const options = selection.options as Record<string, unknown>;
   return (
-    modelSelection === undefined ||
-    (modelSelection !== null &&
-      typeof modelSelection === "object" &&
-      stringField(modelSelection, "provider") !== undefined &&
-      stringField(modelSelection, "model") !== undefined &&
-      Object.keys(modelSelection).every((key) => key === "provider" || key === "model"))
+    Object.keys(options).every((key) => key === "thinkingLevel") &&
+    (options.thinkingLevel === undefined ||
+      (typeof options.thinkingLevel === "string" &&
+        PI_THINKING_LEVEL_OPTIONS.includes(options.thinkingLevel as never)))
   );
 }
 

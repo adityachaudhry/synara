@@ -324,6 +324,39 @@ describe("external project scope", () => {
     ).toBe(true);
   });
 
+  it("allows the bounded Pi thinking level used by scoped Glasswing threads", async () => {
+    const command = {
+      type: "thread.create",
+      commandId: "cmd-scoped-pi-thread",
+      threadId: "new-pi-thread",
+      projectId: allowed,
+      title: "Scoped Pi thread",
+      modelSelection: {
+        provider: "pi",
+        model: "anthropic/claude-sonnet-5",
+        options: { thinkingLevel: "high" },
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: null,
+      createdAt: "2026-08-30T00:00:00.000Z",
+    };
+
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: { command },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("applies scoped provider override restrictions to edit and resend", async () => {
     const command = {
       type: "thread.message.edit-and-resend",
