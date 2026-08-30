@@ -1,0 +1,14 @@
+.git
+.github
+.turbo
+.env
+.env.*
+!.env.example
+**/dist
+**/dist-electron
+**/node_modules
+**/.turbo
+audit
+benchmarks
+plans
+advisor-plans
