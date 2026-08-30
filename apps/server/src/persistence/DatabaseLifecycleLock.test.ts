@@ -24,14 +24,19 @@ async function makeDbPath(): Promise<string> {
   return path.join(directory, "state.sqlite");
 }
 
-async function writeOwnedDirectory(directoryPath: string, pid: number): Promise<void> {
+async function writeOwnedDirectory(
+  directoryPath: string,
+  pid: number,
+  options: { readonly runtimeId?: string; readonly createdAt?: string } = {},
+): Promise<void> {
   await fs.mkdir(directoryPath, { mode: 0o700 });
   await fs.writeFile(
     path.join(directoryPath, "owner.json"),
     `${JSON.stringify({
       pid,
       token: randomUUID(),
-      createdAt: new Date().toISOString(),
+      createdAt: options.createdAt ?? new Date().toISOString(),
+      ...(options.runtimeId === undefined ? {} : { runtimeId: options.runtimeId }),
     })}\n`,
     { mode: 0o600 },
   );
@@ -84,6 +89,47 @@ describe("database lifecycle lock", () => {
     expect(acquired.owner.pid).toBe(process.pid);
     await Effect.runPromise(releaseDatabaseLifecycleLock(acquired));
     await expect(fs.stat(`${lockPath}.reaper`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("recovers a Railway volume lock left by another deployment despite PID reuse", async () => {
+    const previousReplicaId = process.env.RAILWAY_REPLICA_ID;
+    process.env.RAILWAY_REPLICA_ID = "replica-current";
+    const dbPath = await makeDbPath();
+    const lockPath = `${dbPath}.lifecycle-lock`;
+    await writeOwnedDirectory(lockPath, process.pid, {
+      runtimeId: "replica-previous",
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    try {
+      const acquired = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+      expect(acquired.owner.pid).toBe(process.pid);
+      expect(acquired.owner.runtimeId).toBe("replica-current");
+      await Effect.runPromise(releaseDatabaseLifecycleLock(acquired));
+    } finally {
+      if (previousReplicaId === undefined) delete process.env.RAILWAY_REPLICA_ID;
+      else process.env.RAILWAY_REPLICA_ID = previousReplicaId;
+    }
+  });
+
+  it("recovers a legacy Railway lock that predates the current deployment process", async () => {
+    const previousReplicaId = process.env.RAILWAY_REPLICA_ID;
+    process.env.RAILWAY_REPLICA_ID = "replica-current";
+    const dbPath = await makeDbPath();
+    const lockPath = `${dbPath}.lifecycle-lock`;
+    await writeOwnedDirectory(lockPath, process.pid, {
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    try {
+      const acquired = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+      expect(acquired.owner.pid).toBe(process.pid);
+      expect(acquired.owner.runtimeId).toBe("replica-current");
+      await Effect.runPromise(releaseDatabaseLifecycleLock(acquired));
+    } finally {
+      if (previousReplicaId === undefined) delete process.env.RAILWAY_REPLICA_ID;
+      else process.env.RAILWAY_REPLICA_ID = previousReplicaId;
+    }
   });
 
   it("recovers a reaper guard whose owner process died", async () => {

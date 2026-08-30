@@ -13,6 +13,7 @@ type DatabaseLifecycleLockOwner = {
   readonly pid: number;
   readonly token: string;
   readonly createdAt: string;
+  readonly runtimeId?: string;
 };
 
 export type DatabaseLifecycleLock = {
@@ -102,16 +103,36 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
     owner.pid! <= 0 ||
     typeof owner.token !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(owner.token) ||
-    typeof owner.createdAt !== "string"
+    typeof owner.createdAt !== "string" ||
+    (owner.runtimeId !== undefined &&
+      (typeof owner.runtimeId !== "string" ||
+        owner.runtimeId.length === 0 ||
+        owner.runtimeId.length > 512))
   ) {
     throw new Error("lock owner metadata is invalid");
   }
   return owner as DatabaseLifecycleLockOwner;
 }
 
-function ownerProcessState(pid: number): "live" | "dead" | "unknown" {
+function railwayRuntimeId(): string | undefined {
+  return (
+    process.env.RAILWAY_REPLICA_ID?.trim() || process.env.RAILWAY_DEPLOYMENT_ID?.trim() || undefined
+  );
+}
+
+const PROCESS_STARTED_AT_MS = Date.now() - process.uptime() * 1_000;
+
+function ownerProcessState(owner: DatabaseLifecycleLockOwner): "live" | "dead" | "unknown" {
+  const currentRuntimeId = railwayRuntimeId();
+  if (currentRuntimeId !== undefined) {
+    if (owner.runtimeId !== undefined && owner.runtimeId !== currentRuntimeId) return "dead";
+    if (owner.runtimeId === undefined) {
+      const createdAtMs = Date.parse(owner.createdAt);
+      if (Number.isFinite(createdAtMs) && createdAtMs < PROCESS_STARTED_AT_MS) return "dead";
+    }
+  }
   try {
-    process.kill(pid, 0);
+    process.kill(owner.pid, 0);
     return "live";
   } catch (cause) {
     const code = errnoCode(cause);
@@ -202,6 +223,7 @@ async function acquireReaperGuard(dbPath: string, lockPath: string): Promise<Rea
       pid: process.pid,
       token: randomUUID(),
       createdAt: new Date().toISOString(),
+      ...(railwayRuntimeId() === undefined ? {} : { runtimeId: railwayRuntimeId() }),
     };
     if (await tryPublishOwnedDirectory(reaperPath, owner)) {
       return { path: reaperPath, owner, retiredPaths };
@@ -218,7 +240,7 @@ async function acquireReaperGuard(dbPath: string, lockPath: string): Promise<Rea
         `stale-lock recovery owner is unknown: ${detail}`,
       );
     }
-    const state = ownerProcessState(existingOwner.pid);
+    const state = ownerProcessState(existingOwner);
     if (state !== "dead") {
       throw new DatabaseLifecycleLockedError(
         dbPath,
@@ -239,7 +261,7 @@ async function acquireReaperGuard(dbPath: string, lockPath: string): Promise<Rea
       const currentOwner = await readOwner(reaperPath);
       if (
         currentOwner.token !== existingOwner.token ||
-        ownerProcessState(currentOwner.pid) !== "dead"
+        ownerProcessState(currentOwner) !== "dead"
       ) {
         throw new DatabaseLifecycleLockedError(
           dbPath,
@@ -293,7 +315,7 @@ async function reapDeadOwner(
     const currentOwner = await readOwner(lockPath);
     if (
       currentOwner.token !== observedOwner.token ||
-      ownerProcessState(currentOwner.pid) !== "dead"
+      ownerProcessState(currentOwner) !== "dead"
     ) {
       throw new DatabaseLifecycleLockedError(
         dbPath,
@@ -320,6 +342,7 @@ async function acquire(dbPath: string): Promise<DatabaseLifecycleLock> {
       pid: process.pid,
       token: randomUUID(),
       createdAt: new Date().toISOString(),
+      ...(railwayRuntimeId() === undefined ? {} : { runtimeId: railwayRuntimeId() }),
     };
     const published = await tryPublishOwnedDirectory(lockPath, owner);
 
@@ -335,7 +358,7 @@ async function acquire(dbPath: string): Promise<DatabaseLifecycleLock> {
           `owner is live or unknown: ${detail}`,
         );
       }
-      const state = ownerProcessState(existingOwner.pid);
+      const state = ownerProcessState(existingOwner);
       if (state !== "dead") {
         throw new DatabaseLifecycleLockedError(
           canonicalDbPath,
