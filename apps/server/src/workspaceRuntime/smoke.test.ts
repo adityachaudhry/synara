@@ -32,6 +32,7 @@ function makeFakeRuntime(options?: {
         return binding;
       }),
     connect: () => Effect.succeed(binding),
+    adopt: () => Effect.void,
     exec: (_binding, input) =>
       input.command === options?.failCommand
         ? Effect.fail(

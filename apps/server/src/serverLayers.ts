@@ -50,6 +50,7 @@ import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequ
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
+import { WorkspaceCreationIntentRepositoryLive } from "./persistence/Layers/WorkspaceCreationIntents";
 import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
@@ -282,6 +283,7 @@ export function makeServerApplicationLayers() {
         Layer.provide(
           makeWorkspaceRuntimeLive(distributedPiConfig.railway).pipe(
             Layer.provide(makeRailwaySandboxClientLive(distributedPiConfig.railway)),
+            Layer.provide(WorkspaceCreationIntentRepositoryLive),
           ),
         ),
         Layer.provide(providerWorkerTransportLayer),

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 
+import {
+  WorkspaceCreationIntentRepository,
+  type WorkspaceCreationIntentRepositoryShape,
+} from "../../persistence/Services/WorkspaceCreationIntents";
 import { WorkspaceRuntimeError } from "../Errors";
 import { RailwaySandboxClient } from "../Services/RailwaySandboxClient";
 import {
@@ -10,6 +14,7 @@ import {
   type WorkspaceRuntimeInventoryRecord,
   type WorkspaceRuntimeShape,
 } from "../Services/WorkspaceRuntime";
+import type { RailwaySandboxClientShape } from "../Services/RailwaySandboxClient";
 import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 
 function runtimeStatus(
@@ -57,6 +62,39 @@ function requireEnabled(
 
 export interface WorkspaceRuntimeOptions {
   readonly createOperationId?: () => string;
+  readonly reconcileIntervalMs?: number;
+}
+
+const DEFAULT_RECONCILE_INTERVAL_MS = 10_000;
+const MAX_RECONCILE_BACKOFF_MS = 5 * 60_000;
+
+export function reconcileWorkspaceCreationIntents(input: {
+  readonly client: RailwaySandboxClientShape;
+  readonly intents: WorkspaceCreationIntentRepositoryShape;
+  readonly ownedOperationIds: ReadonlySet<string>;
+}) {
+  return input.intents.list().pipe(
+    Effect.flatMap(
+      Effect.forEach((intent) => {
+        if (input.ownedOperationIds.has(intent.operationId)) return Effect.void;
+        const cleanup =
+          intent.runtimeId === null
+            ? input.client.destroyByCreateOperationId(intent.operationId)
+            : input.client
+                .destroy(intent.runtimeId)
+                .pipe(
+                  Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
+                  Effect.as(true),
+                );
+        return cleanup.pipe(
+          Effect.flatMap((terminal) =>
+            terminal ? input.intents.remove(intent.operationId) : Effect.void,
+          ),
+        );
+      }),
+    ),
+    Effect.asVoid,
+  );
 }
 
 export function makeWorkspaceRuntimeLive(
@@ -67,40 +105,117 @@ export function makeWorkspaceRuntimeLive(
     WorkspaceRuntime,
     Effect.gen(function* () {
       const client = yield* RailwaySandboxClient;
+      const intents = yield* WorkspaceCreationIntentRepository;
+      const ownedOperationIds = new Set<string>();
+      const reconcileIntervalMs =
+        options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
+
+      const reconcileLoop = (delayMs: number): Effect.Effect<void> =>
+        reconcileWorkspaceCreationIntents({ client, intents, ownedOperationIds }).pipe(
+          Effect.matchEffect({
+            onFailure: (cause) =>
+              Effect.logWarning("workspace creation intent reconciliation failed", {
+                cause: String(cause),
+              }).pipe(
+                Effect.andThen(Effect.sleep(delayMs)),
+                Effect.andThen(
+                  reconcileLoop(Math.min(delayMs * 2, MAX_RECONCILE_BACKOFF_MS)),
+                ),
+              ),
+            onSuccess: () =>
+              Effect.sleep(reconcileIntervalMs).pipe(
+                Effect.andThen(reconcileLoop(reconcileIntervalMs)),
+              ),
+          }),
+        );
+
+      yield* Effect.forkScoped(
+        Effect.sleep(reconcileIntervalMs).pipe(
+          Effect.andThen(reconcileLoop(reconcileIntervalMs)),
+        ),
+      );
+
+      const removeIntent = (operationId: string) =>
+        intents.remove(operationId).pipe(
+          Effect.mapError(toRuntimeError("creation-intent.remove")),
+          Effect.tap(() => Effect.sync(() => ownedOperationIds.delete(operationId))),
+        );
+
+      const destroyCreated = (runtimeId: string, operationId: string) =>
+        client.destroy(runtimeId).pipe(
+          Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
+          Effect.mapError(toRuntimeError("cleanup", runtimeId)),
+          Effect.andThen(removeIntent(operationId)),
+        );
 
       const create: WorkspaceRuntimeShape["create"] = (input) =>
-        Effect.gen(function* () {
-          const enabled = yield* requireEnabled(config, "create");
-          const record = yield* client
-            .create({
-              operationId: (options.createOperationId ?? randomUUID)(),
-              networkIsolation: input.networkIsolation ?? "ISOLATED",
-              idleTimeoutMinutes: enabled.idleTimeoutMinutes,
-              ...(enabled.region === undefined ? {} : { region: enabled.region }),
-              environment: input.environment,
-            })
-            .pipe(Effect.mapError(toRuntimeError("create")));
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const enabled = yield* requireEnabled(config, "create");
+            const operationId = (options.createOperationId ?? randomUUID)();
+            yield* intents
+              .put({ operationId, createdAt: new Date().toISOString() })
+              .pipe(Effect.mapError(toRuntimeError("creation-intent.put")));
+            ownedOperationIds.add(operationId);
 
-          if (record.status !== "RUNNING") {
-            yield* client.destroy(record.id).pipe(
-              Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
-              Effect.mapError(toRuntimeError("cleanup", record.id)),
+            const createExit = yield* Effect.exit(
+              restore(
+                client
+                  .create({
+                    operationId,
+                    networkIsolation: input.networkIsolation ?? "ISOLATED",
+                    idleTimeoutMinutes: enabled.idleTimeoutMinutes,
+                    ...(enabled.region === undefined ? {} : { region: enabled.region }),
+                    environment: input.environment,
+                  })
+                  .pipe(Effect.mapError(toRuntimeError("create"))),
+              ),
             );
-            return yield* new WorkspaceRuntimeError({
-              operation: "create",
-              detail: `Created Railway Sandbox entered unexpected status ${record.status}.`,
-              runtimeId: record.id,
-            });
-          }
+            if (Exit.isFailure(createExit)) {
+              ownedOperationIds.delete(operationId);
+              return yield* Effect.failCause(createExit.cause);
+            }
+            const record = createExit.value;
+            const bindExit = yield* Effect.exit(
+              intents
+                .bindRuntime({ operationId, runtimeId: record.id })
+                .pipe(Effect.mapError(toRuntimeError("creation-intent.bind", record.id))),
+            );
+            if (Exit.isFailure(bindExit)) {
+              ownedOperationIds.delete(operationId);
+              const cleanupExit = yield* Effect.exit(
+                client.destroy(record.id).pipe(
+                  Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
+                  Effect.mapError(toRuntimeError("cleanup", record.id)),
+                  Effect.andThen(removeIntent(operationId)),
+                ),
+              );
+              return yield* Effect.failCause(
+                Exit.isFailure(cleanupExit) ? cleanupExit.cause : bindExit.cause,
+              );
+            }
 
-          return {
-            runtimeKind: "railway-sandbox",
-            runtimeId: record.id,
-            lifecycleGeneration: input.lifecycleGeneration,
-            status: "running",
-            region: record.region,
-          } satisfies WorkspaceRuntimeBinding;
-        });
+            if (record.status !== "RUNNING") {
+              const cleanupExit = yield* Effect.exit(destroyCreated(record.id, operationId));
+              ownedOperationIds.delete(operationId);
+              if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause);
+              return yield* new WorkspaceRuntimeError({
+                operation: "create",
+                detail: `Created Railway Sandbox entered unexpected status ${record.status}.`,
+                runtimeId: record.id,
+              });
+            }
+
+            return {
+              runtimeKind: "railway-sandbox",
+              runtimeId: record.id,
+              creationOperationId: operationId,
+              lifecycleGeneration: input.lifecycleGeneration,
+              status: "running",
+              region: record.region,
+            } satisfies WorkspaceRuntimeBinding;
+          }),
+        );
 
       const connect: WorkspaceRuntimeShape["connect"] = (binding) =>
         Effect.gen(function* () {
@@ -121,6 +236,11 @@ export function makeWorkspaceRuntimeLive(
             region: record.region,
           };
         });
+
+      const adopt: WorkspaceRuntimeShape["adopt"] = (binding) =>
+        binding.creationOperationId === undefined
+          ? Effect.void
+          : Effect.uninterruptible(removeIntent(binding.creationOperationId));
 
       const exec: WorkspaceRuntimeShape["exec"] = (binding, input) =>
         requireEnabled(config, "exec").pipe(
@@ -168,10 +288,24 @@ export function makeWorkspaceRuntimeLive(
         );
 
       const destroy: WorkspaceRuntimeShape["destroy"] = (binding) =>
-        requireEnabled(config, "destroy").pipe(
-          Effect.flatMap(() => client.destroy(binding.runtimeId)),
-          Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
-          Effect.mapError(toRuntimeError("destroy", binding.runtimeId)),
+        Effect.uninterruptible(
+          requireEnabled(config, "destroy").pipe(
+            Effect.flatMap(() => client.destroy(binding.runtimeId)),
+            Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
+            Effect.mapError(toRuntimeError("destroy", binding.runtimeId)),
+            Effect.andThen(
+              binding.creationOperationId === undefined
+                ? Effect.void
+                : removeIntent(binding.creationOperationId),
+            ),
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (binding.creationOperationId !== undefined) {
+                  ownedOperationIds.delete(binding.creationOperationId);
+                }
+              }),
+            ),
+          ),
         );
 
       const list: WorkspaceRuntimeShape["list"] = requireEnabled(config, "list").pipe(
@@ -192,6 +326,7 @@ export function makeWorkspaceRuntimeLive(
       return {
         create,
         connect,
+        adopt,
         exec,
         writeFile,
         startDurableProcess,

@@ -87,6 +87,7 @@ function makeHarness(
   const provisioner = {
     start: vi.fn(() => Effect.succeed(runtimeBinding)),
     restart: vi.fn(() => Effect.succeed(runtimeBinding)),
+    adopt: vi.fn(() => Effect.void),
     stop: vi.fn(() => Effect.void),
   };
   const request = vi.fn((_fence, method: string) =>
@@ -171,6 +172,10 @@ describe("RoutedPiAdapter", () => {
         adapterKey: "pi:railway-sandbox",
         runtimePayload: { distributedPiRuntime: runtimeBinding },
       }),
+    );
+    expect(harness.provisioner.adopt).toHaveBeenCalledWith(runtimeBinding);
+    expect(harness.upsert.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.provisioner.adopt.mock.invocationCallOrder[0]!,
     );
   });
 

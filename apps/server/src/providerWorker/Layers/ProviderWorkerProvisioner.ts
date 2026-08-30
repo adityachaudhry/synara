@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Effect, FileSystem, Layer } from "effect";
+import { Cause, Effect, Exit, FileSystem, Layer } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import { makeKeyedLock } from "../../provider/keyedLock";
@@ -71,6 +71,27 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         undefined,
       );
 
+    const withWorkspaceCleanup = <A, E, R>(
+      workspace: ProviderWorkerRuntimeBinding["workspace"],
+      use: Effect.Effect<A, E, R>,
+    ) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const useExit = yield* Effect.exit(restore(use));
+          if (Exit.isSuccess(useExit)) return useExit.value;
+          const cleanupExit = yield* Effect.exit(workspaceRuntime.destroy(workspace));
+          if (Exit.isFailure(cleanupExit)) {
+            return yield* provisionError(
+              "workspace.cleanup",
+              "Failed to destroy the Railway provider workspace after provisioning failed.",
+              Cause.squash(cleanupExit.cause),
+              workspace.runtimeId,
+            );
+          }
+          return yield* Effect.failCause(useExit.cause);
+        }),
+      );
+
     const provisionConnectedWorker = Effect.fn(function* (input: {
       readonly workspace: ProviderWorkerRuntimeBinding["workspace"];
       readonly threadId: string;
@@ -131,17 +152,26 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                                 ),
                           ),
                         );
-                return yield* workspaceRuntime
-                  .exec(input.workspace, {
-                    command: input.checkoutCommand,
-                    timeoutSeconds: 120,
-                  })
-                  .pipe(
-                    Effect.matchEffect({
-                      onFailure: (cause) => cleanupCredential.pipe(Effect.andThen(Effect.fail(cause))),
-                      onSuccess: (result) => cleanupCredential.pipe(Effect.as(result)),
-                    }),
-                  );
+                return yield* Effect.uninterruptibleMask((restore) =>
+                  Effect.gen(function* () {
+                    const checkoutExit = yield* Effect.exit(
+                      restore(
+                        workspaceRuntime.exec(input.workspace, {
+                          command: input.checkoutCommand,
+                          timeoutSeconds: 120,
+                        }),
+                      ),
+                    );
+                    const cleanupExit = yield* Effect.exit(cleanupCredential);
+                    if (Exit.isFailure(cleanupExit)) {
+                      return yield* Effect.failCause(cleanupExit.cause);
+                    }
+                    if (Exit.isFailure(checkoutExit)) {
+                      return yield* Effect.failCause(checkoutExit.cause);
+                    }
+                    return checkoutExit.value;
+                  }),
+                );
               }).pipe(
                   Effect.flatMap((result) =>
                     result.exitCode === 0 && !result.timedOut
@@ -269,7 +299,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           },
           networkIsolation: options.networkIsolation ?? "ISOLATED",
         });
-        return yield* provisionConnectedWorker({
+        return yield* withWorkspaceCleanup(workspace, provisionConnectedWorker({
           workspace,
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
@@ -287,9 +317,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   options.repositoryAuthorization,
                 ),
               }),
-        }).pipe(
-          Effect.onError(() => workspaceRuntime.destroy(workspace).pipe(Effect.catch(() => Effect.void))),
-        );
+        }));
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
@@ -334,7 +362,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           },
           networkIsolation: options.networkIsolation ?? "ISOLATED",
         });
-        return yield* provisionConnectedWorker({
+        return yield* withWorkspaceCleanup(replacementWorkspace, provisionConnectedWorker({
           workspace: replacementWorkspace,
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
@@ -350,11 +378,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   options.repositoryAuthorization,
                 ),
               }),
-        }).pipe(
-          Effect.onError(() =>
-            workspaceRuntime.destroy(replacementWorkspace).pipe(Effect.catch(() => Effect.void)),
-          ),
-        );
+        }));
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
@@ -450,7 +474,19 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       );
     };
 
-    return { start, restart, stop } satisfies ProviderWorkerProvisionerShape;
+    const adopt: ProviderWorkerProvisionerShape["adopt"] = (binding) =>
+      workspaceRuntime.adopt(binding.workspace).pipe(
+        Effect.mapError((cause) =>
+          provisionError(
+            "adopt",
+            "Failed to commit the durable Railway provider workspace binding.",
+            cause,
+            binding.workspace.runtimeId,
+          ),
+        ),
+      );
+
+    return { start, restart, adopt, stop } satisfies ProviderWorkerProvisionerShape;
   });
 
 export function makeProviderWorkerProvisionerLive(options: ProviderWorkerProvisionerOptions) {
@@ -523,5 +559,6 @@ export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerPro
         undefined,
       ),
     ),
+  adopt: () => Effect.void,
   stop: () => Effect.void,
 } satisfies ProviderWorkerProvisionerShape);

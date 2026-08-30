@@ -1,4 +1,4 @@
-import { Effect, Fiber } from "effect";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { RailwaySandboxNotFoundError } from "../Errors";
@@ -85,129 +85,67 @@ describe("RailwaySandboxClient", () => {
     });
   });
 
-  it("reconciles and destroys a tagged sandbox when create completes remotely but its response is lost", async () => {
-    const operationId = "11111111-1111-4111-8111-111111111111";
-    let createdEnvironment: Record<string, string> | undefined;
-    let remotelyCreated = false;
-    let destroyed = false;
-    const sandbox = makeSdkSandbox({
-      exec: (command) =>
-        Promise.resolve({
-          exitCode:
-            typeof command === "string" &&
-            command.includes(operationId) &&
-            createdEnvironment?.SYNARA_WORKSPACE_CREATE_OPERATION_ID === operationId
-              ? 0
-              : 1,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          truncated: false,
-        }) as never,
+  it("keeps create cleanup retryable across transient list, connect, and destroy failures", async () => {
+    const operationId = "55555555-5555-4555-8555-555555555555";
+    let pass = 0;
+    let matchingDestroyed = false;
+    let unrelatedDestroyed = false;
+    const matching = makeSdkSandbox({
+      id: "sandbox-matching",
+      exec: async () => ({
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+      }) as never,
       destroy: async () => {
-        destroyed = true;
+        if (pass === 3) throw new Error("transient destroy failure");
+        matchingDestroyed = true;
+      },
+    });
+    const unrelated = makeSdkSandbox({
+      id: "sandbox-unrelated",
+      exec: async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+      }) as never,
+      destroy: async () => {
+        unrelatedDestroyed = true;
       },
     });
     const sdk: RailwaySdkFacade = {
-      create: async (input) => {
-        createdEnvironment = input.env;
-        await new Promise<void>((resolve) => setTimeout(resolve, 5));
-        remotelyCreated = true;
-        throw new Error("create response lost");
+      create: async () => matching,
+      list: async () => {
+        pass += 1;
+        if (pass === 1) throw new Error("transient list failure");
+        return [
+          { id: matching.id, status: matching.status, region: matching.region },
+          { id: unrelated.id, status: unrelated.status, region: unrelated.region },
+        ] as never;
       },
-      connect: async () => sandbox,
-      list: async () =>
-        remotelyCreated
-          ? ([
-              {
-                id: sandbox.id,
-                status: sandbox.status,
-                region: sandbox.region,
-              },
-            ] as never)
-          : [],
+      connect: async (runtimeId) => {
+        if (pass === 2) throw new Error("transient connect failure");
+        return runtimeId === matching.id ? matching : unrelated;
+      },
       isNotFoundError: () => false,
     };
-    const client = makeRailwaySandboxClient(config, sdk, {
-      createReconcileAttempts: 3,
-      createReconcileDelayMs: 1,
-    });
+    const client = makeRailwaySandboxClient(config, sdk);
 
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        Effect.runPromise(client.destroyByCreateOperationId(operationId)),
+      ).rejects.toBeDefined();
+    }
     await expect(
-      Effect.runPromise(
-        client.create({
-          operationId,
-          networkIsolation: "ISOLATED",
-          idleTimeoutMinutes: 30,
-          environment: {},
-        }),
-      ),
-    ).rejects.toBeDefined();
+      Effect.runPromise(client.destroyByCreateOperationId(operationId)),
+    ).resolves.toBe(true);
 
-    expect(createdEnvironment).toEqual({
-      SYNARA_WORKSPACE_CREATE_OPERATION_ID: operationId,
-    });
-    expect(destroyed).toBe(true);
-  });
-
-  it("destroys a delayed tagged sandbox when create is interrupted before returning a binding", async () => {
-    const operationId = "22222222-2222-4222-8222-222222222222";
-    let createdEnvironment: Record<string, string> | undefined;
-    let remotelyCreated = false;
-    let destroyed = false;
-    const sandbox = makeSdkSandbox({
-      exec: (command) =>
-        Promise.resolve({
-          exitCode:
-            typeof command === "string" &&
-            command.includes(operationId) &&
-            createdEnvironment?.SYNARA_WORKSPACE_CREATE_OPERATION_ID === operationId
-              ? 0
-              : 1,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          truncated: false,
-        }) as never,
-      destroy: async () => {
-        destroyed = true;
-      },
-    });
-    const sdk: RailwaySdkFacade = {
-      create: async (input) => {
-        createdEnvironment = input.env;
-        await new Promise<void>((resolve) => setTimeout(resolve, 15));
-        remotelyCreated = true;
-        return sandbox;
-      },
-      connect: async () => sandbox,
-      list: async () =>
-        remotelyCreated
-          ? ([{ id: sandbox.id, status: sandbox.status, region: sandbox.region }] as never)
-          : [],
-      isNotFoundError: () => false,
-    };
-    const client = makeRailwaySandboxClient(config, sdk, {
-      createReconcileAttempts: 30,
-      createReconcileDelayMs: 1,
-    });
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fiber = yield* client
-          .create({
-            operationId,
-            networkIsolation: "ISOLATED",
-            idleTimeoutMinutes: 30,
-            environment: {},
-          })
-          .pipe(Effect.forkChild({ startImmediately: true }));
-        yield* Effect.sleep(1);
-        yield* Fiber.interrupt(fiber);
-      }),
-    );
-
-    expect(destroyed).toBe(true);
+    expect(matchingDestroyed).toBe(true);
+    expect(unrelatedDestroyed).toBe(false);
   });
 
   it("preserves the complete exec result", async () => {

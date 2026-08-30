@@ -8,6 +8,7 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
   workspace: Schema.Struct({
     runtimeKind: Schema.Literal("railway-sandbox"),
     runtimeId: Schema.String,
+    creationOperationId: Schema.optional(Schema.String),
     lifecycleGeneration: Schema.String,
     status: Schema.Literals([
       "creating",

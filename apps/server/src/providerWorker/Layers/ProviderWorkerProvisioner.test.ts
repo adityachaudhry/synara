@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Deferred, Effect, Fiber, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkspaceRuntime, type WorkspaceRuntimeBinding } from "../../workspaceRuntime/Services/WorkspaceRuntime";
@@ -18,12 +18,14 @@ const threadId = "11111111-1111-4111-8111-111111111111" as never;
 
 function makeHarness(options?: {
   readonly failConnection?: boolean;
+  readonly failDestroy?: boolean;
 }) {
   const calls: string[] = [];
   const files = new Map<string, string>();
   const workspace = {
     create: vi.fn(() => Effect.succeed(workspaceBinding)),
     connect: vi.fn(() => Effect.succeed(workspaceBinding)),
+    adopt: vi.fn(() => Effect.void),
     exec: vi.fn(),
     writeFile: vi.fn((_binding, input: { readonly path: string; readonly data: string | Uint8Array }) =>
       Effect.sync(() => {
@@ -38,7 +40,13 @@ function makeHarness(options?: {
     ),
     stopDurableProcess: vi.fn(() => Effect.sync(() => calls.push("stop-process"))),
     keepAlive: vi.fn(() => Effect.void),
-    destroy: vi.fn(() => Effect.sync(() => calls.push("destroy"))),
+    destroy: vi.fn(() =>
+      Effect.sync(() => calls.push("destroy")).pipe(
+        Effect.andThen(
+          options?.failDestroy ? Effect.fail(new Error("destroy failed")) : Effect.void,
+        ),
+      ),
+    ),
     list: Effect.succeed([]),
   };
   const broker = {
@@ -197,6 +205,112 @@ describe("ProviderWorkerProvisioner", () => {
     expect(harness.calls).toContain("checkout-cleanup");
     expect(harness.calls).not.toContain("start");
     expect(harness.calls.at(-1)).toBe("destroy");
+  });
+
+  it("erases checkout credentials and destroys the sandbox when checkout is interrupted", async () => {
+    const harness = makeHarness();
+    const checkoutStarted = await Effect.runPromise(Deferred.make<void>());
+    harness.workspace.exec.mockImplementation((_binding, input) => {
+      if (input.command.startsWith("rm -f ")) {
+        return Effect.sync(() => {
+          harness.calls.push("checkout-cleanup");
+          harness.files.delete("/tmp/synara-repository-credential.gitconfig");
+          return {
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            truncated: false,
+          };
+        });
+      }
+      return Deferred.succeed(checkoutStarted, undefined).pipe(
+        Effect.andThen(Effect.never),
+      );
+    });
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+        repositoryAuthorization: "token repository-secret",
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* provisioner
+          .start({
+            threadId,
+            lifecycleGeneration: "generation-1",
+            repositoryBinding: {
+              kind: "git-subdirectory",
+              origin: "https://git.example.com",
+              owner: "acme",
+              repository: "portfolio",
+              ref: "main",
+              path: "companies/acme",
+            },
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(checkoutStarted);
+        yield* Fiber.interrupt(fiber);
+      }),
+    );
+
+    expect(harness.calls).toContain("checkout-cleanup");
+    expect(harness.calls).not.toContain("start");
+    expect(harness.calls.at(-1)).toBe("destroy");
+    expect([...harness.files.values()].join("\n")).not.toContain("repository-secret");
+  });
+
+  it("surfaces sandbox destruction failure after credential cleanup fails", async () => {
+    const harness = makeHarness({ failDestroy: true });
+    harness.workspace.exec.mockImplementation((_binding, input) =>
+      input.command.startsWith("rm -f ")
+        ? Effect.fail(new Error("credential erase failed"))
+        : Effect.succeed({
+            exitCode: 0,
+            stdout:
+              "__SYNARA_CHECKOUT_MODE__=partial\n__SYNARA_CHECKOUT_COMMIT__=0123456789abcdef0123456789abcdef01234567\n",
+            stderr: "",
+            timedOut: false,
+            truncated: false,
+          }),
+    );
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+        repositoryAuthorization: "token repository-secret",
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    const result = await Effect.runPromise(
+      provisioner
+        .start({
+          threadId,
+          lifecycleGeneration: "generation-1",
+          repositoryBinding: {
+            kind: "git-subdirectory",
+            origin: "https://git.example.com",
+            owner: "acme",
+            repository: "portfolio",
+            ref: "main",
+            path: "companies/acme",
+          },
+        })
+        .pipe(Effect.result),
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { operation: "workspace.cleanup" },
+    });
+    expect(harness.calls).not.toContain("start");
+    expect(harness.calls.at(-1)).toBe("destroy");
+    expect(harness.files.get("/tmp/synara-repository-credential.gitconfig")).toContain(
+      "repository-secret",
+    );
   });
 
   it("uploads an atomic worker and private config before waiting for its fenced connection", async () => {

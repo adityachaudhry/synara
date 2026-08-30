@@ -180,6 +180,9 @@ export const makeRoutedPiAdapter = Effect.gen(function* () {
       yield* persistRemoteBinding({ threadId: input.threadId, lifecycleGeneration, binding }).pipe(
         Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
       );
+      yield* provisioner.adopt(binding).pipe(
+        Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
+      );
       remoteByThread.set(input.threadId, binding);
       return session;
     }).pipe(

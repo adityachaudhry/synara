@@ -5,6 +5,7 @@ import type { WorkspaceRuntimeError } from "../Errors";
 export interface WorkspaceRuntimeBinding {
   readonly runtimeKind: "railway-sandbox";
   readonly runtimeId: string;
+  readonly creationOperationId?: string;
   readonly lifecycleGeneration: string;
   readonly status:
     | "creating"
@@ -66,6 +67,9 @@ export interface WorkspaceRuntimeShape {
   readonly connect: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
+  readonly adopt: (
+    binding: WorkspaceRuntimeBinding,
+  ) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly exec: (
     binding: WorkspaceRuntimeBinding,
     input: WorkspaceExecInput,

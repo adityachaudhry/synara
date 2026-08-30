@@ -1,6 +1,8 @@
 import { Data, Effect, Layer } from "effect";
 
 import { WorkspaceRuntimeError } from "./Errors";
+import { WorkspaceCreationIntentRepositoryLive } from "../persistence/Layers/WorkspaceCreationIntents";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite";
 import { makeRailwaySandboxClientLive } from "./Layers/RailwaySandboxClient";
 import { makeWorkspaceRuntimeLive } from "./Layers/WorkspaceRuntime";
 import { WorkspaceRuntime, type WorkspaceRuntimeShape } from "./Services/WorkspaceRuntime";
@@ -139,6 +141,9 @@ async function main() {
   }
   const runtimeLayer = makeWorkspaceRuntimeLive(config).pipe(
     Layer.provide(makeRailwaySandboxClientLive(config)),
+    Layer.provide(
+      WorkspaceCreationIntentRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory)),
+    ),
   );
   const program = Effect.gen(function* () {
     const runtime = yield* WorkspaceRuntime;

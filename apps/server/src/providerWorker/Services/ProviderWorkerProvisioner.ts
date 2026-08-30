@@ -19,6 +19,9 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     input: ProviderWorkerProvisionInput,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
+  readonly adopt: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
