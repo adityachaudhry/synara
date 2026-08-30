@@ -12093,7 +12093,11 @@ export default function ChatView({
       {/* Thread-level errors render as a toast (see `useThreadErrorToast`) so they
           never displace the transcript. */}
       <ProviderHealthBanner
-        status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
+        status={
+          !simplifiedComposer && shouldShowProviderHealthBanner
+            ? visibleActiveProviderStatus
+            : null
+        }
         onDismiss={dismissActiveProviderHealthBanner}
       />
       <RateLimitBanner

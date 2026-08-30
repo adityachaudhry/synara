@@ -18,6 +18,7 @@ export function SynaraLogo({ className, ...props }: SVGProps<SVGSVGElement>) {
         xmlns="http://www.w3.org/2000/svg"
         aria-hidden={ariaLabel ? undefined : true}
         {...props}
+        aria-label={ariaLabel ? "Glasswing" : undefined}
         className={cn("shrink-0", className)}
       >
         <image href={hostSidebar.brandIconUrl} x="0" y="0" width="180" height="180" />
