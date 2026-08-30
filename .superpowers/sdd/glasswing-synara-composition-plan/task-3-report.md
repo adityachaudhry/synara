@@ -7,6 +7,7 @@ Implemented and committed the generic distributed Railway Pi runtime as:
 - `0bd6ce101e2ba8bce1ad7101558155f80c9175ec` — `feat(server): add distributed Railway Pi runtime`
 - `c5fb7269b` — `fix(server): harden distributed Pi runtime lifecycle`
 - `6ca8a9cb3` — `fix(server): persist distributed workspace cleanup ownership`
+- `c63fc028a` — `fix(server): make workspace reconciliation crash-safe`
 
 The implementation is limited to one generic Railway workspace adapter, one provider-worker protocol/broker/provisioner chain, and one routed Pi seam. Existing local Pi sessions and every non-Pi provider retain their upstream paths. Remote execution is admitted only when a Pi session carries the canonical repository binding introduced by Task 2.
 
@@ -47,6 +48,15 @@ No Railway, Gitea, deployment, or other external infrastructure was mutated.
 
 The SQLite intent is committed before `Sandbox.create` begins, and it contains no token, repository credential, worker bootstrap credential, or environment payload. The same operation ID is placed in the Railway sandbox's SDK-supported environment marker. If the controller is interrupted before receiving a binding, its in-memory reservation disappears but the SQLite row does not. A restarted controller reloads that row and keeps scanning; an empty inventory scan leaves the row intact forever rather than treating absence as terminal. When the delayed sandbox becomes visible, its operation marker identifies it, destruction is confirmed, and only then is the row removed. If the SDK response arrived first, the stored runtime ID gives the restarted controller a direct destruction path. Normal successful sessions clear the row only after their existing provider runtime binding is durable.
 
+## Third review atomicity hardening
+
+- Marker discovery is now read-only: `RailwaySandboxClient` returns the exact matching runtime ID without destroying anything. The workspace reconciler first persists that ID into the existing creation intent, then destroys that exact runtime, treats exact-ID `NotFound` as terminal, and only then clears the intent. A crash after discovery, after binding, or after destruction therefore has a durable restart state and converges without touching unrelated runtimes.
+- Active create ownership is reserved in memory before the intent becomes visible in SQLite. The insert runs inside the existing uninterruptible create boundary; failed or duplicate inserts remove the reservation before returning failure. Duplicate operation IDs now fail the database insert instead of silently sharing one intent.
+
+### Final ordering invariant
+
+Create follows `reserve operation ID in memory -> insert durable intent -> invoke Railway create -> bind returned runtime ID -> persist provider runtime binding -> adopt/clear intent`. Reconciliation skips every in-memory reservation and follows `discover marker without mutation -> durably bind exact runtime ID -> destroy exact runtime ID (NotFound is terminal) -> clear intent`. No step that loses the only locator precedes the durable write needed by the next restart.
+
 ## Security and scope boundaries
 
 - Worker bootstrap credentials stay in the server/worker boundary, are initially stored in the sandbox config with mode `0600`, are deleted at worker startup, and are generation-fenced and revocable. Reconnect is permitted only for the exact pre-authenticated fence.
@@ -85,6 +95,8 @@ The blocking-review fixes also followed focused RED/GREEN cycles:
 - interruption-safe checkout cleanup: **2 failed, 7 passed** before fiber-exit finalization and authoritative destroy failure reporting; the new interruption and double-cleanup-failure cases then passed;
 - durable create ownership: the persistence and Railway cleanup tests first failed on the missing repository/method, then the workspace runtime suite recorded **3 failed, 7 passed** because no intent preceded create, no operation ID was returned, and interruption lost ownership; the minimum durable boundary made all cases green;
 - migration-lineage verification exposed **4 expected-list failures** after adding migration 98; the lineage expectations were updated and all 19 migration tests passed.
+- marker cleanup atomicity first failed because the Railway seam still destroyed and returned a boolean; focused crash/restart coverage was added for discovery-before-bind, bind-before-destroy, and destroy-before-clear before the read-only discovery seam was implemented;
+- active-create publication recorded **2 failed, 16 passed**: reconciliation reached an intent while its insert was blocked, and a duplicate insert incorrectly succeeded. Reserving before publication and restoring the SQLite uniqueness failure made both cases green.
 
 ## Final verification
 
@@ -95,6 +107,8 @@ All commands used Node 24 in `PATH` and Bun 1.3.12 through `npx`. `bun test` was
 - Full `packages/contracts` suite: **20 files, 249 tests passed**.
 - Full `packages/shared` suite: **59 files; 565 passed, 1 skipped**.
 - Final round-two full `apps/server` suite: **378 files passed, 3 skipped; 4,192 tests passed, 16 skipped**.
+- Round-three focused workspace runtime, Railway adapter, persistence/migrations, provisioner, and routed Pi suites: **6 files, 68 tests passed**.
+- Final round-three full `apps/server` suite: **378 files passed, 3 skipped; 4,197 tests passed, 16 skipped**.
 - Generic server build: passed, including `dist/provider-worker/workerMain.mjs`.
 - Post-build archive extraction/install and exact-artifact startup probe: **1 test passed**, including header-only authentication and proof that the extracted worker deleted its bootstrap file before registration.
 - Product-coupling scan over the new runtime paths for Glasswing/ChipSage/SuperTokens/company-catalog/Gitea identifiers: no matches.
