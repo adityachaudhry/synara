@@ -14,18 +14,23 @@ The external session uses the existing signed bearer credential, persisted sessi
 
 - Missing, disabled, or incorrect external service secrets fail closed.
 - Assertions reject blank/invalid subjects and emails, expired assertions, lifetimes over 15 minutes, reused nonces, and every unexpected property. Repository coordinates therefore cannot be smuggled into identity assertions.
-- Nonces are consumed atomically in the Synara process and retained until assertion expiry. A secret-keyed, opaque deterministic session ID also makes the existing durable session primary key reject the same nonce after a controller restart. Session issuance failures remain fail closed because the in-process nonce stays consumed.
+- Nonces are consumed atomically in the Synara process and retained until assertion expiry. A secret-keyed, opaque deterministic session ID also makes the existing durable session primary key reject the same nonce after a controller restart. The persisted collision is reported as `409` replay without exposing session data. Session issuance failures remain fail closed because the in-process nonce stays consumed.
+- Session claims and persisted rows receive the assertion's absolute expiry. Delayed or backward-clock issuance therefore cannot extend authority beyond `expiresAt`.
 - `allowedProjectIds` is carried in the signed bearer claim and copied into the signed one-use WebSocket ticket. `undefined` preserves existing owner/local behavior; an explicit empty list is deny-all.
-- Snapshot/project/thread outputs are filtered. Project, thread, turn, provider, terminal, file, attachment, dev-server, and event-stream access is admitted only when its project can be resolved inside the session scope. Global administrative/server RPCs are denied to project-scoped sessions; the small global allowlist contains only filtered subscriptions/snapshots and globally safe composer capability metadata.
+- Snapshot/project/thread outputs are filtered. Every supplied locator is independently checked, so an allowed project/thread cannot authorize a different cwd. Dispatch checks the real nested `{ command }` wire payload, and filesystem browse targets must remain inside the authorized cwd.
+- Project-scoped sessions are denied controller-local terminal/dev-server execution, GitHub provisioning, path-bearing worktree operations, automation management, and the unscoped device-frame socket. Unscoped device-frame sessions retain the full authenticated session and run through the existing revocable connection lifecycle.
+- File, attachment, provider, voice, local-image, and event-stream access stays project-bound. Local-image temp/generated roots cannot override the authorized workspace. New `thread.deleted` events carry project ownership so the subscriber can receive its own deletion after projection removal without seeing another project's deletion.
+- Global administrative/server RPCs are denied to project-scoped sessions; the small global allowlist contains only output-filtered subscriptions/snapshots and globally safe composer capability metadata.
 - Existing local startup-token and non-external sessions keep their prior behavior.
 - The external project resolver retains Task 2 ownership and admission policy. Runtime wiring supplies fail-closed repository origin/owner allowlists from `SYNARA_EXTERNAL_REPOSITORY_ALLOWED_ORIGINS` and `SYNARA_EXTERNAL_REPOSITORY_ALLOWED_OWNERS`; no second resolver was introduced.
 - `SYNARA_EXTERNAL_AUTH_SECRET` is omitted from startup logs and is not added to provider child environment allowlists.
 
 ## Provenance
 
-- The server reports the release and source commit supplied as `SYNARA_RELEASE` and `SYNARA_COMMIT`, falling back to the package version and `development` only outside a staged build.
+- The server reports the release and source commit supplied as `SYNARA_RELEASE` and `SYNARA_COMMIT`, falling back to the package version and `development` only outside a staged build. Canary now supplies both the desktop display hash and canonical `SYNARA_COMMIT`.
 - Server and provider worker provenance share one implementation and assert the existing WebSocket/provider-worker protocol epochs agree.
-- The generated React embed package provenance preserves its compatibility keys and adds the common `{ release, commit, protocolVersion }` fields.
+- The trusted controller forwards only `SYNARA_RELEASE` and `SYNARA_COMMIT` through the existing distributed-runtime config into the real Railway sandbox create environment; other `SYNARA_*` values, including the external auth secret, remain forbidden.
+- The generated React embed package provenance preserves its compatibility keys and adds the common `{ release, commit, protocolVersion }` fields. Package generation now fails when protocol provenance is absent instead of silently assuming version `1`.
 
 ## TDD evidence
 
@@ -39,6 +44,17 @@ RED was recorded before implementation for:
 
 GREEN focused regression locks cover secret rejection, assertion validation and nonce replay, session attribution/scope propagation, one-use WebSocket tickets, canonical resolver response, deny-all and cross-project scope behavior, configuration/log redaction, and release alignment.
 
+The hardening review additionally recorded RED before each minimal fix for:
+
+- trusted release provenance missing from the actual sandbox create environment;
+- delayed/backward-clock issuance extending assertion expiry and restart replay returning `500`;
+- allowed project/thread locators bypassing an unrelated cwd at dev-server, terminal, provider, and voice sinks;
+- scoped local-image reads escaping through global temp/generated roots and scoped device-frame access accepting an arbitrary UDID;
+- the nested dispatch wire shape being denied, absolute filesystem browse targets escaping, and deletion events disappearing after projection removal;
+- scoped GitHub provisioning, worktree/handoff, terminal/dev-server execution, and automation management being admitted.
+
+Each case is GREEN in the focused suites below.
+
 Final verification used Node 24 and Bun 1.3.12 via `npx`:
 
 - `bun run --cwd apps/server test`: 384 files passed, 3 skipped; 4,254 tests passed, 16 skipped.
@@ -48,6 +64,15 @@ Final verification used Node 24 and Bun 1.3.12 via `npx`:
 - `git diff --check`: passed.
 
 Per instruction, formatting, lint, and typecheck commands were not run.
+
+Hardening-fix verification, also using Node 24 and Bun 1.3.12 via `npx`:
+
+- 14 focused server auth/route/worker/provenance/lifecycle files: 124 tests passed.
+- contracts orchestration schema: 44 tests passed.
+- Canary tooling: 8 tests passed.
+- React embed package writer: 5 tests passed.
+- `bun run --cwd apps/server build`: passed.
+- `git diff --check`: passed.
 
 ## Deliberate limits and remaining operational requirements
 
