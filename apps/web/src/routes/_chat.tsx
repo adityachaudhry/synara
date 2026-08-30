@@ -596,8 +596,13 @@ function ChatRouteLayout() {
   // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
   // `data-sidebar-side` on the provider selects the seam geometry.
+  // Embedded builds inherit the host pane height; standalone builds own the viewport.
   const mainContentShell = (
-    <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
+    <div
+      className={`relative flex min-h-0 min-w-0 flex-1 ${
+        import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? "h-full" : "h-svh"
+      }`}
+    >
       {isEditorView || !sidebarPresentation.showSeamRail ? null : (
         <SidebarInstanceProvider
           side="left"
@@ -616,7 +621,11 @@ function ChatRouteLayout() {
       defaultOpen
       open={resolvedSidebarOpen}
       onOpenChange={setSidebarOpen}
-      className="bg-[var(--app-shell-background)]"
+      className={
+        import.meta.env.VITE_SYNARA_EMBEDDED === "true"
+          ? "h-full min-h-0 bg-[var(--app-shell-background)]"
+          : "bg-[var(--app-shell-background)]"
+      }
       data-sidebar-side="left"
       style={
         sidebarPresentation.width

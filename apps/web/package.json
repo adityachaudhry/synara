@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:embed": "node scripts/watch-embed-package.mjs",
     "build": "vite build",
     "build:embed": "vite build --config vite.embed.config.ts && tsc -p tsconfig.embed.json && node scripts/write-embed-package.mjs",
     "prepare": "effect-language-service patch",

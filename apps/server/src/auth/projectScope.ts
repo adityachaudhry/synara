@@ -217,6 +217,7 @@ export function authorizeProjectScopedRpc(input: {
     const commandType = stringField(payload, "type");
     if (
       (commandType === "thread.create" ||
+        commandType === "thread.fork.create" ||
         commandType === "thread.meta.update" ||
         commandType === "thread.turn.start" ||
         commandType === "thread.message.edit-and-resend") &&
@@ -225,6 +226,41 @@ export function authorizeProjectScopedRpc(input: {
       !hasSafeScopedModelConfiguration(payload as Record<string, unknown>)
     ) {
       return false;
+    }
+    if (commandType === "thread.fork.create" && payload && typeof payload === "object") {
+      const fork = payload as Record<string, unknown>;
+      const sourceThreadId = stringField(fork, "sourceThreadId");
+      const sidechatSourceThreadId = stringField(fork, "sidechatSourceThreadId");
+      if (
+        sourceThreadId === undefined ||
+        sidechatSourceThreadId !== sourceThreadId ||
+        projectId === undefined
+      ) {
+        return false;
+      }
+      const sourceThreadOption = yield* input.query
+        .getThreadShellById(sourceThreadId as never)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isNone(sourceThreadOption)) return false;
+      const sourceThread = sourceThreadOption.value;
+      if (
+        !scope.has(sourceThread.projectId) ||
+        projectId !== sourceThread.projectId ||
+        sourceThread.sidechatSourceThreadId !== null
+      ) {
+        return false;
+      }
+      for (const field of [
+        "envMode",
+        "branch",
+        "worktreePath",
+        "workingDirectory",
+        "associatedWorktreePath",
+        "associatedWorktreeBranch",
+        "associatedWorktreeRef",
+      ] as const) {
+        if (fork[field] !== sourceThread[field]) return false;
+      }
     }
     if (commandType === "thread.create" || commandType === "thread.meta.update") {
       if (
@@ -239,7 +275,11 @@ export function authorizeProjectScopedRpc(input: {
         return false;
       }
     }
-    if (threadId !== undefined && commandType !== "thread.create") {
+    if (
+      threadId !== undefined &&
+      commandType !== "thread.create" &&
+      commandType !== "thread.fork.create"
+    ) {
       located = true;
       const allowed = yield* threadIsAllowed(threadId);
       if (!allowed) return false;

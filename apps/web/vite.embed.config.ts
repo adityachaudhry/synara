@@ -14,14 +14,18 @@ const useSyncExternalStoreWithSelectorAdapter = path.resolve(
   "src/lib/useSyncExternalStoreWithSelectorAdapter.ts",
 );
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
     react(),
-    babel({
-      parserOpts: { plugins: ["typescript", "jsx"] },
-      presets: [reactCompilerPreset()],
-    }),
+    ...(mode === "development"
+      ? []
+      : [
+          babel({
+            parserOpts: { plugins: ["typescript", "jsx"] },
+            presets: [reactCompilerPreset()],
+          }),
+        ]),
     tailwindcss(),
     centralIconPrunePlugin(),
   ],
@@ -43,11 +47,22 @@ export default defineConfig({
     ],
     tsconfigPaths: true,
   },
+  ...(mode === "development"
+    ? {
+        worker: {
+          format: "es" as const,
+          rolldownOptions: { output: { entryFileNames: "assets/[name].js" } },
+        },
+      }
+    : {}),
   build: {
     outDir: "dist-embed/build",
     emptyOutDir: true,
     copyPublicDir: false,
     cssCodeSplit: false,
+    minify: mode === "development" ? false : undefined,
+    cssMinify: mode === "development" ? false : undefined,
+    reportCompressedSize: mode !== "development",
     lib: {
       entry: path.resolve(import.meta.dirname, "src/embeddedBundle.ts"),
       formats: ["es"],
@@ -57,12 +72,18 @@ export default defineConfig({
     rolldownOptions: {
       external: /^react(?:-dom)?(?:\/.*)?$/,
       output: {
-        assetFileNames: (assetInfo) =>
-          assetInfo.names?.includes("style.css")
-            ? "style.css"
-            : "assets/[name]-[hash][extname]",
+        assetFileNames: (assetInfo) => {
+          if (assetInfo.names?.includes("style.css")) return "style.css";
+          if (
+            mode === "development" &&
+            assetInfo.names?.some((name) => name.includes("composerImagePreparation.worker"))
+          ) {
+            return "assets/composerImagePreparation.worker.js";
+          }
+          return "assets/[name]-[hash][extname]";
+        },
       },
       checks: { pluginTimings: false },
     },
   },
-});
+}));

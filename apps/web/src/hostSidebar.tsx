@@ -4,6 +4,11 @@ export interface SynaraHostSidebar {
   readonly widthPx: number;
   readonly lockedOpen?: boolean;
   readonly showProjectTitle?: boolean;
+  readonly projectThreadsOnly?: boolean;
+  readonly brandIconUrl?: string;
+  readonly simplifiedComposer?: boolean;
+  readonly chatFontSizePx?: number;
+  readonly filesPane?: ReactNode;
   readonly header?: ReactNode;
   readonly footer?: ReactNode;
 }

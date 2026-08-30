@@ -16,6 +16,7 @@ import type { SidebarThreadSummary } from "../types";
 import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
+import { useSynaraHostSidebar } from "../hostSidebar";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -34,6 +35,7 @@ function ProviderAvatarWithTerminal({
   terminalStatus: SidebarThreadTerminalStatus | null;
   terminalCount: number;
 }) {
+  const hostSidebar = useSynaraHostSidebar();
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const handoffSourceProvider = thread.handoff?.sourceProvider ?? null;
   const handoffTooltip = resolveThreadHandoffBadgeLabel(thread);
@@ -45,9 +47,13 @@ function ProviderAvatarWithTerminal({
   const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
 
   const hasHandoff = Boolean(handoffSourceProvider);
+  const useLargerBrandIcon = Boolean(hostSidebar?.brandIconUrl) && provider === "pi";
   const containerClass = hasHandoff
     ? "relative inline-flex h-3 w-4.5 shrink-0 items-center"
-    : "relative inline-flex size-3 shrink-0 items-center justify-center";
+    : cn(
+        "relative inline-flex shrink-0 items-center justify-center",
+        useLargerBrandIcon ? "size-4" : "size-3",
+      );
 
   const avatarNode = hasHandoff ? (
     <span className={containerClass}>
@@ -60,7 +66,7 @@ function ProviderAvatarWithTerminal({
     </span>
   ) : (
     <span className={containerClass}>
-      <ProviderIcon provider={provider} className="size-3" />
+      <ProviderIcon provider={provider} className={useLargerBrandIcon ? "size-4" : "size-3"} />
     </span>
   );
 

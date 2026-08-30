@@ -5759,10 +5759,14 @@ export default function Sidebar() {
     : null;
   const projectContextMenuHasOpenServer =
     projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
+  const hostedProjectSidebarData =
+    hostSidebar?.projectThreadsOnly === true && hostProject
+      ? (surfaceProjectSidebarDataById.get(ProjectId.makeUnsafe(hostProject.projectId)) ?? null)
+      : null;
 
   return (
     <>
-      {isElectron ? (
+      {hostSidebar?.projectThreadsOnly !== true ? (isElectron ? (
         <>
           <SidebarHeader
             className={cn(
@@ -5778,7 +5782,7 @@ export default function Sidebar() {
         <SidebarHeader className="gap-3 px-3 py-2.5 font-system-ui sm:gap-2.5 sm:px-4 sm:py-3">
           {wordmark}
         </SidebarHeader>
-      )}
+      )) : null}
 
       {hostSidebar?.header ? (
         <SidebarHeader data-synara-host-sidebar-header>{hostSidebar.header}</SidebarHeader>
@@ -5818,7 +5822,36 @@ export default function Sidebar() {
             </Alert>
           </SidebarGroup>
         ) : null}
-        {isOnSettings ? (
+        {hostSidebar?.projectThreadsOnly === true && !isOnSettings ? (
+          <>
+            <SidebarGroup className="px-1.5 pt-1 pb-1.5">
+              <SidebarMenu className="gap-0.5">
+                <SidebarPrimaryAction
+                  icon={NewThreadIcon}
+                  iconClassName="size-3.5"
+                  label="New thread"
+                  onClick={handlePrimaryNewThread}
+                  onMouseEnter={prefetchModelsForPrimaryNewThread}
+                  onFocus={prefetchModelsForPrimaryNewThread}
+                />
+              </SidebarMenu>
+            </SidebarGroup>
+            <SidebarGroup className="px-1.5 py-1.5">
+              <SidebarMenu className="gap-1">
+                {hostedProjectSidebarData?.visibleEntries
+                  .filter((entry) => entry.thread.sidechatSourceThreadId === null)
+                  .map((entry) => {
+                    return renderThreadRow(
+                      entry.thread,
+                      hostedProjectSidebarData.orderedProjectThreadIds,
+                      entry.depth,
+                      true,
+                    );
+                  })}
+              </SidebarMenu>
+            </SidebarGroup>
+          </>
+        ) : isOnSettings ? (
           <SidebarGroup className="p-0">
             <SettingsSidebarNav
               activeSection={activeSettingsSection}
@@ -6127,7 +6160,11 @@ export default function Sidebar() {
             </div>
           </>
         )}
-        {!isOnSettings && !isOnStudio && !activityViewEnabled && chatsSectionVisible ? (
+        {hostSidebar?.projectThreadsOnly !== true &&
+        !isOnSettings &&
+        !isOnStudio &&
+        !activityViewEnabled &&
+        chatsSectionVisible ? (
           // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it
           // animates in step with the keyed surface wrapper above.
           <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
@@ -6251,6 +6288,7 @@ export default function Sidebar() {
         <SidebarFooter data-synara-host-sidebar-footer>{hostSidebar.footer}</SidebarFooter>
       ) : null}
 
+      {hostSidebar?.projectThreadsOnly !== true ? (
       <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
         <SidebarMenu>
           <SidebarMenuItem>
@@ -6323,6 +6361,7 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+      ) : null}
 
       <CreateProjectDialog
         open={createProjectDialogOpen}

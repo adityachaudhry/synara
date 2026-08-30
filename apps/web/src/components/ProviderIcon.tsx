@@ -9,6 +9,7 @@ import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { useSynaraHostSidebar } from "../hostSidebar";
 import {
   AntigravityIcon,
   ClaudeAI,
@@ -63,6 +64,16 @@ const OpenCodeProviderIcon = ({
   );
 };
 
+const HostAwarePiIcon = (props: SVGProps<SVGSVGElement>) => {
+  const hostSidebar = useSynaraHostSidebar();
+  if (!hostSidebar?.brandIconUrl) return <PiIcon {...props} />;
+  return (
+    <svg viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg" {...props}>
+      <image href={hostSidebar.brandIconUrl} x="0" y="0" width="180" height="180" />
+    </svg>
+  );
+};
+
 export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
@@ -72,7 +83,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   droid: DroidIcon,
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
-  pi: PiIcon,
+  pi: HostAwarePiIcon,
 };
 
 export function providerIconToneClassName(

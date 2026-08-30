@@ -129,6 +129,8 @@ import {
   saveConfirmedCustomBinaryPaths,
 } from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
+import { useSynaraHostSidebar } from "../hostSidebar";
 import { isScrollContainerNearBottom } from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
@@ -1206,6 +1208,8 @@ export default function ChatView({
   onChangeThreadInSplitPane,
   onCloseThreadPane,
 }: ChatViewProps) {
+  const hostSidebar = useSynaraHostSidebar();
+  const simplifiedComposer = hostSidebar?.simplifiedComposer === true;
   // Prop defaults are resolved here instead of in the destructuring pattern: an
   // AssignmentPattern in the parameter list makes React Compiler bail out (silently —
   // `panicThreshold` is unset) on this entire component, the hottest one in the app.
@@ -1839,20 +1843,22 @@ export default function ChatView({
   );
 
   const localDraftError = serverThread ? null : (localDraftErrorsByThreadId[threadId] ?? null);
+  const hostProjectModelSelection =
+    readSynaraRuntimeConfig().project?.defaultModelSelection ?? null;
   const localDraftThread = useMemo(
     () =>
       draftThread
         ? buildLocalDraftThread(
             threadId,
             draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? {
+            fallbackDraftProject?.defaultModelSelection ?? hostProjectModelSelection ?? {
               provider: "codex",
               model: DEFAULT_MODEL_BY_PROVIDER.codex,
             },
             localDraftError,
           )
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
+    [draftThread, fallbackDraftProject?.defaultModelSelection, hostProjectModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
   // Local threads reconcile their stored branch to the shared checkout as soon as the
@@ -2264,8 +2270,9 @@ export default function ChatView({
 
   const sessionProvider = activeThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
-  const threadProvider =
-    activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
+  const projectModelSelection =
+    activeProject?.defaultModelSelection ?? hostProjectModelSelection;
+  const threadProvider = activeThread?.modelSelection.provider ?? projectModelSelection?.provider ?? null;
   const hasThreadStarted = Boolean(
     activeThread &&
     (activeThread.latestTurn !== null ||
@@ -2280,7 +2287,7 @@ export default function ChatView({
     confirmedCustomBinaryPathsByProvider,
   );
   const preferredDraftProvider =
-    selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+    projectModelSelection?.provider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const selectedProvider = useMemo<ProviderKind>(
     () =>
@@ -2309,7 +2316,6 @@ export default function ChatView({
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
-    const projectModelSelection = activeProject?.defaultModelSelection ?? null;
     const draftSelections = composerDraft.modelSelectionByProvider;
 
     const resolveHint = (provider: ProviderKind): string | null =>
@@ -2329,15 +2335,17 @@ export default function ChatView({
       pi: resolveHint("pi"),
     };
   }, [
-    activeProject?.defaultModelSelection,
     activeThread?.modelSelection,
     composerDraft.modelSelectionByProvider,
+    projectModelSelection,
   ]);
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: resolvedThreadWorktreePath,
     activeProjectCwd: activeProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
+  const hostCustomModelsByProvider =
+    readSynaraRuntimeConfig().project?.customModelsByProvider;
   const {
     customModelsByProvider,
     modelOptionsByProvider,
@@ -2351,13 +2359,14 @@ export default function ChatView({
     discoveryEnabled: isModelPickerOpen,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: composerModelHintByProvider,
+    ...(hostCustomModelsByProvider ? { customModelsByProvider: hostCustomModelsByProvider } : {}),
     agentDiscoveryPolicy: "eager-core",
   });
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
     selectedProvider,
     threadModelSelection: activeThread?.modelSelection,
-    projectModelSelection: activeProject?.defaultModelSelection,
+    projectModelSelection,
     customModelsByProvider,
     availableModelOptionsByProvider: modelOptionsByProvider,
   });
@@ -2438,10 +2447,10 @@ export default function ChatView({
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
   const persistedComposerModelSelection =
     sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
-      ? activeProject?.defaultModelSelection?.provider === selectedProvider
-        ? activeProject.defaultModelSelection
+      ? projectModelSelection?.provider === selectedProvider
+        ? projectModelSelection
         : null
-      : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
+      : (activeThread?.modelSelection ?? projectModelSelection);
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
@@ -11116,7 +11125,7 @@ export default function ChatView({
         onToggleFastMode={toggleFastMode}
         onInteractionModeChange={handleInteractionModeChange}
       />
-      {!isVoiceRecording && !isVoiceTranscribing ? (
+      {!simplifiedComposer && !isVoiceRecording && !isVoiceTranscribing ? (
         <RuntimeUsageControls
           {...runtimeUsageControlsProps}
           className="shrink-0"
@@ -11167,6 +11176,7 @@ export default function ChatView({
       </span>
     ) : null;
   const showEmptyLandingControls =
+    !simplifiedComposer &&
     isCenteredEmptyLanding &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
@@ -11738,7 +11748,9 @@ export default function ChatView({
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
-                      {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
+                      {!simplifiedComposer &&
+                      showVoiceNotesControl &&
+                      (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
                           disabled={isComposerApprovalState || isConnecting || isSendBusy}
                           isRecording={isVoiceRecording}
@@ -11834,7 +11846,7 @@ export default function ChatView({
                           )
                         ) : (
                           <>
-                            {showVoiceNotesControl ? (
+                            {!simplifiedComposer && showVoiceNotesControl ? (
                               <ComposerVoiceButton
                                 disabled={isComposerApprovalState || isConnecting || isSendBusy}
                                 isRecording={isVoiceRecording}
@@ -11961,18 +11973,24 @@ export default function ChatView({
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
-          activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
+          activeProjectName={
+            isEditorRail || simplifiedComposer ? undefined : activeProjectDisplayName
+          }
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
             : {})}
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
           hideSidebarControls={isEditorRail}
-          hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
+          hideHandoffControls={
+            simplifiedComposer || terminalWorkspaceTerminalTabActive || isEditorRail
+          }
           minimalChrome={isCenteredEmptyLanding}
           isGitRepo={isGitRepo}
           openInTarget={threadWorkspaceCwd}
-          activeProjectScripts={isEditorRail ? undefined : activeProjectScripts}
+          activeProjectScripts={
+            isEditorRail || simplifiedComposer ? undefined : activeProjectScripts
+          }
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
@@ -11987,16 +12005,18 @@ export default function ChatView({
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
-          showGitActions={showGitActions && !isEditorRail}
+          showGitActions={showGitActions && !isEditorRail && !simplifiedComposer}
           showDiffToggle={!isEditorRail}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
           rightDockOpen={rightDockOpen}
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
-          environment={isEditorRail ? null : environmentHeaderState}
+          environment={simplifiedComposer || isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
-            surfaceMode === "single" && onSplitSurface
+            simplifiedComposer
+              ? null
+              : surfaceMode === "single" && onSplitSurface
               ? {
                   kind: "split",
                   label: "Split chat",
@@ -12119,7 +12139,7 @@ export default function ChatView({
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
+                    <SynaraLogo aria-label="Glasswing" className="size-14" />
                     <h2
                       data-testid="empty-landing-heading"
                       className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
@@ -12225,7 +12245,7 @@ export default function ChatView({
                     onIsAtEndChange={onIsAtEndChange}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}
-                    chatFontSizePx={settings.chatFontSizePx}
+                    chatFontSizePx={hostSidebar?.chatFontSizePx ?? settings.chatFontSizePx}
                     timestampFormat={timestampFormat}
                     workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
                     emptyStateContent={transcriptEmptyStateContent}

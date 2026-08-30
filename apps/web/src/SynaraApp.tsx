@@ -79,8 +79,8 @@ export function SynaraApp({
     height: "100%",
     minWidth: 0,
     minHeight: 0,
-    ...createHostThemeStyle(hostTheme),
     ...embeddedTypographyStyle(embeddedBaseFontSizePx),
+    ...createHostThemeStyle(hostTheme),
   } as CSSProperties;
 
   return (

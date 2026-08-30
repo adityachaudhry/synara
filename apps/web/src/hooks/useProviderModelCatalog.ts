@@ -66,6 +66,8 @@ export function useProviderModelCatalog(input: {
    * Picker surfaces can omit this to use the visible-provider list from settings.
    */
   prefetchProviders?: ReadonlyArray<ProviderKind>;
+  /** Host-supplied models merged with the user's configured custom models. */
+  customModelsByProvider?: Partial<Record<ProviderKind, readonly string[]>>;
   /** Preserve eager Claude/Codex agent discovery on surfaces that already prefetch both. */
   agentDiscoveryPolicy?: "selected" | "eager-core";
 }): ProviderModelCatalog {
@@ -73,7 +75,15 @@ export function useProviderModelCatalog(input: {
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
-  const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
+  const customModelsByProvider = useMemo(() => {
+    const configured = getCustomModelsByProvider(settings);
+    return Object.fromEntries(
+      Object.entries(configured).map(([provider, models]) => [
+        provider,
+        [...new Set([...models, ...(input.customModelsByProvider?.[provider as ProviderKind] ?? [])])],
+      ]),
+    ) as unknown as ReturnType<typeof getCustomModelsByProvider>;
+  }, [input.customModelsByProvider, settings]);
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],

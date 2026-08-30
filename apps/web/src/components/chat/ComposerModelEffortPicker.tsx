@@ -23,6 +23,7 @@ import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
+import { useSynaraHostSidebar } from "../../hostSidebar";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
@@ -81,6 +82,7 @@ type ComposerModelEffortPickerProps = {
 // reasoning radio group (with fast mode as an icon toggle in its Effort
 // header); the model is reachable via a sub-menu so the footer stays compact.
 export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps) {
+  const hostSidebar = useSynaraHostSidebar();
   const { onOpenChange, open } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
@@ -94,6 +96,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
 
   const activeProvider = props.lockedProvider ?? props.provider;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
+  const useLargerBrandIcon = Boolean(hostSidebar?.brandIconUrl) && activeProvider === "pi";
   const modelLabel = resolveProviderModelLabel({
     provider: props.provider,
     lockedProvider: props.lockedProvider,
@@ -151,7 +154,8 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         aria-hidden="true"
         className={cn(
           // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-          "size-3.5 shrink-0 opacity-100",
+          useLargerBrandIcon ? "size-4" : "size-3.5",
+          "shrink-0 opacity-100",
           getProviderIconClassName(activeProvider, "text-[var(--color-text-foreground)]"),
         )}
       />

@@ -21,6 +21,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
+import { useSynaraHostSidebar } from "../../hostSidebar";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -466,6 +467,7 @@ type ProviderModelPickerProps = {
 };
 
 export const ProviderModelPicker = function ProviderModelPicker(props: ProviderModelPickerProps) {
+  const hostSidebar = useSynaraHostSidebar();
   const { onOpenChange, onSelectionCommitted, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const selectionCommitTimerRef = useRef<number | null>(null);
@@ -478,6 +480,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
+  const useLargerBrandIcon = Boolean(hostSidebar?.brandIconUrl) && activeProvider === "pi";
 
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
@@ -520,7 +523,8 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           aria-hidden="true"
           className={cn(
             // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-            "size-3.5 shrink-0 opacity-100",
+            useLargerBrandIcon ? "size-4" : "size-3.5",
+            "shrink-0 opacity-100",
             providerIconClassName(activeProvider, "text-muted-foreground/70"),
             props.activeProviderIconClassName,
           )}

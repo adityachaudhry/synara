@@ -63,6 +63,7 @@ import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShor
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
+import { useSynaraHostSidebar } from "../../hostSidebar";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 
 /**
@@ -563,6 +564,7 @@ export function ChatHeader({
   const chatLayoutAction = chatLayoutActionProp ?? null;
   const changeThreadAction = changeThreadActionProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
+  const hostSidebar = useSynaraHostSidebar();
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
@@ -713,7 +715,12 @@ export function ChatHeader({
               >
                 {threadIconKind === "none" ? null : (
                   <span
-                    className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                    className={cn(
+                      "inline-flex shrink-0 items-center justify-center",
+                      hostSidebar?.brandIconUrl && activeProvider === "pi"
+                        ? "size-4"
+                        : "size-3.5",
+                    )}
                     title={
                       threadIconKind === "terminal"
                         ? "Terminal"
@@ -723,7 +730,12 @@ export function ChatHeader({
                     {threadIconKind === "terminal" ? (
                       <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
                     ) : (
-                      renderProviderIcon(activeProvider, "size-3.5")
+                      renderProviderIcon(
+                        activeProvider,
+                        hostSidebar?.brandIconUrl && activeProvider === "pi"
+                          ? "size-4"
+                          : "size-3.5",
+                      )
                     )}
                   </span>
                 )}

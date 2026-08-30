@@ -18,6 +18,8 @@ import {
 
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { useSynaraHostSidebar } from "../../hostSidebar";
+import { readNativeApi } from "../../nativeApi";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
 import { stripDiffSearchParams } from "../../diffRouteSearch";
 import { readEditorViewState, storeEditorViewState } from "../../editorViewState";
@@ -120,7 +122,7 @@ import {
   resolveRoutePanelBootstrap,
   stripEditorViewSearchParams,
 } from "../../routes/-chatThreadRoute.logic";
-import { cn } from "~/lib/utils";
+import { cn, newCommandId } from "~/lib/utils";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
 const EditorWorkspaceView = lazy(() =>
@@ -193,6 +195,7 @@ export function SingleChatSurface(props: {
   search: DiffRouteSearch;
   projectId: ProjectId | null;
 }) {
+  const hostSidebar = useSynaraHostSidebar();
   const navigate = useNavigate();
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
@@ -240,7 +243,10 @@ export function SingleChatSurface(props: {
     hasGitRepository,
     hasReview: dockDiffTotals.fileCount > 0,
     hasDeviceSupport,
-  });
+  }).filter(
+    ({ kind }) =>
+      hostSidebar?.simplifiedComposer !== true || (kind !== "terminal" && kind !== "browser"),
+  );
   const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
@@ -835,6 +841,40 @@ export function SingleChatSurface(props: {
     openPane(props.threadId, { kind });
   };
 
+  const handleCloseDockPane = (paneId: string) => {
+    const pane = dockState.panes.find((candidate) => candidate.id === paneId);
+    if (pane?.kind !== "sidechat" || !pane.threadId) {
+      closePane(props.threadId, paneId);
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Could not close Side chat",
+        description: "The Synara server is unavailable.",
+      });
+      return;
+    }
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.delete",
+        commandId: newCommandId(),
+        threadId: pane.threadId,
+      })
+      .then(() => {
+        clearSidechatPaneRetention(pane.threadId!);
+        closePane(props.threadId, paneId);
+      })
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not close Side chat",
+          description: error instanceof Error ? error.message : "The Side chat was not deleted.",
+        });
+      });
+  };
+
   const renderDockPane = (
     pane: RightDockPane,
     context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
@@ -932,6 +972,9 @@ export function SingleChatSurface(props: {
           </Suspense>
         );
       case "explorer":
+        if (hostSidebar?.filesPane) {
+          return <div className="h-full min-h-0 w-full overflow-hidden">{hostSidebar.filesPane}</div>;
+        }
         return (
           <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
             <DockExplorerPane
@@ -977,7 +1020,7 @@ export function SingleChatSurface(props: {
             onToggleBrowser={noopChatSurfaceAction}
             onOpenBrowserUrl={noopChatSurfaceAction}
             onOpenTurnDiff={noopChatSurfaceAction}
-            onCloseThreadPane={() => closePane(props.threadId, pane.id)}
+            onCloseThreadPane={() => handleCloseDockPane(pane.id)}
           />
         );
       default:
@@ -1182,7 +1225,7 @@ export function SingleChatSurface(props: {
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
           {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
-          onClosePane={(paneId) => closePane(props.threadId, paneId)}
+          onClosePane={handleCloseDockPane}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => {
             setDockOpen(props.threadId, open);

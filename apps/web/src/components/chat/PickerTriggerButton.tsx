@@ -43,7 +43,7 @@ export function PickerTriggerButton(
           hideLabel ? "gap-1" : compact ? "max-w-44" : undefined,
         )}
       >
-        <span className="inline-flex size-3.5 shrink-0 items-center justify-center">{icon}</span>
+        <span className="inline-flex size-4 shrink-0 items-center justify-center">{icon}</span>
         {hideLabel ? (
           <span className="sr-only">{label}</span>
         ) : (

@@ -96,11 +96,11 @@ export const CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME = `${CHAT_BACKGROUND_CLASS_NAM
 /** Clipped full-height inset shell for routes that already own an outer card wrapper.
  *  Default RouteInsetSurface card routes use an unclipped inset so seam shadows can bleed. */
 export const CHAT_ROUTE_INSET_SHELL_CLASS_NAME =
-  "h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground";
+  `${import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? "h-full" : "h-dvh"} min-h-0 overflow-hidden overscroll-y-none text-foreground`;
 
 /** Outer viewport shell for the split/single thread content wrapper that carries the card. */
 export const CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME =
-  "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden";
+  `flex ${import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? "h-full" : "h-dvh"} min-h-0 min-w-0 flex-1 overflow-hidden`;
 
 /** Horizontal padding shared by the transcript and composer columns. */
 export const CHAT_COLUMN_GUTTER_CLASS_NAME =

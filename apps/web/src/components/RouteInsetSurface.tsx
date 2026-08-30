@@ -12,7 +12,9 @@ import {
 } from "./chat/composerPickerStyles";
 import { SidebarInset } from "./ui/sidebar";
 
-const CARD_SURFACE_ROUTE_INSET_CLASS_NAME = "h-dvh min-h-0 overscroll-y-none text-foreground";
+const CARD_SURFACE_ROUTE_INSET_CLASS_NAME = `${
+  import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? "h-full" : "h-dvh"
+} min-h-0 overscroll-y-none text-foreground`;
 
 // Default route surfaces keep SidebarInset as the sidebar peer while letting the
 // inner seam shadow bleed past the unclipped outer inset.

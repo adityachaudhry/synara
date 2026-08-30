@@ -1,8 +1,12 @@
+import type { ModelSelection, ProviderKind } from "@synara/contracts";
+
 export type SynaraWebSocketUrlResolver = () => string | Promise<string>;
 
 export interface SynaraProject {
   readonly projectId: string;
   readonly name: string;
+  readonly defaultModelSelection?: ModelSelection;
+  readonly customModelsByProvider?: Partial<Record<ProviderKind, readonly string[]>>;
 }
 
 export interface SynaraRuntimeConfig {
