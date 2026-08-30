@@ -351,6 +351,25 @@ const requireAuthenticatedRequest = Effect.gen(function* () {
   return yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
 });
 
+function errorCauseChain(error: unknown): ReadonlyArray<string> {
+  const chain: string[] = [];
+  let current = error;
+  for (let depth = 0; current !== undefined && current !== null && depth < 6; depth += 1) {
+    chain.push(
+      current instanceof Error
+        ? `${current.name}: ${current.message}`
+        : typeof current === "object" && "message" in current
+          ? String((current as { readonly message?: unknown }).message)
+          : String(current),
+    );
+    current =
+      typeof current === "object" && "cause" in current
+        ? (current as { readonly cause?: unknown }).cause
+        : undefined;
+  }
+  return chain;
+}
+
 const requireProjectScopeAccess = Effect.fn(function* (input: {
   readonly session: AuthenticatedHttpSession;
   readonly threadId?: string;
@@ -609,14 +628,23 @@ export const authEffectRouteLayer = HttpRouter.add(
         Effect.mapError((cause) => mapPayloadError("Invalid external identity payload.", cause)),
       );
       return HttpServerResponse.jsonUnsafe(
-        yield* serverAuth.exchangeExternalIdentity({
-          authorization: request.headers.authorization,
-          payload,
-          client: deriveAuthClientMetadata({
-            headers: request.headers,
-            remoteAddress: request.remoteAddress ?? null,
-          }),
-        }),
+        yield* serverAuth
+          .exchangeExternalIdentity({
+            authorization: request.headers.authorization,
+            payload,
+            client: deriveAuthClientMetadata({
+              headers: request.headers,
+              remoteAddress: request.remoteAddress ?? null,
+            }),
+          })
+          .pipe(
+            Effect.tapError((error) =>
+              Effect.logError("External identity exchange failed.", {
+                status: error.status,
+                causeChain: errorCauseChain(error.cause ?? error),
+              }),
+            ),
+          ),
       );
     }
 
