@@ -2,13 +2,15 @@ import { createContext, useContext, type ReactNode } from "react";
 
 export interface SynaraHostSidebar {
   readonly widthPx: number;
+  readonly viewportHeightOffsetPx?: number;
   readonly lockedOpen?: boolean;
   readonly showProjectTitle?: boolean;
   readonly projectThreadsOnly?: boolean;
   readonly brandIconUrl?: string;
   readonly simplifiedComposer?: boolean;
   readonly chatFontSizePx?: number;
-  readonly filesPane?: ReactNode;
+  readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
+  readonly renderFilePane?: (filePath: string) => ReactNode;
   readonly header?: ReactNode;
   readonly footer?: ReactNode;
 }

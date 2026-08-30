@@ -973,7 +973,11 @@ export function SingleChatSurface(props: {
         );
       case "explorer":
         if (hostSidebar?.filesPane) {
-          return <div className="h-full min-h-0 w-full overflow-hidden">{hostSidebar.filesPane}</div>;
+          const filesPane =
+            typeof hostSidebar.filesPane === "function"
+              ? hostSidebar.filesPane(handleOpenWorkspaceSearchFile)
+              : hostSidebar.filesPane;
+          return <div className="h-full min-h-0 w-full overflow-hidden">{filesPane}</div>;
         }
         return (
           <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
@@ -987,6 +991,13 @@ export function SingleChatSurface(props: {
           </Suspense>
         );
       case "file":
+        if (hostSidebar?.renderFilePane && pane.filePath) {
+          return (
+            <div className="h-full min-h-0 w-full overflow-hidden">
+              {hostSidebar.renderFilePane(pane.filePath)}
+            </div>
+          );
+        }
         return (
           <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
             <DockFilePane
@@ -1210,6 +1221,9 @@ export function SingleChatSurface(props: {
         </ChatPaneDropOverlay>
         <RightDock
           state={dockState}
+          {...(hostSidebar?.viewportHeightOffsetPx
+            ? { viewportHeightOffsetPx: hostSidebar.viewportHeightOffsetPx }
+            : {})}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
           shouldAcceptWidth={shouldAcceptDockWidth}

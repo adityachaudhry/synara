@@ -67,6 +67,7 @@ const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
 
 interface RightDockProps {
   state: RightDockThreadState;
+  viewportHeightOffsetPx?: number;
   minWidth: number;
   defaultWidth: string;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
@@ -185,6 +186,12 @@ export function RightDock(props: RightDockProps) {
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
   const browserRuntimeMode = props.browserRuntimeMode ?? "live";
+  const viewportHeightOffsetPx =
+    props.viewportHeightOffsetPx &&
+    Number.isFinite(props.viewportHeightOffsetPx) &&
+    props.viewportHeightOffsetPx > 0
+      ? props.viewportHeightOffsetPx
+      : 0;
   // The dock is the right-most surface when open, so its header sits under the
   // fixed Windows caption cluster — reserve the same gutter the chat header uses.
   const desktopTopBarWindowControlsGutterClassName =
@@ -266,6 +273,11 @@ export function RightDock(props: RightDockProps) {
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface
+        style={
+          viewportHeightOffsetPx > 0
+            ? { height: `calc(100svh - ${viewportHeightOffsetPx}px)` }
+            : undefined
+        }
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,

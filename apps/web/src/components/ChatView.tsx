@@ -4587,7 +4587,11 @@ export default function ChatView({
   const hasRightDockPanes = useRightDockStore(
     (store) => selectRightDockState(threadId)(store).panes.length > 0,
   );
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   const setRightDockOpen = useRightDockStore((store) => store.setDockOpen);
+  const openLandingExplorer = useCallback(() => {
+    openRightDockPane(threadId, { kind: "explorer" });
+  }, [openRightDockPane, threadId]);
   const toggleRightDock = useCallback(() => {
     setRightDockOpen(threadId, !rightDockOpen);
   }, [rightDockOpen, setRightDockOpen, threadId]);
@@ -12143,7 +12147,7 @@ export default function ChatView({
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo aria-label="Glasswing" className="size-14" />
+                    <SynaraLogo aria-label="Glasswing" className="size-20" />
                     <h2
                       data-testid="empty-landing-heading"
                       className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
@@ -12154,26 +12158,38 @@ export default function ChatView({
                         <>
                           What should we do in{" "}
                           {showEmptyLandingProjectPicker ? (
-                            <ProjectPicker
-                              align="center"
-                              side="bottom"
-                              selectionMode="project"
-                              selectedProjectId={activeProject.id}
-                              selectedWorkspaceRoot={activeProject.cwd}
-                              showResetToHome
-                              onSelectProject={handleSelectProjectForEmptyDraft}
-                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-                              onResetToHome={handleResetWorkspaceToHome}
-                              renderTrigger={
-                                <button
-                                  type="button"
-                                  data-testid="empty-landing-heading-project-trigger"
-                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                >
-                                  {activeProjectDisplayName ?? "this folder"}
-                                </button>
-                              }
-                            />
+                            simplifiedComposer ? (
+                              <button
+                                type="button"
+                                aria-label={`Open files for ${activeProjectDisplayName ?? "this folder"}`}
+                                onClick={openLandingExplorer}
+                                className="cursor-pointer rounded-sm text-inherit underline decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                style={{ textDecorationColor: "var(--brand)" }}
+                              >
+                                {activeProjectDisplayName ?? "this folder"}
+                              </button>
+                            ) : (
+                              <ProjectPicker
+                                align="center"
+                                side="bottom"
+                                selectionMode="project"
+                                selectedProjectId={activeProject.id}
+                                selectedWorkspaceRoot={activeProject.cwd}
+                                showResetToHome
+                                onSelectProject={handleSelectProjectForEmptyDraft}
+                                onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+                                onResetToHome={handleResetWorkspaceToHome}
+                                renderTrigger={
+                                  <button
+                                    type="button"
+                                    data-testid="empty-landing-heading-project-trigger"
+                                    className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                  >
+                                    {activeProjectDisplayName ?? "this folder"}
+                                  </button>
+                                }
+                              />
+                            )
                           ) : (
                             <span className="text-inherit">
                               {activeProjectDisplayName ?? "this folder"}
