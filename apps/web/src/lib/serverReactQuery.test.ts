@@ -75,6 +75,24 @@ describe("server provider status reconciliation", () => {
     ]);
   });
 
+  it("retains a live snapshot when a scoped client cannot hydrate full config", async () => {
+    const queryClient = new QueryClient();
+
+    await expect(
+      reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS], {
+        loadConfig: async () => {
+          throw new Error("PROJECT_SCOPE_FORBIDDEN");
+        },
+      }),
+    ).rejects.toThrow("PROJECT_SCOPE_FORBIDDEN");
+
+    expect(
+      queryClient.getQueryData<readonly ServerProviderStatus[]>(
+        serverQueryKeys.providerStatuses(),
+      ),
+    ).toEqual([READY_CODEX_STATUS]);
+  });
+
   it("keeps the newest provider snapshot when hydration overlaps multiple events", async () => {
     const queryClient = new QueryClient();
     let resolveConfig!: (config: ServerConfig) => void;

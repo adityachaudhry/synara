@@ -16,6 +16,7 @@ const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
+  providerStatuses: () => ["server", "providerStatuses"] as const,
   authSession: () => ["server", "auth", "session"] as const,
   environment: () => ["server", "environment"] as const,
   settings: () => ["server", "settings"] as const,
@@ -88,6 +89,7 @@ export async function reconcileServerProviderStatuses(
   },
 ): Promise<void> {
   recordProviderStatusSnapshot(queryClient, providers);
+  queryClient.setQueryData(serverQueryKeys.providerStatuses(), providers);
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
