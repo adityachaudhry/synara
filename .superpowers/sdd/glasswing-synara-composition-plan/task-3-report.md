@@ -8,6 +8,7 @@ Implemented and committed the generic distributed Railway Pi runtime as:
 - `c5fb7269b` — `fix(server): harden distributed Pi runtime lifecycle`
 - `6ca8a9cb3` — `fix(server): persist distributed workspace cleanup ownership`
 - `c63fc028a` — `fix(server): make workspace reconciliation crash-safe`
+- `48983369a` — `fix(server): make workspace create reservations exclusive`
 
 The implementation is limited to one generic Railway workspace adapter, one provider-worker protocol/broker/provisioner chain, and one routed Pi seam. Existing local Pi sessions and every non-Pi provider retain their upstream paths. Remote execution is admitted only when a Pi session carries the canonical repository binding introduced by Task 2.
 
@@ -57,6 +58,11 @@ The SQLite intent is committed before `Sandbox.create` begins, and it contains n
 
 Create follows `reserve operation ID in memory -> insert durable intent -> invoke Railway create -> bind returned runtime ID -> persist provider runtime binding -> adopt/clear intent`. Reconciliation skips every in-memory reservation and follows `discover marker without mutation -> durably bind exact runtime ID -> destroy exact runtime ID (NotFound is terminal) -> clear intent`. No step that loses the only locator precedes the durable write needed by the next restart.
 
+## Fourth review reservation ownership
+
+- In-memory create reservation acquisition is now exclusive. A concurrent invocation that receives an already-active injected operation ID fails with `create.reserve` before touching SQLite, and therefore never enters a cleanup path that can remove the first invocation's reservation.
+- The invocation that successfully performs the atomic single-controller precheck/add remains the only owner allowed to release that reservation. The existing failed-insert path still releases reservations acquired by that invocation.
+
 ## Security and scope boundaries
 
 - Worker bootstrap credentials stay in the server/worker boundary, are initially stored in the sandbox config with mode `0600`, are deleted at worker startup, and are generation-fenced and revocable. Reconnect is permitted only for the exact pre-authenticated fence.
@@ -97,6 +103,7 @@ The blocking-review fixes also followed focused RED/GREEN cycles:
 - migration-lineage verification exposed **4 expected-list failures** after adding migration 98; the lineage expectations were updated and all 19 migration tests passed.
 - marker cleanup atomicity first failed because the Railway seam still destroyed and returned a boolean; focused crash/restart coverage was added for discovery-before-bind, bind-before-destroy, and destroy-before-clear before the read-only discovery seam was implemented;
 - active-create publication recorded **2 failed, 16 passed**: reconciliation reached an intent while its insert was blocked, and a duplicate insert incorrectly succeeded. Reserving before publication and restoring the SQLite uniqueness failure made both cases green.
+- exclusive reservation ownership recorded **1 failed, 15 passed**: the second create failed its duplicate insert but deleted the first create's shared set entry, so reconciliation observed `discovery` instead of a second skipped pass. Rejecting before insert made all 16 workspace runtime tests pass while retaining the real-owner failed-insert regression.
 
 ## Final verification
 
@@ -109,6 +116,8 @@ All commands used Node 24 in `PATH` and Bun 1.3.12 through `npx`. `bun test` was
 - Final round-two full `apps/server` suite: **378 files passed, 3 skipped; 4,192 tests passed, 16 skipped**.
 - Round-three focused workspace runtime, Railway adapter, persistence/migrations, provisioner, and routed Pi suites: **6 files, 68 tests passed**.
 - Final round-three full `apps/server` suite: **378 files passed, 3 skipped; 4,197 tests passed, 16 skipped**.
+- Round-four focused workspace runtime, Railway adapter, persistence/migrations, provisioner, and routed Pi suites: **6 files, 68 tests passed**.
+- Round-four server build and exact extracted-archive worker probe: passed. The immediately preceding round-three full-server result remains the proportionate full-suite baseline; this two-file follow-up did not rerun unchanged server suites.
 - Generic server build: passed, including `dist/provider-worker/workerMain.mjs`.
 - Post-build archive extraction/install and exact-artifact startup probe: **1 test passed**, including header-only authentication and proof that the extracted worker deleted its bootstrap file before registration.
 - Product-coupling scan over the new runtime paths for Glasswing/ChipSage/SuperTokens/company-catalog/Gitea identifiers: no matches.
