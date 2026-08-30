@@ -3,6 +3,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   ProjectId,
+  ServerProviderStatus,
 } from "@synara/contracts";
 import {
   isThreadMentionPath,
@@ -51,6 +52,26 @@ export function filterShellSnapshotByProjectScope(
   };
 }
 
+export function filterProviderStatusesByProjectScope(
+  statuses: ReadonlyArray<ServerProviderStatus>,
+  scope: ProjectScope,
+): ReadonlyArray<ServerProviderStatus> {
+  if (scope === undefined) return statuses;
+  return statuses.map((status) => ({
+    provider: status.provider,
+    status: status.status,
+    available: status.available,
+    authStatus: status.authStatus,
+    ...(status.voiceTranscriptionAvailable === undefined
+      ? {}
+      : { voiceTranscriptionAvailable: status.voiceTranscriptionAvailable }),
+    ...(status.supportsAutoRuntimeMode === undefined
+      ? {}
+      : { supportsAutoRuntimeMode: status.supportsAutoRuntimeMode }),
+    checkedAt: status.checkedAt,
+  }));
+}
+
 const SCOPE_FILTERED_GLOBAL_METHODS = new Set([
   "orchestration.getSnapshot",
   "orchestration.getShellSnapshot",
@@ -62,6 +83,7 @@ const SCOPE_FILTERED_GLOBAL_METHODS = new Set([
   "projects.listDevServers",
   "projects.subscribeDevServerEvents",
   "provider.getComposerCapabilities",
+  "server.subscribeProviderStatuses",
 ]);
 
 const SCOPE_DENIED_METHODS = new Set([

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   authorizeProjectScopedRpc,
+  filterProviderStatusesByProjectScope,
   filterShellSnapshotByProjectScope,
   projectScopePayloadForEvent,
 } from "./projectScope";
@@ -122,6 +123,56 @@ describe("external project scope", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("allows only sanitized provider readiness for scoped sessions", async () => {
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "server.subscribeProviderStatuses",
+          payload: {},
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+
+    const statuses = [
+      {
+        provider: "codex",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        authType: "oauth",
+        authLabel: "private@example.com",
+        voiceTranscriptionAvailable: true,
+        supportsAutoRuntimeMode: true,
+        autoRuntimeModeBinaryPath: "/private/bin/codex",
+        version: "1.2.3",
+        checkedAt: "2026-08-30T00:00:00.000Z",
+        message: "private controller detail",
+        updateState: {
+          status: "failed",
+          startedAt: null,
+          finishedAt: null,
+          message: "private update detail",
+          output: "private command output",
+        },
+      },
+    ] as never;
+
+    expect(filterProviderStatusesByProjectScope(statuses, undefined)).toBe(statuses);
+    expect(filterProviderStatusesByProjectScope(statuses, new Set([allowed]))).toEqual([
+      {
+        provider: "codex",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        supportsAutoRuntimeMode: true,
+        checkedAt: "2026-08-30T00:00:00.000Z",
+      },
+    ]);
   });
 
   it("requires every thread mention in a turn start to belong to the scoped project", async () => {

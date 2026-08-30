@@ -53,6 +53,7 @@ import {
 import {
   authorizeProjectScopedRpc,
   CurrentProjectScope,
+  filterProviderStatusesByProjectScope,
   filterReadModelByProjectScope,
   filterShellSnapshotByProjectScope,
   projectScopePayloadForEvent,
@@ -2021,6 +2022,14 @@ const makeWsRpcHandlersLayer = () =>
                 label: "server.provider-statuses",
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }).pipe(Stream.map((providers) => ({ providers }))),
+            ).pipe(
+              Stream.mapEffect((payload) =>
+                CurrentProjectScope.pipe(
+                  Effect.map((scope) => ({
+                    providers: filterProviderStatusesByProjectScope(payload.providers, scope),
+                  })),
+                ),
+              ),
             ),
           ),
         [WS_METHODS.subscribeServerSettings]: (_, { clientId }) =>
