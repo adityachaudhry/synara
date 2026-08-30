@@ -85,9 +85,8 @@ describe("RailwaySandboxClient", () => {
     });
   });
 
-  it("keeps create cleanup retryable across transient list, connect, and destroy failures", async () => {
+  it("returns the exact matching runtime without destroying it or unrelated runtimes", async () => {
     const operationId = "55555555-5555-4555-8555-555555555555";
-    let pass = 0;
     let matchingDestroyed = false;
     let unrelatedDestroyed = false;
     const matching = makeSdkSandbox({
@@ -100,7 +99,6 @@ describe("RailwaySandboxClient", () => {
         truncated: false,
       }) as never,
       destroy: async () => {
-        if (pass === 3) throw new Error("transient destroy failure");
         matchingDestroyed = true;
       },
     });
@@ -119,33 +117,51 @@ describe("RailwaySandboxClient", () => {
     });
     const sdk: RailwaySdkFacade = {
       create: async () => matching,
+      list: async () => [
+        { id: unrelated.id, status: unrelated.status, region: unrelated.region },
+        { id: matching.id, status: matching.status, region: matching.region },
+      ] as never,
+      connect: async (runtimeId) => runtimeId === matching.id ? matching : unrelated,
+      isNotFoundError: () => false,
+    };
+    const client = makeRailwaySandboxClient(config, sdk);
+
+    await expect(
+      Effect.runPromise(client.findByCreateOperationId(operationId)),
+    ).resolves.toBe("sandbox-matching");
+
+    expect(matchingDestroyed).toBe(false);
+    expect(unrelatedDestroyed).toBe(false);
+  });
+
+  it("leaves marker discovery retryable after transient list and connect failures", async () => {
+    const operationId = "77777777-7777-4777-8777-777777777777";
+    const sandbox = makeSdkSandbox({ id: "sandbox-late" });
+    let pass = 0;
+    const sdk: RailwaySdkFacade = {
+      create: async () => sandbox,
       list: async () => {
         pass += 1;
         if (pass === 1) throw new Error("transient list failure");
-        return [
-          { id: matching.id, status: matching.status, region: matching.region },
-          { id: unrelated.id, status: unrelated.status, region: unrelated.region },
-        ] as never;
+        return [{ id: sandbox.id, status: sandbox.status, region: sandbox.region }] as never;
       },
-      connect: async (runtimeId) => {
+      connect: async () => {
         if (pass === 2) throw new Error("transient connect failure");
-        return runtimeId === matching.id ? matching : unrelated;
+        return sandbox;
       },
       isNotFoundError: () => false,
     };
     const client = makeRailwaySandboxClient(config, sdk);
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await expect(
-        Effect.runPromise(client.destroyByCreateOperationId(operationId)),
-      ).rejects.toBeDefined();
-    }
     await expect(
-      Effect.runPromise(client.destroyByCreateOperationId(operationId)),
-    ).resolves.toBe(true);
-
-    expect(matchingDestroyed).toBe(true);
-    expect(unrelatedDestroyed).toBe(false);
+      Effect.runPromise(client.findByCreateOperationId(operationId)),
+    ).rejects.toBeDefined();
+    await expect(
+      Effect.runPromise(client.findByCreateOperationId(operationId)),
+    ).rejects.toBeDefined();
+    await expect(
+      Effect.runPromise(client.findByCreateOperationId(operationId)),
+    ).resolves.toBe("sandbox-late");
   });
 
   it("preserves the complete exec result", async () => {

@@ -95,7 +95,7 @@ function makeFakeRailwayClient(options?: { readonly createdStatus?: RailwaySandb
       }
       return Effect.void;
     },
-    destroyByCreateOperationId: () => Effect.succeed(false),
+    findByCreateOperationId: () => Effect.succeed(null),
     list: Effect.sync(() => Array.from(sandboxes.values())),
   };
 
@@ -226,7 +226,121 @@ describe("WorkspaceRuntime", () => {
     expect(order).toEqual(["intent", "create"]);
   });
 
-  it("keeps an interrupted create owned across restart until a late sandbox is destroyed", async () => {
+  it("never reconciles an active create while its durable intent is being inserted", async () => {
+    const operationId = "11111111-1111-4111-8111-111111111111";
+    const insertStarted = await Effect.runPromise(Deferred.make<void>());
+    const releasePublish = await Effect.runPromise(Deferred.make<void>());
+    const secondPreInsertList = await Effect.runPromise(Deferred.make<void>());
+    const intentPublished = await Effect.runPromise(Deferred.make<void>());
+    const releaseInsert = await Effect.runPromise(Deferred.make<void>());
+    const secondPublishedList = await Effect.runPromise(Deferred.make<void>());
+    const discoveryStarted = await Effect.runPromise(Deferred.make<void>());
+    const intents = makeIntentRepository();
+    intents.repository.put = (input) =>
+      Effect.gen(function* () {
+        yield* Deferred.succeed(insertStarted, undefined);
+        yield* Deferred.await(releasePublish);
+        intents.records.set(input.operationId, { ...input, runtimeId: null });
+        yield* Deferred.succeed(intentPublished, undefined);
+        yield* Deferred.await(releaseInsert);
+      });
+    let preInsertLists = 0;
+    let publishedLists = 0;
+    intents.repository.list = () =>
+      Effect.gen(function* () {
+        if (intents.records.has(operationId)) {
+          publishedLists += 1;
+          if (publishedLists === 2) yield* Deferred.succeed(secondPublishedList, undefined);
+        } else {
+          preInsertLists += 1;
+          if (preInsertLists === 2) yield* Deferred.succeed(secondPreInsertList, undefined);
+        }
+        return Array.from(intents.records.values());
+      });
+    const client = {
+      ...makeFakeRailwayClient().client,
+      findByCreateOperationId: () =>
+        Deferred.succeed(discoveryStarted, undefined).pipe(Effect.as("sandbox-active")),
+      destroy: () => Effect.void,
+    } satisfies RailwaySandboxClientShape;
+    const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+      createOperationId: () => operationId,
+      reconcileIntervalMs: 1,
+    }).pipe(
+      Layer.provide(Layer.succeed(RailwaySandboxClient, client)),
+      Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+    );
+
+    const winner = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const createFiber = yield* runtime
+          .create({ lifecycleGeneration: "generation-1", environment: {} })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(insertStarted);
+        yield* Deferred.await(secondPreInsertList);
+        yield* Deferred.succeed(releasePublish, undefined);
+        yield* Deferred.await(intentPublished);
+        const observed = yield* Effect.raceFirst(
+          Deferred.await(secondPublishedList).pipe(Effect.as("second-list" as const)),
+          Deferred.await(discoveryStarted).pipe(Effect.as("discovery" as const)),
+        );
+        yield* Deferred.succeed(releaseInsert, undefined);
+        const binding = yield* Fiber.join(createFiber);
+        yield* runtime.adopt(binding);
+        return observed;
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    );
+
+    expect(winner).toBe("second-list");
+  });
+
+  it.each(["failed", "duplicate"] as const)(
+    "releases an active reservation after a %s intent insert",
+    async (failure) => {
+      const operationId = "66666666-6666-4666-8666-666666666666";
+      const discovered = await Effect.runPromise(Deferred.make<void>());
+      const intents = makeIntentRepository();
+      intents.repository.put = () =>
+        Effect.fail(new Error(`${failure} insert`) as never);
+      const client = {
+        ...makeFakeRailwayClient().client,
+        findByCreateOperationId: () =>
+          Deferred.succeed(discovered, undefined).pipe(Effect.as("sandbox-abandoned")),
+        destroy: () => Effect.void,
+      } satisfies RailwaySandboxClientShape;
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => operationId,
+        reconcileIntervalMs: 1,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, client)),
+        Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      );
+
+      const reconciled = await Effect.runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* WorkspaceRuntime;
+          const result = yield* runtime
+            .create({ lifecycleGeneration: "generation-1", environment: {} })
+            .pipe(Effect.result);
+          expect(result._tag).toBe("Failure");
+          intents.records.set(operationId, {
+            operationId,
+            runtimeId: null,
+            createdAt: "2026-08-29T00:00:00.000Z",
+          });
+          return yield* Effect.raceFirst(
+            Deferred.await(discovered).pipe(Effect.as(true)),
+            Effect.sleep(50).pipe(Effect.as(false)),
+          );
+        }).pipe(Effect.provide(layer), Effect.scoped),
+      );
+
+      expect(reconciled).toBe(true);
+    },
+  );
+
+  it("keeps an interrupted create owned across restart until a late sandbox is discovered and destroyed", async () => {
     const createStarted = await Effect.runPromise(Deferred.make<void>());
     const intents = makeIntentRepository();
     const fake = makeFakeRailwayClient();
@@ -255,7 +369,12 @@ describe("WorkspaceRuntime", () => {
     let cleanupPass = 0;
     const restartedClient = {
       ...fake.client,
-      destroyByCreateOperationId: () => Effect.sync(() => ++cleanupPass > 31),
+      findByCreateOperationId: () =>
+        Effect.sync(() => ++cleanupPass > 31 ? "sandbox-late" : null),
+      destroy: (runtimeId: string) => {
+        expect(runtimeId).toBe("sandbox-late");
+        return Effect.void;
+      },
     } satisfies RailwaySandboxClientShape;
     for (let pass = 0; pass < 31; pass += 1) {
       await Effect.runPromise(
@@ -276,6 +395,116 @@ describe("WorkspaceRuntime", () => {
       }),
     );
     expect(intents.records.has("22222222-2222-4222-8222-222222222222")).toBe(false);
+  });
+
+  it("converges after crashes at every marker-discovery cleanup boundary", async () => {
+    const operationId = "55555555-5555-4555-8555-555555555555";
+    const runtimeId = "sandbox-late";
+    const makePending = () =>
+      makeIntentRepository([{ operationId, runtimeId: null, createdAt: "2026-08-29T00:00:00.000Z" }]);
+
+    const afterDiscovery = makePending();
+    const discoveryCrashRepository = {
+      ...afterDiscovery.repository,
+      bindRuntime: () => Effect.fail(new Error("controller crashed before bind") as never),
+    } satisfies WorkspaceCreationIntentRepositoryShape;
+    await expect(
+      Effect.runPromise(
+        reconcileWorkspaceCreationIntents({
+          client: {
+            ...makeFakeRailwayClient().client,
+            findByCreateOperationId: () => Effect.succeed(runtimeId),
+          },
+          intents: discoveryCrashRepository,
+          ownedOperationIds: new Set(),
+        }),
+      ),
+    ).rejects.toBeDefined();
+    expect(afterDiscovery.records.get(operationId)?.runtimeId).toBeNull();
+
+    const destroyed: string[] = [];
+    await Effect.runPromise(
+      reconcileWorkspaceCreationIntents({
+        client: {
+          ...makeFakeRailwayClient().client,
+          findByCreateOperationId: () => Effect.succeed(runtimeId),
+          destroy: (id) => Effect.sync(() => destroyed.push(id)),
+        },
+        intents: afterDiscovery.repository,
+        ownedOperationIds: new Set(),
+      }),
+    );
+    expect(destroyed).toEqual([runtimeId]);
+    expect(afterDiscovery.records.has(operationId)).toBe(false);
+
+    const afterBind = makePending();
+    let destroyAttempts = 0;
+    await expect(
+      Effect.runPromise(
+        reconcileWorkspaceCreationIntents({
+          client: {
+            ...makeFakeRailwayClient().client,
+            findByCreateOperationId: () => Effect.succeed(runtimeId),
+            destroy: () =>
+              Effect.sync(() => {
+                destroyAttempts += 1;
+                throw new Error("controller crashed before destroy");
+              }),
+          } as RailwaySandboxClientShape,
+          intents: afterBind.repository,
+          ownedOperationIds: new Set(),
+        }),
+      ),
+    ).rejects.toBeDefined();
+    expect(afterBind.records.get(operationId)?.runtimeId).toBe(runtimeId);
+
+    await Effect.runPromise(
+      reconcileWorkspaceCreationIntents({
+        client: {
+          ...makeFakeRailwayClient().client,
+          findByCreateOperationId: () => Effect.die("bound intents must not be rediscovered"),
+          destroy: () => Effect.sync(() => { destroyAttempts += 1; }),
+        } as RailwaySandboxClientShape,
+        intents: afterBind.repository,
+        ownedOperationIds: new Set(),
+      }),
+    );
+    expect(destroyAttempts).toBe(2);
+    expect(afterBind.records.has(operationId)).toBe(false);
+
+    const afterDestroy = makeIntentRepository([
+      { operationId, runtimeId, createdAt: "2026-08-29T00:00:00.000Z" },
+    ]);
+    const removalCrashRepository = {
+      ...afterDestroy.repository,
+      remove: () => Effect.fail(new Error("controller crashed before clear") as never),
+    } satisfies WorkspaceCreationIntentRepositoryShape;
+    await expect(
+      Effect.runPromise(
+        reconcileWorkspaceCreationIntents({
+          client: {
+            ...makeFakeRailwayClient().client,
+            destroy: () => Effect.void,
+          },
+          intents: removalCrashRepository,
+          ownedOperationIds: new Set(),
+        }),
+      ),
+    ).rejects.toBeDefined();
+    expect(afterDestroy.records.get(operationId)?.runtimeId).toBe(runtimeId);
+
+    await Effect.runPromise(
+      reconcileWorkspaceCreationIntents({
+        client: {
+          ...makeFakeRailwayClient().client,
+          destroy: () =>
+            Effect.fail(new RailwaySandboxNotFoundError({ operation: "destroy", runtimeId })),
+        },
+        intents: afterDestroy.repository,
+        ownedOperationIds: new Set(),
+      }),
+    );
+    expect(afterDestroy.records.has(operationId)).toBe(false);
   });
 
   it("retains a bound intent through a transient destroy failure and clears it after terminal cleanup", async () => {
@@ -334,7 +563,8 @@ describe("WorkspaceRuntime", () => {
     let passes = 0;
     const client = {
       ...makeFakeRailwayClient().client,
-      destroyByCreateOperationId: () => Effect.sync(() => ++passes >= 3),
+      findByCreateOperationId: () => Effect.sync(() => ++passes >= 3 ? "sandbox-late" : null),
+      destroy: () => Effect.void,
     } satisfies RailwaySandboxClientShape;
     const layer = makeWorkspaceRuntimeLive(enabledConfig, {
       reconcileIntervalMs: 1,

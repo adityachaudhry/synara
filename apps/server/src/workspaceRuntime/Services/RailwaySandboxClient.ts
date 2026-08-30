@@ -87,9 +87,9 @@ export interface RailwaySandboxClientShape {
   readonly destroy: (
     runtimeId: string,
   ) => Effect.Effect<void, RailwaySandboxClientFailure>;
-  readonly destroyByCreateOperationId: (
+  readonly findByCreateOperationId: (
     operationId: string,
-  ) => Effect.Effect<boolean, RailwaySandboxClientFailure>;
+  ) => Effect.Effect<string | null, RailwaySandboxClientFailure>;
   readonly list: Effect.Effect<ReadonlyArray<RailwaySandboxRecord>, RailwaySandboxClientError>;
 }
 

@@ -14,7 +14,6 @@ const make = Effect.gen(function* () {
     sql`
       INSERT INTO workspace_creation_intents (operation_id, runtime_id, created_at)
       VALUES (${input.operationId}, NULL, ${input.createdAt})
-      ON CONFLICT(operation_id) DO NOTHING
     `.pipe(
       Effect.asVoid,
       Effect.mapError(toPersistenceSqlError("WorkspaceCreationIntentRepository.put")),

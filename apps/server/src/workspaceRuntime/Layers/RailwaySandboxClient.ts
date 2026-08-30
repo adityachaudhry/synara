@@ -168,12 +168,11 @@ export function makeRailwaySandboxClient(
       catch: (cause) => clientFailure(sdk, "connect", runtimeId, cause),
     });
 
-  const destroyByCreateOperationId: RailwaySandboxClientShape["destroyByCreateOperationId"] =
+  const findByCreateOperationId: RailwaySandboxClientShape["findByCreateOperationId"] =
     (operationId) =>
       Effect.tryPromise({
         try: async () => {
           const records = await sdk.list(connectionInput);
-          let found = false;
           for (const record of records) {
             const sandbox = await sdk.connect(record.id, connectionInput);
             const probe = await sandbox.exec(
@@ -181,11 +180,9 @@ export function makeRailwaySandboxClient(
               { timeoutSec: 10 },
             );
             if (probe.exitCode !== 0) continue;
-            found = true;
-            await sandbox.destroy();
-            handles.delete(record.id);
+            return record.id;
           }
-          return found;
+          return null;
         },
         catch: (cause) =>
           clientFailure(sdk, "create.reconcile", undefined, cause) as RailwaySandboxClientError,
@@ -385,8 +382,8 @@ export function makeRailwaySandboxClient(
     writeFile,
     startDurableProcess,
     stopDurableProcess,
-      destroy,
-      destroyByCreateOperationId,
+    destroy,
+    findByCreateOperationId,
     list,
   };
 }

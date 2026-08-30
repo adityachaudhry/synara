@@ -33,6 +33,14 @@ layer("WorkspaceCreationIntentRepository", (it) => {
         },
       ]);
 
+      const duplicate = yield* repository
+        .put({
+          operationId: "11111111-1111-4111-8111-111111111111",
+          createdAt: "2026-08-29T18:00:01.000Z",
+        })
+        .pipe(Effect.result);
+      assert.strictEqual(duplicate._tag, "Failure");
+
       yield* repository.bindRuntime({
         operationId: "11111111-1111-4111-8111-111111111111",
         runtimeId: "sandbox-1",

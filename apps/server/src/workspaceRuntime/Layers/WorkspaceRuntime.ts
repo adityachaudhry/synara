@@ -77,20 +77,19 @@ export function reconcileWorkspaceCreationIntents(input: {
     Effect.flatMap(
       Effect.forEach((intent) => {
         if (input.ownedOperationIds.has(intent.operationId)) return Effect.void;
-        const cleanup =
-          intent.runtimeId === null
-            ? input.client.destroyByCreateOperationId(intent.operationId)
-            : input.client
-                .destroy(intent.runtimeId)
-                .pipe(
-                  Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void),
-                  Effect.as(true),
-                );
-        return cleanup.pipe(
-          Effect.flatMap((terminal) =>
-            terminal ? input.intents.remove(intent.operationId) : Effect.void,
-          ),
-        );
+        return Effect.gen(function* () {
+          const runtimeId =
+            intent.runtimeId ??
+            (yield* input.client.findByCreateOperationId(intent.operationId));
+          if (runtimeId === null) return;
+          if (intent.runtimeId === null) {
+            yield* input.intents.bindRuntime({ operationId: intent.operationId, runtimeId });
+          }
+          yield* input.client
+            .destroy(runtimeId)
+            .pipe(Effect.catchTag("RailwaySandboxNotFoundError", () => Effect.void));
+          yield* input.intents.remove(intent.operationId);
+        });
       }),
     ),
     Effect.asVoid,
@@ -153,10 +152,16 @@ export function makeWorkspaceRuntimeLive(
           Effect.gen(function* () {
             const enabled = yield* requireEnabled(config, "create");
             const operationId = (options.createOperationId ?? randomUUID)();
-            yield* intents
-              .put({ operationId, createdAt: new Date().toISOString() })
-              .pipe(Effect.mapError(toRuntimeError("creation-intent.put")));
             ownedOperationIds.add(operationId);
+            const putExit = yield* Effect.exit(
+              intents
+                .put({ operationId, createdAt: new Date().toISOString() })
+                .pipe(Effect.mapError(toRuntimeError("creation-intent.put"))),
+            );
+            if (Exit.isFailure(putExit)) {
+              ownedOperationIds.delete(operationId);
+              return yield* Effect.failCause(putExit.cause);
+            }
 
             const createExit = yield* Effect.exit(
               restore(
