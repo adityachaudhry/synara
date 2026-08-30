@@ -3,6 +3,7 @@ set -euo pipefail
 
 if [ "$(id -u)" -eq 0 ]; then
   install -d -m 0700 -o node -g node /data/userdata
+  chown -R --no-dereference node:node /data/userdata
   exec /usr/sbin/runuser -u node -- "$0" "$@"
 fi
 
