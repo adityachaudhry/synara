@@ -111,6 +111,19 @@ describe("external project scope", () => {
     ).toBe(true);
   });
 
+  it("authorizes the decoded dispatch command payload seen by RPC middleware", async () => {
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: { type: "thread.update", projectId: allowed, threadId: "allowed-thread" },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("requires every thread mention in a turn start to belong to the scoped project", async () => {
     const turnStartPayload = (mentionPath: string) => ({
       command: {

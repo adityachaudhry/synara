@@ -102,7 +102,7 @@ function scopedPayload(method: string, payload: unknown): unknown {
   if (method !== "orchestration.dispatchCommand" || !payload || typeof payload !== "object") {
     return payload;
   }
-  return (payload as Record<string, unknown>).command;
+  return (payload as Record<string, unknown>).command ?? payload;
 }
 
 function hasSafeScopedModelConfiguration(payload: Record<string, unknown>): boolean {
