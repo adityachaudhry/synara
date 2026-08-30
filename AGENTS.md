@@ -124,3 +124,10 @@ Docs:
 - Codex-Monitor (Tauri, feature-complete, strong reference implementation): https://github.com/Dimillian/CodexMonitor
 
 Use these as implementation references when designing protocol handling, UX flows, and operational safeguards.
+
+## GlasswingOS Integration Lanes
+
+- `emanuele/main` is the sole upstream source for future Synara improvements. Do not use or merge the fork's `origin/main` as upstream.
+- `glasswingos/dev` is the GlasswingOS integration branch. Merge reviewed `emanuele/main` updates and GlasswingOS work here first; `glasswing-ai-2/dev` must pin exact package and server commits from this lane.
+- `glasswingos/main` is the production lane. Advance it only by promoting a commit already proven on `glasswingos/dev`; do not develop features or merge upstream directly on it. `glasswing-ai-2/main` must pin exact package and server commits from this lane.
+- Keep package, server, and protocol provenance aligned when promoting between lanes. Branch names select an integration lane; deployed consumers still pin immutable commits and artifacts.
