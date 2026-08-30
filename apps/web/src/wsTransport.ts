@@ -442,6 +442,7 @@ export function shouldReconnectAfterStreamFailure(cause: Cause.Cause<unknown>): 
     if (!Cause.isFailReason(reason)) return false;
     const error = reason.error;
     if (!error || typeof error !== "object") return false;
+    if ("retryable" in error && error.retryable === false) return true;
     const code = "code" in error ? error.code : undefined;
     return typeof code === "string" && STREAM_ADMISSION_ERROR_CODES.has(code);
   });

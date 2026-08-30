@@ -398,6 +398,19 @@ describe("WsTransport", () => {
     ).toBe(true);
   });
 
+  it("does not reconnect the socket for terminal server stream verdicts", () => {
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({
+          _tag: "WsRpcError",
+          code: "PROJECT_SCOPE_FORBIDDEN",
+          message: "Project scope does not authorize this stream",
+          retryable: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("does not reconnect the socket for snapshot-fence failures", () => {
     // Regression: ORCHESTRATION_RESNAPSHOT_REQUIRED used to fall through to a
     // full transport reconnect, interrupting every unrelated in-flight unary
