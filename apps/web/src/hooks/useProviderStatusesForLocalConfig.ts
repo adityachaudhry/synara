@@ -3,7 +3,7 @@
 // Layer: Web hook
 // Depends on: server config query, app settings, and provider availability normalization.
 
-import type { ServerProviderStatus } from "@synara/contracts";
+import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 
 import { getCustomBinaryPathForProvider, useAppSettings } from "../appSettings";
@@ -12,7 +12,11 @@ import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQue
 
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 
-export function useProviderStatusesForLocalConfig(): readonly ServerProviderStatus[] {
+export function useProviderStatusesForLocalConfig(
+  confirmedCustomBinaryPathsByProvider?: Readonly<
+    Partial<Record<ProviderKind, string | null | undefined>>
+  >,
+): readonly ServerProviderStatus[] {
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const streamedProviderStatusesQuery = useQuery({
@@ -31,6 +35,7 @@ export function useProviderStatusesForLocalConfig(): readonly ServerProviderStat
         provider: status.provider,
         status,
         customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
+        confirmedCustomBinaryPath: confirmedCustomBinaryPathsByProvider?.[status.provider],
       }),
     )
     .flatMap((status) => (status ? [status] : []));

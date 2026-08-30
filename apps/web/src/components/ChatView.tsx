@@ -121,7 +121,6 @@ import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/l
 import {
   findProviderStatus,
   normalizeCustomBinaryPath,
-  normalizeProviderStatusForLocalConfig,
   resolveProviderSendAvailabilityWithRefresh,
   resolveAvailableProviderPreference,
 } from "~/lib/providerAvailability";
@@ -362,7 +361,6 @@ import { readNativeApi } from "~/nativeApi";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
 import {
-  getCustomBinaryPathForProvider,
   getProviderStartOptions,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
@@ -2278,7 +2276,9 @@ export default function ChatView({
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const localProviderStatuses = useProviderStatusesForLocalConfig();
+  const localProviderStatuses = useProviderStatusesForLocalConfig(
+    confirmedCustomBinaryPathsByProvider,
+  );
   const preferredDraftProvider =
     selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
@@ -4036,21 +4036,7 @@ export default function ChatView({
   useEffect(() => {
     saveConfirmedCustomBinaryPaths(confirmedCustomBinaryPathsByProvider);
   }, [confirmedCustomBinaryPathsByProvider]);
-  const providerStatuses = useMemo(
-    () =>
-      (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
-        .map((status) => {
-          const customBinaryPath = getCustomBinaryPathForProvider(settings, status.provider);
-          return normalizeProviderStatusForLocalConfig({
-            provider: status.provider,
-            status,
-            customBinaryPath,
-            confirmedCustomBinaryPath: confirmedCustomBinaryPathsByProvider[status.provider],
-          });
-        })
-        .flatMap((status) => (status ? [status] : [])),
-    [confirmedCustomBinaryPathsByProvider, serverConfigQuery.data?.providers, settings],
-  );
+  const providerStatuses = localProviderStatuses;
   const handoffBadgeLabel = useMemo(
     () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
     [activeThread],
