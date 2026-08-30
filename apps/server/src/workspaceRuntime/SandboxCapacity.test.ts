@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   SandboxCapacity,
   reconcileSandboxCapacityInventory,
+  type SandboxCapacitySnapshot,
 } from "./SandboxCapacity";
 
 const request = (key: string) => ({
@@ -74,6 +75,58 @@ describe("SandboxCapacity", () => {
     (await third).release();
   });
 
+  it("keeps a lifecycle queued when one same-key caller cancels", async () => {
+    const capacity = new SandboxCapacity(1);
+    const active = await capacity.acquire(request("active"));
+    const first = new AbortController();
+    const second = new AbortController();
+    const firstAttempt = capacity.acquire({ ...request("shared"), signal: first.signal });
+    const secondAttempt = capacity.acquire({ ...request("shared"), signal: second.signal });
+
+    first.abort();
+
+    await expect(firstAttempt).rejects.toMatchObject({ name: "AbortError" });
+    expect(capacity.snapshot().queued).toEqual([{ key: "shared", position: 1 }]);
+    active.release();
+    const lease = await secondAttempt;
+    expect(capacity.snapshot().activeKeys).toEqual(["shared"]);
+    lease.release();
+  });
+
+  it("observes later retry cancellation and removes the key only after every caller cancels", async () => {
+    const capacity = new SandboxCapacity(1);
+    const updates: SandboxCapacitySnapshot[] = [];
+    capacity.subscribe((snapshot) => updates.push(snapshot));
+    const active = await capacity.acquire(request("active"));
+    const first = new AbortController();
+    const retry = new AbortController();
+    const firstAttempt = capacity.acquire({ ...request("shared"), signal: first.signal });
+    const retryAttempt = capacity.acquire({ ...request("shared"), signal: retry.signal });
+    const later = capacity.acquire(request("later"));
+    let retryCancelled = false;
+    void retryAttempt.catch(() => {
+      retryCancelled = true;
+    });
+    const updatesBeforeRetryCancellation = updates.length;
+
+    retry.abort();
+
+    await Promise.resolve();
+    expect(retryCancelled).toBe(true);
+    expect(updates).toHaveLength(updatesBeforeRetryCancellation);
+    expect(capacity.snapshot().queued).toEqual([
+      { key: "shared", position: 1 },
+      { key: "later", position: 2 },
+    ]);
+
+    first.abort();
+
+    await expect(firstAttempt).rejects.toMatchObject({ name: "AbortError" });
+    expect(capacity.snapshot().queued).toEqual([{ key: "later", position: 1 }]);
+    active.release();
+    (await later).release();
+  });
+
   it("releases a permit exactly once", async () => {
     const capacity = new SandboxCapacity(1);
     const first = await capacity.acquire(request("first"));
@@ -123,6 +176,7 @@ describe("reconcileSandboxCapacityInventory", () => {
       inventoryRuntimeIds: ["runtime-live", "runtime-pending", "runtime-orphan"],
       liveBindings: [
         {
+          capacityKey: "thread-live:generation-live",
           threadId: "thread-live",
           lifecycleGeneration: "generation-live",
           runtimeId: "runtime-live",
@@ -159,6 +213,7 @@ describe("reconcileSandboxCapacityInventory", () => {
       inventoryRuntimeIds: [],
       liveBindings: [
         {
+          capacityKey: "thread-stale:generation-stale",
           threadId: "thread-stale",
           lifecycleGeneration: "generation-stale",
           runtimeId: "runtime-stale",

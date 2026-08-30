@@ -21,12 +21,16 @@ export interface SandboxCapacitySnapshot {
   readonly reconciled: boolean;
 }
 
-interface CapacityWaiter extends SandboxCapacityReservation {
+interface CapacityCaller {
   readonly promise: Promise<SandboxCapacityLease>;
   readonly resolve: (lease: SandboxCapacityLease) => void;
   readonly reject: (cause: unknown) => void;
   readonly signal?: AbortSignal;
   readonly onAbort?: () => void;
+}
+
+interface CapacityWaiter extends SandboxCapacityReservation {
+  readonly callers: Set<CapacityCaller>;
 }
 
 function abortError() {
@@ -53,11 +57,11 @@ export class SandboxCapacity {
   }
 
   acquire(input: SandboxCapacityRequest): Promise<SandboxCapacityLease> {
+    if (input.signal?.aborted) return Promise.reject(abortError());
     const active = this.#active.get(input.key);
     if (active) return Promise.resolve(active);
     const queued = this.#queuedByKey.get(input.key);
-    if (queued) return queued.promise;
-    if (input.signal?.aborted) return Promise.reject(abortError());
+    if (queued) return this.#addCaller(queued, input.signal);
     if (this.#reconciled && this.#active.size < this.#maxActive && this.#queued.length === 0) {
       const lease = this.#makeLease(input);
       this.#active.set(input.key, lease);
@@ -65,28 +69,15 @@ export class SandboxCapacity {
       return Promise.resolve(lease);
     }
 
-    let resolve!: (lease: SandboxCapacityLease) => void;
-    let reject!: (cause: unknown) => void;
-    const promise = new Promise<SandboxCapacityLease>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
     const waiter: CapacityWaiter = {
       key: input.key,
       threadId: input.threadId,
       lifecycleGeneration: input.lifecycleGeneration,
-      promise,
-      resolve,
-      reject,
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
+      callers: new Set(),
     };
-    if (input.signal) {
-      const onAbort = () => this.#cancel(waiter);
-      Object.assign(waiter, { onAbort });
-      input.signal.addEventListener("abort", onAbort, { once: true });
-    }
     this.#queued.push(waiter);
     this.#queuedByKey.set(waiter.key, waiter);
+    const promise = this.#addCaller(waiter, input.signal);
     this.#publish();
     return promise;
   }
@@ -99,13 +90,7 @@ export class SandboxCapacity {
           this.#active.set(reservation.key, lease);
           const waiter = this.#queuedByKey.get(reservation.key);
           if (waiter) {
-            const index = this.#queued.indexOf(waiter);
-            if (index >= 0) this.#queued.splice(index, 1);
-            this.#queuedByKey.delete(reservation.key);
-            if (waiter.signal && waiter.onAbort) {
-              waiter.signal.removeEventListener("abort", waiter.onAbort);
-            }
-            waiter.resolve(lease);
+            this.#admit(waiter, lease);
           }
         }
       }
@@ -150,25 +135,59 @@ export class SandboxCapacity {
     };
   }
 
-  #cancel(waiter: CapacityWaiter): void {
+  #addCaller(waiter: CapacityWaiter, signal?: AbortSignal): Promise<SandboxCapacityLease> {
+    let resolve!: (lease: SandboxCapacityLease) => void;
+    let reject!: (cause: unknown) => void;
+    const promise = new Promise<SandboxCapacityLease>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    let caller!: CapacityCaller;
+    const onAbort = signal === undefined ? undefined : () => this.#cancelCaller(waiter, caller);
+    caller = {
+      promise,
+      resolve,
+      reject,
+      ...(signal === undefined ? {} : { signal }),
+      ...(onAbort === undefined ? {} : { onAbort }),
+    };
+    waiter.callers.add(caller);
+    signal?.addEventListener("abort", onAbort!, { once: true });
+    return promise;
+  }
+
+  #cancelCaller(waiter: CapacityWaiter, caller: CapacityCaller): void {
+    if (!waiter.callers.delete(caller)) return;
+    if (caller.signal && caller.onAbort) {
+      caller.signal.removeEventListener("abort", caller.onAbort);
+    }
+    caller.reject(abortError());
+    if (waiter.callers.size > 0) return;
     const index = this.#queued.indexOf(waiter);
-    if (index < 0) return;
-    this.#queued.splice(index, 1);
+    if (index >= 0) this.#queued.splice(index, 1);
     this.#queuedByKey.delete(waiter.key);
-    waiter.reject(abortError());
     this.#publish();
+  }
+
+  #admit(waiter: CapacityWaiter, lease: SandboxCapacityLease): void {
+    const index = this.#queued.indexOf(waiter);
+    if (index >= 0) this.#queued.splice(index, 1);
+    this.#queuedByKey.delete(waiter.key);
+    for (const caller of waiter.callers) {
+      if (caller.signal && caller.onAbort) {
+        caller.signal.removeEventListener("abort", caller.onAbort);
+      }
+      caller.resolve(lease);
+    }
+    waiter.callers.clear();
   }
 
   #drain(): void {
     while (this.#reconciled && this.#active.size < this.#maxActive && this.#queued.length > 0) {
       const waiter = this.#queued.shift()!;
-      this.#queuedByKey.delete(waiter.key);
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
       const lease = this.#makeLease(waiter);
       this.#active.set(lease.key, lease);
-      waiter.resolve(lease);
+      this.#admit(waiter, lease);
     }
   }
 
@@ -181,6 +200,7 @@ export class SandboxCapacity {
 export function reconcileSandboxCapacityInventory(input: {
   readonly inventoryRuntimeIds: ReadonlyArray<string>;
   readonly liveBindings: ReadonlyArray<{
+    readonly capacityKey: string;
     readonly threadId: string;
     readonly lifecycleGeneration: string;
     readonly runtimeId: string;
@@ -203,7 +223,7 @@ export function reconcileSandboxCapacityInventory(input: {
     if (!inventory.has(binding.runtimeId) || pendingRuntimeIds.has(binding.runtimeId)) continue;
     ownedRuntimeIds.add(binding.runtimeId);
     reservations.push({
-      key: `${binding.threadId}:${binding.lifecycleGeneration}`,
+      key: binding.capacityKey,
       threadId: binding.threadId,
       lifecycleGeneration: binding.lifecycleGeneration,
     });

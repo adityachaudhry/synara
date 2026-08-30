@@ -46,6 +46,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterRequestError,
   ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
   ProviderValidationError,
@@ -69,6 +70,7 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
+import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -446,6 +448,99 @@ function makeProviderServiceLayer(
 }
 
 const routing = makeProviderServiceLayer();
+const queuedStartRouting = makeProviderServiceLayer(undefined, { includePi: true });
+
+queuedStartRouting.layer("ProviderServiceLive queued Railway starts", (it) => {
+  it.effect("does not charge queue wait against the provider launch timeout", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const capacity = new SandboxCapacity(1);
+      const occupied = yield* Effect.promise(() =>
+        capacity.acquire({
+          key: "occupied:generation",
+          threadId: "occupied",
+          lifecycleGeneration: "generation",
+        }),
+      );
+      const originalStart = queuedStartRouting.pi.adapter.startSession;
+      let admittedKey: string | undefined;
+      Object.assign(queuedStartRouting.pi.adapter, {
+        managesStartSessionTimeout: (input: ProviderSessionStartInput) =>
+          input.repositoryBinding !== undefined,
+        startSession: (input: ProviderSessionStartInput) =>
+          Effect.tryPromise({
+            try: (signal) => {
+              admittedKey = `${input.threadId}:${input.lifecycleGeneration}`;
+              return capacity.acquire({
+                key: admittedKey,
+                threadId: input.threadId,
+                lifecycleGeneration: input.lifecycleGeneration!,
+                signal,
+              });
+            },
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: "pi",
+                method: "session.start",
+                detail: "capacity wait failed",
+                cause,
+              }),
+          }).pipe(Effect.andThen(originalStart(input))),
+      });
+      const threadId = asThreadId("thread-queued-start-timeout");
+      const startFiber = yield* provider
+        .startSession(threadId, {
+          threadId,
+          provider: "pi",
+          runtimeMode: "full-access",
+          repositoryBinding: {
+            kind: "git-subdirectory",
+            origin: "https://git.example.com",
+            owner: "acme",
+            repository: "portfolio",
+            ref: "main",
+            path: "companies/acme",
+          },
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("61 seconds");
+      assert.equal(startFiber.pollUnsafe(), undefined);
+
+      occupied.release();
+      const session = yield* Fiber.join(startFiber);
+      assert.equal(session.threadId, threadId);
+      if (admittedKey !== undefined) capacity.release(admittedKey);
+    }),
+  );
+});
+
+const localStartTimeoutRouting = makeProviderServiceLayer();
+localStartTimeoutRouting.layer("ProviderServiceLive local start timeout", (it) => {
+  it.effect("preserves the existing timeout for adapters without a managed launch deadline", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      Object.assign(localStartTimeoutRouting.codex.adapter, {
+        startSession: () => Effect.never,
+      });
+      const threadId = asThreadId("thread-local-start-timeout");
+      const startFiber = yield* provider
+        .startSession(threadId, {
+          threadId,
+          provider: "codex",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("61 seconds");
+      const result = startFiber.pollUnsafe();
+      assert.equal(result?._tag, "Failure");
+    }),
+  );
+});
+
 const rotationRetryPersistAttempts = new Map<string, number>();
 const ROTATION_RETRY_FAILURE_EVENT_ID = "terminal-rotation-settlement-retry";
 const rotationRetry = makeProviderServiceLayer({

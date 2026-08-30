@@ -1,4 +1,6 @@
 import { Deferred, Effect, Fiber, Layer } from "effect";
+import { it as effectIt } from "@effect/vitest";
+import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,6 +19,10 @@ import {
   type WorkspaceCreationIntent,
   type WorkspaceCreationIntentRepositoryShape,
 } from "../../persistence/Services/WorkspaceCreationIntents";
+import {
+  ProviderSessionRuntimeRepository,
+  type ProviderSessionRuntimeRepositoryShape,
+} from "../../persistence/Services/ProviderSessionRuntime";
 import {
   makeWorkspaceRuntimeLive,
   reconcileWorkspaceCreationIntents,
@@ -154,6 +160,113 @@ function makeIntentRepository(initial: ReadonlyArray<WorkspaceCreationIntent> = 
 }
 
 describe("WorkspaceRuntime", () => {
+  effectIt.effect("starts the Railway create timeout only after capacity admission", () =>
+    Effect.gen(function* () {
+      const capacity = new SandboxCapacity(1);
+      const occupied = yield* Effect.promise(() =>
+        capacity.acquire({
+          key: "occupied:generation",
+          threadId: "occupied",
+          lifecycleGeneration: "generation",
+        }),
+      );
+      const createStarted = yield* Deferred.make<void>();
+      const fake = makeFakeRailwayClient();
+      const client = {
+        ...fake.client,
+        create: () => Deferred.succeed(createStarted, undefined).pipe(Effect.andThen(Effect.never)),
+      } as RailwaySandboxClientShape;
+      const intents = makeIntentRepository();
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => "operation-timeout",
+        reconcileIntervalMs: 60_000,
+        capacity,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, client)),
+        Layer.provide(
+          Layer.succeed(WorkspaceCreationIntentRepository, intents.repository),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const createFiber = yield* runtime
+          .create({
+            threadId: "thread-timeout",
+            lifecycleGeneration: "generation-timeout",
+            environment: {},
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* TestClock.adjust("61 seconds");
+        expect(createFiber.pollUnsafe()).toBeUndefined();
+
+        occupied.release();
+        yield* Deferred.await(createStarted);
+        yield* TestClock.adjust("61 seconds");
+        expect(createFiber.pollUnsafe()?._tag).toBe("Failure");
+        expect(capacity.snapshot().activeKeys).toEqual([
+          "thread-timeout:generation-timeout",
+        ]);
+        expect(intents.records.has("operation-timeout")).toBe(true);
+        yield* Fiber.interrupt(createFiber);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
+  it("installs recovered intent capacity before cleanup can release it", async () => {
+    const capacity = new SandboxCapacity(1, { reconcileBeforeAdmission: true });
+    const inventoryStarted = await Effect.runPromise(Deferred.make<void>());
+    const releaseInventory = await Effect.runPromise(Deferred.make<void>());
+    const intents = makeIntentRepository([
+      {
+        operationId: "operation-pending",
+        runtimeId: "runtime-pending",
+        createdAt: "2026-08-29T00:00:00.000Z",
+      },
+    ]);
+    const fake = makeFakeRailwayClient();
+    const client = {
+      ...fake.client,
+      list: Deferred.succeed(inventoryStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseInventory)),
+        Effect.as([{ id: "runtime-pending", status: "RUNNING", region: "us-west2" }] as const),
+      ),
+      destroy: () => Effect.void,
+    } as RailwaySandboxClientShape;
+    const runtimes = {
+      list: () => Effect.succeed([]),
+    } as ProviderSessionRuntimeRepositoryShape;
+    const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+      reconcileIntervalMs: 1,
+      capacity,
+    }).pipe(
+      Layer.provide(Layer.succeed(RailwaySandboxClient, client)),
+      Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      Layer.provide(Layer.succeed(ProviderSessionRuntimeRepository, runtimes)),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* WorkspaceRuntime;
+        yield* Deferred.await(inventoryStarted);
+        const waiting = capacity.acquire({
+          key: "thread-new:generation-new",
+          threadId: "thread-new",
+          lifecycleGeneration: "generation-new",
+        });
+        yield* Effect.sleep("20 millis");
+        expect(intents.records.has("operation-pending")).toBe(true);
+
+        yield* Deferred.succeed(releaseInventory, undefined);
+        const lease = yield* Effect.promise(() => waiting).pipe(Effect.timeout("1 second"));
+        expect(capacity.snapshot().activeKeys).toEqual(["thread-new:generation-new"]);
+        expect(intents.records.has("operation-pending")).toBe(false);
+        lease.release();
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    );
+  });
+
   it("bounds workspace creation until an authoritative destroy releases capacity", async () => {
     const fake = makeFakeRailwayClient();
     const capacity = new SandboxCapacity(1);

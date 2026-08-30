@@ -434,6 +434,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   return {
     provider: "pi",
     capabilities: local.capabilities,
+    managesStartSessionTimeout: (input) =>
+      capacity !== undefined && input.repositoryBinding !== undefined,
     startSession,
     sendTurn,
     steerTurn,

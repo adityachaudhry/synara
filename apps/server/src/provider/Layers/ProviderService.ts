@@ -1653,22 +1653,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const adapter = yield* registry.getByProvider(input.provider);
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
-              // A provider start that never returns holds this thread's
-              // lifecycle lock and the caller's command slot forever. Bound it,
-              // retire whatever the adapter may have half-spawned, and fail
-              // with text the caller can surface as a session error.
-              const started = yield* adapter
-                .startSession({
-                  ...adapterStartInput,
-                  lifecycleGeneration: lease.generation,
-                  ...(effectiveProviderOptions !== undefined
-                    ? { providerOptions: effectiveProviderOptions }
-                    : {}),
-                  ...(effectiveResumeCursor !== undefined
-                    ? { resumeCursor: effectiveResumeCursor }
-                    : {}),
-                })
-                .pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
+              // Most providers use this outer deadline. Capacity-managed
+              // Railway starts apply the same deadline after admission so FIFO
+              // queue time does not consume their launch budget.
+              const startInput = {
+                ...adapterStartInput,
+                lifecycleGeneration: lease.generation,
+                ...(effectiveProviderOptions !== undefined
+                  ? { providerOptions: effectiveProviderOptions }
+                  : {}),
+                ...(effectiveResumeCursor !== undefined
+                  ? { resumeCursor: effectiveResumeCursor }
+                  : {}),
+              };
+              const start = adapter.startSession(startInput);
+              const started = adapter.managesStartSessionTimeout?.(startInput)
+                ? Option.some(yield* start)
+                : yield* start.pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
               if (Option.isNone(started)) {
                 yield* Effect.logError("provider session start exceeded its deadline", {
                   threadId,

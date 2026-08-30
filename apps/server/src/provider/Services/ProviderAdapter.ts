@@ -109,6 +109,9 @@ export interface ProviderAdapterShape<TError> {
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
+  /** True only when this start path applies its own post-admission launch deadline. */
+  readonly managesStartSessionTimeout?: (input: ProviderSessionStartInput) => boolean;
+
   /**
    * Send a turn to an active provider session.
    */

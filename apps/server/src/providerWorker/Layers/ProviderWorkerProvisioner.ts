@@ -424,9 +424,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           const active = activeByThread.get(input.threadId);
           if (active?.fence.lifecycleGeneration === input.lifecycleGeneration) return active;
           if (active) {
-            markRetired(input.threadId, active.fence.lifecycleGeneration);
-            activeByThread.delete(input.threadId);
             const replacement = yield* replaceBinding(active, input);
+            markRetired(input.threadId, active.fence.lifecycleGeneration);
             activeByThread.set(input.threadId, replacement);
             return replacement;
           }
@@ -446,11 +445,11 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           const active = activeByThread.get(input.threadId);
           if (active?.fence.lifecycleGeneration === input.lifecycleGeneration) return active;
           const previous = active ?? binding;
+          activeByThread.set(input.threadId, previous);
+          const replacement = yield* replaceBinding(previous, input);
           if (previous.fence.lifecycleGeneration !== input.lifecycleGeneration) {
             markRetired(input.threadId, previous.fence.lifecycleGeneration);
           }
-          activeByThread.delete(input.threadId);
-          const replacement = yield* replaceBinding(previous, input);
           activeByThread.set(input.threadId, replacement);
           return replacement;
         }),

@@ -72,12 +72,14 @@ function requireEnabled(
 
 export interface WorkspaceRuntimeOptions {
   readonly createOperationId?: () => string;
+  readonly createTimeoutMs?: number;
   readonly reconcileIntervalMs?: number;
   readonly capacity?: SandboxCapacity;
 }
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 10_000;
 const MAX_RECONCILE_BACKOFF_MS = 5 * 60_000;
+const DEFAULT_CREATE_TIMEOUT_MS = 60_000;
 
 export function reconcileWorkspaceCreationIntents(input: {
   readonly client: RailwaySandboxClientShape;
@@ -128,8 +130,14 @@ export function reconcileSandboxCapacityAtStartup(input: {
             Effect.map((runtimeId) => ({ ...intent, runtimeId })),
           ),
     );
-    const liveBindings = persistedRuntimes.flatMap((runtime) => {
-      if (runtime.status !== "starting" && runtime.status !== "running") return [];
+    const liveBindings: Array<{
+      capacityKey: string;
+      threadId: string;
+      lifecycleGeneration: string;
+      runtimeId: string;
+    }> = [];
+    for (const runtime of persistedRuntimes) {
+      if (runtime.status !== "starting" && runtime.status !== "running") continue;
       const payload =
         runtime.runtimePayload !== null &&
         typeof runtime.runtimePayload === "object" &&
@@ -137,15 +145,28 @@ export function reconcileSandboxCapacityAtStartup(input: {
           ? (runtime.runtimePayload as Record<string, unknown>)
           : {};
       const binding = decodeProviderWorkerRuntimeBinding(payload.distributedPiRuntime);
-      if (!binding) return [];
-      return [
-        {
-          threadId: runtime.threadId,
-          lifecycleGeneration: runtime.lifecycleGeneration,
+      if (!binding) continue;
+      const expectedCapacityKey = `${runtime.threadId}:${runtime.lifecycleGeneration}`;
+      const capacityKey = binding.workspace.capacityKey;
+      if (
+        capacityKey !== expectedCapacityKey ||
+        binding.workspace.lifecycleGeneration !== runtime.lifecycleGeneration ||
+        binding.fence.lifecycleGeneration !== runtime.lifecycleGeneration ||
+        (binding.threadId !== undefined && binding.threadId !== runtime.threadId)
+      ) {
+        return yield* new WorkspaceRuntimeError({
+          operation: "capacity.reconcile",
+          detail: `Persisted Railway capacity key for thread '${runtime.threadId}' does not match lifecycle generation '${runtime.lifecycleGeneration}'.`,
           runtimeId: binding.workspace.runtimeId,
-        },
-      ];
-    });
+        });
+      }
+      liveBindings.push({
+        capacityKey,
+        threadId: runtime.threadId,
+        lifecycleGeneration: runtime.lifecycleGeneration,
+        runtimeId: binding.workspace.runtimeId,
+      });
+    }
     const report = reconcileSandboxCapacityInventory({
       inventoryRuntimeIds: inventory.map((record) => record.id),
       liveBindings,
@@ -240,14 +261,14 @@ export function makeWorkspaceRuntimeLive(
               }),
             );
 
-      if (runtimes !== undefined) {
-        yield* Effect.forkScoped(reconcileCapacityLoop(reconcileIntervalMs));
-      }
-
       yield* Effect.forkScoped(
-        Effect.sleep(reconcileIntervalMs).pipe(
-          Effect.andThen(reconcileLoop(reconcileIntervalMs)),
-        ),
+        runtimes === undefined
+          ? Effect.sleep(reconcileIntervalMs).pipe(
+              Effect.andThen(reconcileLoop(reconcileIntervalMs)),
+            )
+          : reconcileCapacityLoop(reconcileIntervalMs).pipe(
+              Effect.andThen(reconcileLoop(reconcileIntervalMs)),
+            ),
       );
 
       const removeIntent = (operationId: string) =>
@@ -339,7 +360,10 @@ export function makeWorkspaceRuntimeLive(
                     ...(enabled.region === undefined ? {} : { region: enabled.region }),
                     environment: input.environment,
                   })
-                  .pipe(Effect.mapError(toRuntimeError("create"))),
+                  .pipe(
+                    Effect.timeout(options.createTimeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS),
+                    Effect.mapError(toRuntimeError("create")),
+                  ),
               ),
             );
             if (Exit.isFailure(createExit)) {

@@ -183,6 +183,20 @@ describe("RoutedPiAdapter", () => {
 
     expect(harness.localStart).toHaveBeenCalledOnce();
     expect(harness.provisioner.start).not.toHaveBeenCalled();
+    expect(adapter.managesStartSessionTimeout?.(startInput())).toBe(false);
+  });
+
+  it("moves only capacity-managed Railway launches to the post-admission timeout", async () => {
+    const harness = makeHarness();
+    const capacity = new SandboxCapacity(1);
+    const adapter = await Effect.runPromise(
+      makeRoutedPiAdapterWithCapacity(capacity).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(adapter.managesStartSessionTimeout?.(startInput())).toBe(false);
+    expect(
+      adapter.managesStartSessionTimeout?.(startInput({ repositoryBound: true })),
+    ).toBe(true);
   });
 
   it("starts only an admitted repository-bound Pi session through the worker protocol", async () => {

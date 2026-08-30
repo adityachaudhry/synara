@@ -113,4 +113,38 @@ describe("sandbox capacity startup recovery", () => {
       "11111111-1111-4111-8111-111111111111:generation-live",
     );
   });
+
+  it("fails closed when a persisted capacity key disagrees with its thread generation", async () => {
+    const capacity = new SandboxCapacity(1, { reconcileBeforeAdmission: true });
+    const { intents } = repositories();
+    const mismatchedBinding = {
+      ...runtimeBinding,
+      workspace: { ...runtimeBinding.workspace, capacityKey: "another-thread:generation-live" },
+    };
+    const runtimes = {
+      list: () =>
+        Effect.succeed([
+          {
+            threadId: "11111111-1111-4111-8111-111111111111" as never,
+            providerName: "pi",
+            adapterKey: "pi:railway-sandbox",
+            runtimeMode: "full-access" as const,
+            status: "running" as const,
+            lifecycleGeneration: "generation-live",
+            lastSeenAt: "2026-08-29T00:00:00.000Z" as never,
+            resumeCursor: null,
+            runtimePayload: { distributedPiRuntime: mismatchedBinding },
+          },
+        ]),
+    } as ProviderSessionRuntimeRepositoryShape;
+    const client = {
+      list: Effect.succeed([{ id: "runtime-live", status: "RUNNING", region: "us-west2" }]),
+      findByCreateOperationId: () => Effect.succeed(null),
+    } as RailwaySandboxClientShape;
+
+    await expect(
+      Effect.runPromise(reconcileSandboxCapacityAtStartup({ client, intents, runtimes, capacity })),
+    ).rejects.toMatchObject({ operation: "capacity.reconcile" });
+    expect(capacity.snapshot()).toEqual({ activeKeys: [], queued: [], reconciled: false });
+  });
 });

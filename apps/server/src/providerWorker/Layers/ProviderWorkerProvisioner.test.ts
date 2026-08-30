@@ -2,6 +2,7 @@ import { Deferred, Effect, Fiber, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkspaceRuntime, type WorkspaceRuntimeBinding } from "../../workspaceRuntime/Services/WorkspaceRuntime";
+import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
@@ -440,7 +441,63 @@ describe("ProviderWorkerProvisioner", () => {
     ]);
   });
 
-  it("returns one worker for repeated creates of the same thread generation", async () => {
+  it("retains a failed replacement binding so stop can retry destruction and free capacity", async () => {
+    const harness = makeHarness();
+    const capacity = new SandboxCapacity(1);
+    let destroyAttempts = 0;
+    harness.workspace.create.mockImplementation((input) =>
+      Effect.promise(() =>
+        capacity
+          .acquire({
+            key: `${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`,
+            threadId: input.threadId ?? input.lifecycleGeneration,
+            lifecycleGeneration: input.lifecycleGeneration,
+          })
+          .then(() => ({
+            ...workspaceBinding,
+            runtimeId: `runtime-${input.lifecycleGeneration}`,
+            lifecycleGeneration: input.lifecycleGeneration,
+            capacityKey: `${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`,
+          })),
+      ),
+    );
+    harness.workspace.connect.mockImplementation((binding) => Effect.succeed(binding));
+    harness.workspace.destroy.mockImplementation((binding) =>
+      Effect.suspend(() => {
+        destroyAttempts += 1;
+        if (destroyAttempts === 1) return Effect.fail(new Error("destroy failed"));
+        capacity.release(binding.capacityKey!);
+        return Effect.void;
+      }),
+    );
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    const first = await Effect.runPromise(
+      provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
+    );
+
+    await expect(
+      Effect.runPromise(
+        provisioner.restart(first, { threadId, lifecycleGeneration: "generation-2" }),
+      ),
+    ).rejects.toMatchObject({ operation: "restart" });
+    await Effect.runPromise(provisioner.stop(first));
+
+    expect(destroyAttempts).toBe(2);
+    expect(capacity.snapshot().activeKeys).toEqual([]);
+    const replacement = await Effect.runPromise(
+      provisioner.start({ threadId, lifecycleGeneration: "generation-2" }),
+    );
+    expect(replacement.workspace.lifecycleGeneration).toBe("generation-2");
+    expect(capacity.snapshot().activeKeys).toEqual([`${threadId}:generation-2`]);
+    await Effect.runPromise(provisioner.stop(replacement));
+  });
+
+  it("returns one worker for concurrent creates of the same thread generation", async () => {
     const harness = makeHarness();
     const provisioner = await Effect.runPromise(
       makeProviderWorkerProvisioner({
@@ -449,12 +506,14 @@ describe("ProviderWorkerProvisioner", () => {
       }).pipe(Effect.provide(harness.layer)),
     );
 
-    const first = await Effect.runPromise(
-      provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-    );
-    const repeated = await Effect.runPromise(
-      provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-    );
+    const [first, repeated] = await Promise.all([
+      Effect.runPromise(
+        provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
+      ),
+      Effect.runPromise(
+        provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
+      ),
+    ]);
 
     expect(repeated).toBe(first);
     expect(harness.workspace.create).toHaveBeenCalledOnce();
