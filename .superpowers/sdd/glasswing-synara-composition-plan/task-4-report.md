@@ -7,6 +7,7 @@ Implemented and committed bounded Railway sandbox admission as:
 - `1314cd1af` — `feat(server): bound Railway sandbox capacity`
 - `f41d58240` — `fix(server): harden sandbox capacity lifecycle`
 - `1790e021f` — `fix(server): bound full remote Pi launch`
+- `1e1b7505c` — `fix(server): close launch deadline races`
 
 The implementation adds one process-local FIFO capacity service, one positive-integer Railway capacity setting, and the minimum contract/projection/UI additions needed to show queued sessions and their positions. It composes with Task 3's durable workspace creation intents and provider runtime bindings; it does not add a second cleanup owner or alter Task 3's marker reconciliation ordering.
 
@@ -38,13 +39,19 @@ No Railway or other external infrastructure was mutated.
 - Threaded only that callback through `ProviderWorkerProvisioner.start`/`restart` into `WorkspaceRuntime.create`. No scheduler, timer service, or additional capacity abstraction was introduced.
 - The deadline now covers durable creation-intent publication, Railway create and runtime-ID binding, checkout and credential cleanup, worker artifact/config writes, durable-process startup, worker connection, remote `session.start`, provider binding persistence, and creation-intent adoption.
 - Timeout interrupts the launch transaction and then waits for its existing cleanup path. Before a runtime is known, an uncertain Railway create retains its durable intent and permit for Task 3 reconciliation. After a binding exists, timeout invokes `ProviderWorkerProvisioner.stop`; the permit and intent clear only after authoritative destroy/NotFound and intent removal succeed. A destroy failure is surfaced as `session.start.cleanup` and retains ownership fail-closed.
-- Creation-intent publication/runtime binding and adoption are interruptible at the deadline boundary. Known-runtime binding interruption destroys the sandbox before removing its intent and releasing capacity; adoption interruption leaves the intent/permit intact until the timeout cleanup retries them.
+- Creation-intent publication is an uninterruptible reserve/put segment while deadline elapsed time continues to count. Runtime-ID binding and adoption remain interruptible at the deadline boundary. Known-runtime binding interruption destroys the sandbox before removing its intent and releasing capacity; adoption interruption leaves the intent/permit intact until the timeout cleanup retries them.
+
+## Timeout boundary race hardening
+
+- After the deadline wins, the adapter now treats the launch fiber's post-interrupt exit as authoritative. A launch that completed successfully in the timeout/interrupt race is returned as success with its persisted binding and active lifecycle permit; it is never reported failed while leaving a live unmanaged runtime.
+- Creation-intent publication can no longer be cancelled between commit and acknowledgement. If publication fails or its completion is lost, the controller performs an uninterruptible exact-operation-ID removal before releasing the pre-create permit. Removal failure wins, keeps the permit fail-closed, and leaves the durable intent available to startup accounting.
+- If the deadline expires while publication is blocked, publication first settles atomically. An already-pending interruption is then observed before the Railway SDK create entry marker, so the exact intent is removed and the permit released without starting SDK create. This prevents a late null-runtime intent commit after cleanup.
 
 ## Ownership and recovery invariants
 
 The create and deadline ordering is now:
 
-`wait outside deadline -> acquire generation permit -> synchronously signal admission/start 60s clock -> reserve operation ID -> insert durable intent -> Railway create -> bind runtime ID -> checkout/config/bootstrap/connect -> remote session.start -> persist provider binding including capacity key -> adopt/clear intent`
+`wait outside deadline -> acquire generation permit -> synchronously signal admission/start 60s clock -> atomically reserve operation ID + insert durable intent -> Railway create -> bind runtime ID -> checkout/config/bootstrap/connect -> remote session.start -> persist provider binding including capacity key -> adopt/clear intent`
 
 The permit is not released by adoption. It remains active until the corresponding sandbox/worker lifetime ends.
 
@@ -53,6 +60,10 @@ Timeout cleanup ordering is:
 `interrupt launch -> if create may be unknown, retain Task 3 intent + permit -> otherwise stop worker -> authoritative sandbox destroy/NotFound -> remove intent -> release permit -> surface timeout`
 
 If authoritative cleanup fails, the cleanup error wins and the durable owner plus permit remain available for recovery rather than being cleared early.
+
+Before SDK create starts, publication cleanup is instead:
+
+`settle intent publication -> exact-ID remove/confirm absent -> release permit -> surface publication failure or timeout`
 
 Startup ordering is:
 
@@ -77,6 +88,7 @@ The implementation was driven through focused RED/GREEN cycles:
 - Blocking-review RED runs then reproduced all five reported defects: first-caller cancellation removed a shared queue entry; later-caller cancellation was ignored; failed replacement destruction left the old capacity permit unreachable; slow initial inventory let cleanup release before a stale reservation was installed; and a mismatched persisted key was silently replaced with a reconstructed key. Two test-harness polling assertions were corrected and not counted as product failures. A dedicated virtual-time RED run additionally proved the outer provider deadline expired during a 61-second queue wait while post-admission Railway create had no deadline. The minimum fixes made the final focused server run pass **7 files, 238 tests**.
 - The second timeout-review RED run added five virtual-time stage hangs—checkout, worker connection, remote `session.start`, provider binding persistence, and intent adoption. All five remained pending after 61 seconds post-admission (`expected Failure, received undefined`), proving the create-only timer left the rest of launch unbounded.
 - GREEN coverage verifies 61 seconds of queue time consumes none of the launch budget, every covered stage remains pending at 59 seconds after admission and fails after 61, an uncertain Railway create retains its intent/permit without calling stop, successful post-create cleanup reclaims both before timeout is returned, and failed authoritative cleanup is surfaced while retaining ownership. Workspace tests additionally cover interrupted runtime-ID binding and adoption retry cleanup.
+- The third review RED deterministically completed the launch after the timeout decision but before interrupt and received `Failure` instead of `Success`. Publication REDs left a commit-then-lost-completion row behind, cancelled a blocked publication before it settled, and surfaced `creation-intent.put` while releasing capacity when exact-ID removal failed. GREEN now returns the authoritative successful exit, orders blocked publication as `commit -> remove`, performs no SDK create after the expired deadline, retains the permit on removal failure, and rebuilds that pending-intent occupancy on restart.
 
 Focused coverage includes max-N admission, strict FIFO N+1, same-key idempotency, cancellation and queue compaction, terminal create cleanup, authoritative destroy, stale-generation replacement ordering, double release, controller restart reconciliation, pending intent occupancy, transient inventory failure, orphan reporting, queued event projection/clearing, legacy binding recovery, and the unchanged local Pi path.
 
@@ -84,11 +96,11 @@ Focused coverage includes max-N admission, strict FIFO N+1, same-key idempotency
 
 All final commands used Node **v24.16.0** in `PATH` and Bun **1.3.12** through `npx`. `bun test` was never used.
 
-- Round 2 focused capacity, provisioner, provider timeout, recovery, routed activity, and ingestion suites: **9 files, 266 tests passed**.
+- Round 3 focused timeout, workspace intent persistence, provisioner, recovery, and capacity suites: **7 files, 155 tests passed**.
 - Focused contracts queue projection: **2 files, 54 tests passed**.
 - Focused web queue projection: **2 files, 137 tests passed**.
 - Full `packages/contracts` suite: **20 files, 250 tests passed**.
-- Full `apps/server` suite: **380 files passed, 3 skipped; 4,231 tests passed, 16 skipped**.
+- Full `apps/server` suite: **380 files passed, 3 skipped; 4,235 tests passed, 16 skipped**.
 - Full `apps/web` suite: **334 files, 4,113 tests passed**.
 - `git diff --cached --check`: passed before the implementation commit.
 
