@@ -55,6 +55,15 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { ProviderWorkerBootstrapAuthorityLive } from "./providerWorker/Layers/ProviderWorkerBootstrapAuthority";
+import { ProviderWorkerBrokerLive } from "./providerWorker/Layers/ProviderWorkerBroker";
+import {
+  makeProviderWorkerProvisionerFromArtifactLive,
+  ProviderWorkerProvisionerDisabled,
+} from "./providerWorker/Layers/ProviderWorkerProvisioner";
+import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedRuntimeConfig";
+import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
+import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -256,10 +265,38 @@ export function makeServerRuntimeServicesLayer(
  */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
+  const providerWorkerTransportLayer = Layer.merge(
+    ProviderWorkerBootstrapAuthorityLive,
+    ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
+  );
+  const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
+  const providerWorkerProvisionerLayer = distributedPiConfig.enabled
+    ? makeProviderWorkerProvisionerFromArtifactLive({
+        controlUrl: distributedPiConfig.controlUrl,
+        environment: distributedPiConfig.workerEnvironment,
+        ...(distributedPiConfig.repositoryAuthorization === undefined
+          ? {}
+          : { repositoryAuthorization: distributedPiConfig.repositoryAuthorization }),
+      }).pipe(
+        Layer.provide(
+          makeWorkspaceRuntimeLive(distributedPiConfig.railway).pipe(
+            Layer.provide(makeRailwaySandboxClientLive(distributedPiConfig.railway)),
+          ),
+        ),
+        Layer.provide(providerWorkerTransportLayer),
+      )
+    : ProviderWorkerProvisionerDisabled;
+  const providerWorkerInfrastructureLayer = Layer.merge(
+    providerWorkerTransportLayer,
+    providerWorkerProvisionerLayer,
+  );
   return {
+    providerWorkerInfrastructureLayer,
     runtimeServicesLayer: makeServerRuntimeServicesLayer({
       agentGatewayCredentialsLayer,
     }),
-    providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }),
+    providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
+      Layer.provide(providerWorkerInfrastructureLayer),
+    ),
   } as const;
 }

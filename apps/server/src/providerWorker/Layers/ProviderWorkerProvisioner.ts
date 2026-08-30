@@ -1,0 +1,468 @@
+import { randomUUID } from "node:crypto";
+import { Effect, FileSystem, Layer } from "effect";
+
+import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
+import { makeKeyedLock } from "../../provider/keyedLock";
+import { ProviderWorkerProvisioningError } from "../Errors";
+import type { ProviderWorkerFence } from "../fence";
+import {
+  ProviderWorkerProvisioner,
+  type ProviderWorkerProvisionerShape,
+} from "../Services/ProviderWorkerProvisioner";
+import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
+import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
+import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import {
+  makeRepositoryCheckoutPlan,
+  parseRepositoryCheckoutResult,
+} from "../repositoryCheckout";
+
+const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
+const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
+const DEFAULT_CWD = "/workspace";
+const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+function workerLaunchCommand(homeDir: string) {
+  const logsDir = `${homeDir}/state/logs`;
+  const workerLogPath = `${logsDir}/worker.log`;
+  return `mkdir -p ${shellQuote(logsDir)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
+}
+
+export interface ProviderWorkerProvisionerOptions {
+  readonly artifact: Uint8Array;
+  readonly controlUrl: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly repositoryAuthorization?: string;
+}
+
+function provisionError(operation: string, detail: string, cause: unknown, sandboxId?: string) {
+  return new ProviderWorkerProvisioningError({
+    operation,
+    detail,
+    ...(sandboxId === undefined ? {} : { sandboxId }),
+    cause,
+  });
+}
+
+export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisionerOptions) =>
+  Effect.gen(function* () {
+    const workspaceRuntime = yield* WorkspaceRuntime;
+    const broker = yield* ProviderWorkerBroker;
+    const authority = yield* ProviderWorkerBootstrapAuthority;
+    const lifecycleLock = makeKeyedLock<string>();
+    const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
+    const retiredGenerations = new Map<string, Set<string>>();
+
+    const markRetired = (threadId: string, lifecycleGeneration: string) => {
+      const retired = retiredGenerations.get(threadId) ?? new Set<string>();
+      retired.add(lifecycleGeneration);
+      retiredGenerations.set(threadId, retired);
+    };
+
+    const staleGeneration = (threadId: string, lifecycleGeneration: string) =>
+      provisionError(
+        "stale-generation",
+        `Provider worker generation '${lifecycleGeneration}' for thread '${threadId}' is retired.`,
+        undefined,
+      );
+
+    const provisionConnectedWorker = Effect.fn(function* (input: {
+      readonly workspace: ProviderWorkerRuntimeBinding["workspace"];
+      readonly threadId: string;
+      readonly lifecycleGeneration: string;
+      readonly cwd: string;
+      readonly homeDir: string;
+      readonly repositoryBinding?: NonNullable<
+        Parameters<ProviderWorkerProvisionerShape["start"]>[0]["repositoryBinding"]
+      >;
+      readonly checkoutCommand?: string;
+    }) {
+      const fence: ProviderWorkerFence = {
+        sandboxId: input.workspace.runtimeId,
+        workerId: randomUUID(),
+        lifecycleGeneration: input.lifecycleGeneration,
+      };
+      const credential = yield* authority.issue(fence);
+      yield* broker.expectWorker(fence);
+      yield* Effect.logInfo("provider worker reserved", {
+        sandboxId: fence.sandboxId,
+        workerId: fence.workerId,
+        lifecycleGeneration: fence.lifecycleGeneration,
+      });
+      let durableSessionName: string | undefined;
+
+      const launch = Effect.gen(function* () {
+        const repositoryCheckout =
+          input.repositoryBinding === undefined || input.checkoutCommand === undefined
+            ? undefined
+            : yield* workspaceRuntime
+                .exec(input.workspace, {
+                  command: input.checkoutCommand,
+                  timeoutSeconds: 120,
+                })
+                .pipe(
+                  Effect.flatMap((result) =>
+                    result.exitCode === 0 && !result.timedOut
+                      ? Effect.try({
+                          try: () => parseRepositoryCheckoutResult(result.stdout),
+                          catch: (cause) =>
+                            provisionError(
+                              "checkout.verify",
+                              "Repository checkout did not report a verified commit.",
+                              cause,
+                              input.workspace.runtimeId,
+                            ),
+                        })
+                      : Effect.fail(
+                          provisionError(
+                            "checkout.exec",
+                            "Repository checkout failed before worker startup.",
+                            new Error(result.stderr || result.stdout || "checkout failed"),
+                            input.workspace.runtimeId,
+                          ),
+                        ),
+                  ),
+                );
+        yield* Effect.logInfo("provider worker artifact upload starting", {
+          sandboxId: fence.sandboxId,
+          bytes: options.artifact.byteLength,
+        });
+        yield* workspaceRuntime.writeFile(input.workspace, {
+          path: WORKER_ARTIFACT_PATH,
+          data: options.artifact,
+          mode: 0o500,
+        });
+        yield* Effect.logInfo("provider worker artifact upload completed", {
+          sandboxId: fence.sandboxId,
+        });
+        yield* workspaceRuntime.writeFile(input.workspace, {
+          path: WORKER_CONFIG_PATH,
+          data: JSON.stringify({
+            controlUrl: options.controlUrl,
+            bootstrapCredential: credential,
+            sandboxId: fence.sandboxId,
+            workerId: fence.workerId,
+            lifecycleGeneration: fence.lifecycleGeneration,
+            cwd: input.cwd,
+            homeDir: input.homeDir,
+          }),
+          mode: 0o600,
+        });
+        yield* Effect.logInfo("provider worker config upload completed", {
+          sandboxId: fence.sandboxId,
+        });
+        const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
+          command: workerLaunchCommand(input.homeDir),
+        });
+        durableSessionName = durable.sessionName;
+        yield* Effect.logInfo("provider worker process started", {
+          sandboxId: fence.sandboxId,
+          supervision: durable.supervision,
+        });
+        yield* broker.waitForConnection(fence);
+        yield* Effect.logInfo("provider worker connected", {
+          sandboxId: fence.sandboxId,
+          workerId: fence.workerId,
+        });
+        return {
+          schemaVersion: 1,
+          runtimeKind: "railway-sandbox-pi",
+          threadId: input.threadId,
+          workspace: input.workspace,
+          fence,
+          durableSessionName: durable.sessionName,
+          processSupervision: durable.supervision,
+          cwd: input.cwd,
+          homeDir: input.homeDir,
+          ...(input.repositoryBinding === undefined || repositoryCheckout === undefined
+            ? {}
+            : {
+                repositoryCheckout: {
+                  binding: input.repositoryBinding,
+                  ...repositoryCheckout,
+                },
+              }),
+        } satisfies ProviderWorkerRuntimeBinding;
+      });
+
+      return yield* launch.pipe(
+        Effect.mapError((cause) =>
+          provisionError(
+            "launch",
+            "Failed to launch and connect the Railway provider worker.",
+            cause,
+            input.workspace.runtimeId,
+          ),
+        ),
+        Effect.onError(() =>
+          broker.retire(fence, "worker startup failed").pipe(
+            Effect.catch(() => Effect.void),
+            Effect.andThen(
+              durableSessionName === undefined
+                ? Effect.void
+                : workspaceRuntime
+                    .stopDurableProcess(input.workspace, durableSessionName)
+                    .pipe(Effect.catch(() => Effect.void)),
+            ),
+            Effect.andThen(authority.revoke(fence)),
+          ),
+        ),
+      );
+    });
+
+    const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
+      Effect.gen(function* () {
+        const checkout = input.repositoryBinding
+          ? makeRepositoryCheckoutPlan({
+              binding: input.repositoryBinding,
+              ...(options.repositoryAuthorization
+                ? { authorization: options.repositoryAuthorization }
+                : {}),
+            })
+          : undefined;
+        const workspace = yield* workspaceRuntime.create({
+          lifecycleGeneration: input.lifecycleGeneration,
+          environment: {
+            ...(options.environment ?? {}),
+            ...(checkout?.environment ?? {}),
+          },
+        });
+        return yield* provisionConnectedWorker({
+          workspace,
+          threadId: input.threadId,
+          lifecycleGeneration: input.lifecycleGeneration,
+          cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
+          homeDir: DEFAULT_HOME_DIR,
+          ...(input.repositoryBinding === undefined
+            ? {}
+            : { repositoryBinding: input.repositoryBinding }),
+          ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
+        }).pipe(
+          Effect.onError(() => workspaceRuntime.destroy(workspace).pipe(Effect.catch(() => Effect.void))),
+        );
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError
+            ? cause
+            : provisionError("start", "Failed to create the Railway provider workspace.", cause),
+        ),
+      );
+
+    const replaceBinding: ProviderWorkerProvisionerShape["restart"] = (binding, input) =>
+      Effect.gen(function* () {
+        yield* broker
+          .retire(binding.fence, "worker generation replaced")
+          .pipe(Effect.catch(() => Effect.void));
+        yield* authority.revoke(binding.fence);
+        const previousWorkspace = yield* workspaceRuntime.connect(binding.workspace).pipe(
+          Effect.catch(() =>
+            Effect.logWarning("provider worker workspace reconnect failed during replacement", {
+              sandboxId: binding.workspace.runtimeId,
+            }).pipe(Effect.as(binding.workspace)),
+          ),
+        );
+        yield* workspaceRuntime
+          .stopDurableProcess(previousWorkspace, binding.durableSessionName)
+          .pipe(Effect.catch(() => Effect.void));
+        // Destruction is the authoritative barrier. A durable-session handle can
+        // be stale after a control-plane restart, and must not leave an older
+        // worker reconnecting alongside the replacement generation.
+        yield* workspaceRuntime.destroy(previousWorkspace);
+        const repositoryBinding = input.repositoryBinding ?? binding.repositoryCheckout?.binding;
+        const checkout = repositoryBinding
+          ? makeRepositoryCheckoutPlan({
+              binding: repositoryBinding,
+              ...(options.repositoryAuthorization
+                ? { authorization: options.repositoryAuthorization }
+                : {}),
+            })
+          : undefined;
+        const replacementWorkspace = yield* workspaceRuntime.create({
+          lifecycleGeneration: input.lifecycleGeneration,
+          environment: {
+            ...(options.environment ?? {}),
+            ...(checkout?.environment ?? {}),
+          },
+        });
+        return yield* provisionConnectedWorker({
+          workspace: replacementWorkspace,
+          threadId: input.threadId,
+          lifecycleGeneration: input.lifecycleGeneration,
+          cwd: checkout?.cwd ?? input.cwd?.trim() ?? binding.cwd,
+          homeDir: binding.homeDir,
+          ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
+          ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
+        }).pipe(
+          Effect.onError(() =>
+            workspaceRuntime.destroy(replacementWorkspace).pipe(Effect.catch(() => Effect.void)),
+          ),
+        );
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError
+            ? cause
+            : provisionError(
+                "restart",
+                "Failed to reconnect the Railway provider workspace.",
+                cause,
+                binding.workspace.runtimeId,
+              ),
+        ),
+      );
+
+    const stopBinding: ProviderWorkerProvisionerShape["stop"] = (binding) =>
+      broker.retire(binding.fence, "provider session stopped").pipe(
+        Effect.catch(() => Effect.void),
+        Effect.andThen(
+          workspaceRuntime
+            .stopDurableProcess(binding.workspace, binding.durableSessionName)
+            .pipe(Effect.catch(() => Effect.void)),
+        ),
+        Effect.andThen(authority.revoke(binding.fence)),
+        Effect.andThen(workspaceRuntime.destroy(binding.workspace)),
+        Effect.mapError((cause) =>
+          provisionError(
+            "stop",
+            "Failed to destroy the Railway provider workspace.",
+            cause,
+            binding.workspace.runtimeId,
+          ),
+        ),
+      );
+
+    const start: ProviderWorkerProvisionerShape["start"] = (input) =>
+      lifecycleLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          if (retiredGenerations.get(input.threadId)?.has(input.lifecycleGeneration)) {
+            return yield* staleGeneration(input.threadId, input.lifecycleGeneration);
+          }
+          const active = activeByThread.get(input.threadId);
+          if (active?.fence.lifecycleGeneration === input.lifecycleGeneration) return active;
+          if (active) {
+            markRetired(input.threadId, active.fence.lifecycleGeneration);
+            activeByThread.delete(input.threadId);
+            const replacement = yield* replaceBinding(active, input);
+            activeByThread.set(input.threadId, replacement);
+            return replacement;
+          }
+          const created = yield* createBinding(input);
+          activeByThread.set(input.threadId, created);
+          return created;
+        }),
+      );
+
+    const restart: ProviderWorkerProvisionerShape["restart"] = (binding, input) =>
+      lifecycleLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          if (retiredGenerations.get(input.threadId)?.has(input.lifecycleGeneration)) {
+            return yield* staleGeneration(input.threadId, input.lifecycleGeneration);
+          }
+          const active = activeByThread.get(input.threadId);
+          if (active?.fence.lifecycleGeneration === input.lifecycleGeneration) return active;
+          const previous = active ?? binding;
+          if (previous.fence.lifecycleGeneration !== input.lifecycleGeneration) {
+            markRetired(input.threadId, previous.fence.lifecycleGeneration);
+          }
+          activeByThread.delete(input.threadId);
+          const replacement = yield* replaceBinding(previous, input);
+          activeByThread.set(input.threadId, replacement);
+          return replacement;
+        }),
+      );
+
+    const stop: ProviderWorkerProvisionerShape["stop"] = (binding) => {
+      const threadId = binding.threadId;
+      if (!threadId) return stopBinding(binding);
+      return lifecycleLock.withLock(
+        threadId,
+        Effect.gen(function* () {
+          const active = activeByThread.get(threadId);
+          if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
+            return;
+          }
+          if (!active && retiredGenerations.get(threadId)?.has(binding.fence.lifecycleGeneration)) {
+            return;
+          }
+          yield* stopBinding(binding);
+          activeByThread.delete(threadId);
+          markRetired(threadId, binding.fence.lifecycleGeneration);
+        }),
+      );
+    };
+
+    return { start, restart, stop } satisfies ProviderWorkerProvisionerShape;
+  });
+
+export function makeProviderWorkerProvisionerLive(options: ProviderWorkerProvisionerOptions) {
+  return Layer.effect(ProviderWorkerProvisioner, makeProviderWorkerProvisioner(options));
+}
+
+export function makeProviderWorkerProvisionerFromArtifactLive(
+  options: Omit<ProviderWorkerProvisionerOptions, "artifact"> & {
+    readonly artifactPath?: string;
+  },
+) {
+  return Layer.effect(
+    ProviderWorkerProvisioner,
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const candidates = options.artifactPath
+        ? [options.artifactPath]
+        : [
+            new URL("./provider-worker/workerMain.mjs", import.meta.url).pathname,
+            new URL("../../../dist/provider-worker/workerMain.mjs", import.meta.url).pathname,
+          ];
+      let artifactPath: string | undefined;
+      for (const candidate of candidates) {
+        if (yield* fileSystem.exists(candidate)) {
+          artifactPath = candidate;
+          break;
+        }
+      }
+      if (artifactPath === undefined) {
+        return yield* provisionError(
+          "artifact.read",
+          "Provider worker artifact is missing; run the server build before enabling Railway distributed Pi.",
+          undefined,
+        );
+      }
+      const artifact = yield* fileSystem.readFile(artifactPath).pipe(
+        Effect.mapError((cause) =>
+          provisionError("artifact.read", "Failed to read the provider worker artifact.", cause),
+        ),
+      );
+      return yield* makeProviderWorkerProvisioner({
+        artifact,
+        controlUrl: options.controlUrl,
+        ...(options.environment === undefined ? {} : { environment: options.environment }),
+        ...(options.repositoryAuthorization === undefined
+          ? {}
+          : { repositoryAuthorization: options.repositoryAuthorization }),
+      });
+    }),
+  );
+}
+
+export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerProvisioner, {
+  start: () =>
+    Effect.fail(
+      provisionError(
+        "start",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  restart: () =>
+    Effect.fail(
+      provisionError(
+        "restart",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  stop: () => Effect.void,
+} satisfies ProviderWorkerProvisionerShape);

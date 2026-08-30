@@ -18,8 +18,11 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "node scripts/cli.ts build",
+    "build:provider-worker": "tsdown --config tsdown.worker.config.ts",
     "start": "node dist/index.mjs",
     "prepare": "effect-language-service patch",
+    "smoke:railway-sandbox": "bun run src/workspaceRuntime/smoke.ts",
+    "smoke:provider-worker-artifact": "bun run src/providerWorker/artifactSmoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },
@@ -38,6 +41,7 @@
     "effect": "catalog:",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
+    "railway": "3.7.0",
     "tree-kill": "^1.2.2",
     "ws": "^8.21.0"
   },

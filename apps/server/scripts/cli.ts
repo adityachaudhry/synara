@@ -142,6 +142,17 @@ const buildCmd = Command.make(
         })`bun tsdown`,
       );
 
+      yield* Effect.log("[cli] Building provider worker artifact...");
+      yield* runCommand(
+        ChildProcess.make({
+          cwd: serverDir,
+          stdout: config.verbose ? "inherit" : "ignore",
+          stderr: "inherit",
+          // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+          shell: process.platform === "win32",
+        })`bun tsdown --config tsdown.worker.config.ts`,
+      );
+
       // The device backend compiles this helper against the user's installed
       // Xcode on first attach. tsdown bundles JavaScript only, and desktop/CLI
       // packaging stage only `dist`, so leaving the sources under `native`
@@ -181,6 +192,7 @@ const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function*
   for (const relPath of [
     "dist/index.mjs",
     "dist/restoreMigrationBackup.mjs",
+    "dist/provider-worker/workerMain.mjs",
     "dist/client/index.html",
   ]) {
     const abs = path.join(serverDir, relPath);
