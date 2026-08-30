@@ -260,6 +260,46 @@ describe("external project scope", () => {
     ).toBe(true);
   });
 
+  it("applies scoped provider override restrictions to edit and resend", async () => {
+    const command = {
+      type: "thread.message.edit-and-resend",
+      commandId: "cmd-scoped-edit-resend",
+      threadId: "allowed-thread",
+      messageId: "message-scoped-edit-resend",
+      text: "Edited prompt",
+      modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      createdAt: "2026-08-29T00:00:00.000Z",
+    };
+
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: {
+            command: {
+              ...command,
+              providerOptions: { codex: { binaryPath: "/private/attacker-codex" } },
+            },
+          },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: { command },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("requires every locator at dev-server, terminal, and provider discovery sinks", async () => {
     for (const [method, payload] of [
       ["projects.runDevServer", { projectId: allowed, cwd: "/denied" }],
@@ -536,6 +576,60 @@ describe("external project scope", () => {
           authorizeProjectScopedRpc({
             method: "orchestration.dispatchCommand",
             payload: { command: { ...command, parentThreadId: null } },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("allows only minimal model selections on scoped thread create and metadata update", async () => {
+    const create = {
+      type: "thread.create",
+      commandId: "cmd-create-scoped-model",
+      threadId: "new-thread",
+      projectId: allowed,
+      title: "Scoped thread",
+      modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-08-29T00:00:00.000Z",
+    };
+    const update = {
+      type: "thread.meta.update",
+      commandId: "cmd-update-scoped-model",
+      threadId: "allowed-thread",
+      modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+    };
+
+    for (const command of [create, update]) {
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: {
+              command: {
+                ...command,
+                modelSelection: {
+                  provider: "codex",
+                  model: "gpt-5.6-sol",
+                  options: { reasoningEffort: "high" },
+                },
+              },
+            },
+            scope: new Set([allowed]),
+            query,
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        await Effect.runPromise(
+          authorizeProjectScopedRpc({
+            method: "orchestration.dispatchCommand",
+            payload: { command },
             scope: new Set([allowed]),
             query,
           }),

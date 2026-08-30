@@ -105,6 +105,19 @@ function scopedPayload(method: string, payload: unknown): unknown {
   return (payload as Record<string, unknown>).command;
 }
 
+function hasSafeScopedModelConfiguration(payload: Record<string, unknown>): boolean {
+  if (payload.providerOptions !== undefined) return false;
+  const modelSelection = payload.modelSelection;
+  return (
+    modelSelection === undefined ||
+    (modelSelection !== null &&
+      typeof modelSelection === "object" &&
+      stringField(modelSelection, "provider") !== undefined &&
+      stringField(modelSelection, "model") !== undefined &&
+      Object.keys(modelSelection).every((key) => key === "provider" || key === "model"))
+  );
+}
+
 export function projectScopePayloadForEvent(event: OrchestrationEvent): unknown {
   if (event.type === "thread.deleted" && event.payload.projectId !== undefined) {
     return { projectId: event.payload.projectId };
@@ -155,6 +168,17 @@ export function authorizeProjectScopedRpc(input: {
 
     const threadId = stringField(payload, "threadId");
     const commandType = stringField(payload, "type");
+    if (
+      (commandType === "thread.create" ||
+        commandType === "thread.meta.update" ||
+        commandType === "thread.turn.start" ||
+        commandType === "thread.message.edit-and-resend") &&
+      payload &&
+      typeof payload === "object" &&
+      !hasSafeScopedModelConfiguration(payload as Record<string, unknown>)
+    ) {
+      return false;
+    }
     if (commandType === "thread.create" || commandType === "thread.meta.update") {
       if (
         ["worktreePath", "workingDirectory", "associatedWorktreePath"].some(
@@ -176,18 +200,6 @@ export function authorizeProjectScopedRpc(input: {
 
     if (commandType === "thread.turn.start" && payload && typeof payload === "object") {
       const turnStart = payload as Record<string, unknown>;
-      if (turnStart.providerOptions !== undefined) return false;
-      const modelSelection = turnStart.modelSelection;
-      if (
-        modelSelection !== undefined &&
-        (modelSelection === null ||
-          typeof modelSelection !== "object" ||
-          stringField(modelSelection, "provider") === undefined ||
-          stringField(modelSelection, "model") === undefined ||
-          Object.keys(modelSelection).some((key) => key !== "provider" && key !== "model"))
-      ) {
-        return false;
-      }
       const message = turnStart.message;
       const skills =
         message && typeof message === "object"
