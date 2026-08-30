@@ -6,6 +6,7 @@ Implemented and committed bounded Railway sandbox admission as:
 
 - `1314cd1af` — `feat(server): bound Railway sandbox capacity`
 - `f41d58240` — `fix(server): harden sandbox capacity lifecycle`
+- `1790e021f` — `fix(server): bound full remote Pi launch`
 
 The implementation adds one process-local FIFO capacity service, one positive-integer Railway capacity setting, and the minimum contract/projection/UI additions needed to show queued sessions and their positions. It composes with Task 3's durable workspace creation intents and provider runtime bindings; it does not add a second cleanup owner or alter Task 3's marker reconciliation ordering.
 
@@ -27,17 +28,31 @@ No Railway or other external infrastructure was mutated.
 
 - Stale replacement now keeps the old binding addressable and unretired while authoritative destruction is attempted. A failed destroy therefore leaves a retryable handle; a later stop retries destruction, releases the original permit, and allows a replacement at capacity one. The old generation is marked retired and replaced in memory only after replacement succeeds.
 - Initial capacity recovery and Task 3 intent cleanup no longer start as independent fibers. Recovery installs every durable occupied reservation and opens admission first; only then does the existing intent cleanup loop begin, so a concurrent cleanup release cannot be lost and reappear as a ghost permit.
-- A Railway queue wait no longer consumes the provider service's 60-second launch budget. Only repository-bound Pi starts using the capacity-managed adapter path move the timeout into `WorkspaceRuntime.create`, after permit admission and durable intent insertion. Local Pi and every other adapter retain the existing provider-service deadline. A timed-out Railway create remains uncertain and therefore retains its intent and permit for Task 3 cleanup.
+- A Railway queue wait no longer consumes the provider service's 60-second launch budget. Only repository-bound Pi starts on the capacity-managed path use the adapter-owned deadline; local Pi and every other adapter retain the existing provider-service deadline.
 - Same-key queue entries now hold independent caller waiters. Cancelling either the first or a later retry rejects only that caller; the lifecycle key remains at the same FIFO position until every caller cancels. Admission resolves every remaining caller with one shared lifecycle lease.
 - Startup recovery now installs the decoded persisted `capacityKey`, after validating it against the durable row's thread and lifecycle generation and the binding's workspace/fence generation. Legacy bindings still synthesize that key during decode. A mismatch fails closed before any occupancy is installed or new create is admitted.
 
+## Full remote launch deadline hardening
+
+- Replaced the create-only Railway timeout with one adapter-owned deadline for the complete repository-bound remote Pi launch transaction. `WorkspaceRuntime.create` synchronously signals admission immediately after the generation permit is granted; the 60-second clock starts from that signal, not queue entry.
+- Threaded only that callback through `ProviderWorkerProvisioner.start`/`restart` into `WorkspaceRuntime.create`. No scheduler, timer service, or additional capacity abstraction was introduced.
+- The deadline now covers durable creation-intent publication, Railway create and runtime-ID binding, checkout and credential cleanup, worker artifact/config writes, durable-process startup, worker connection, remote `session.start`, provider binding persistence, and creation-intent adoption.
+- Timeout interrupts the launch transaction and then waits for its existing cleanup path. Before a runtime is known, an uncertain Railway create retains its durable intent and permit for Task 3 reconciliation. After a binding exists, timeout invokes `ProviderWorkerProvisioner.stop`; the permit and intent clear only after authoritative destroy/NotFound and intent removal succeed. A destroy failure is surfaced as `session.start.cleanup` and retains ownership fail-closed.
+- Creation-intent publication/runtime binding and adoption are interruptible at the deadline boundary. Known-runtime binding interruption destroys the sandbox before removing its intent and releasing capacity; adoption interruption leaves the intent/permit intact until the timeout cleanup retries them.
+
 ## Ownership and recovery invariants
 
-The create ordering is now:
+The create and deadline ordering is now:
 
-`acquire generation permit -> reserve operation ID -> insert durable intent -> Railway create -> bind runtime ID -> persist provider binding including capacity key -> adopt/clear intent`
+`wait outside deadline -> acquire generation permit -> synchronously signal admission/start 60s clock -> reserve operation ID -> insert durable intent -> Railway create -> bind runtime ID -> checkout/config/bootstrap/connect -> remote session.start -> persist provider binding including capacity key -> adopt/clear intent`
 
 The permit is not released by adoption. It remains active until the corresponding sandbox/worker lifetime ends.
+
+Timeout cleanup ordering is:
+
+`interrupt launch -> if create may be unknown, retain Task 3 intent + permit -> otherwise stop worker -> authoritative sandbox destroy/NotFound -> remove intent -> release permit -> surface timeout`
+
+If authoritative cleanup fails, the cleanup error wins and the durable owner plus permit remain available for recovery rather than being cleared early.
 
 Startup ordering is:
 
@@ -60,6 +75,8 @@ The implementation was driven through focused RED/GREEN cycles:
 - Routed-adapter RED failed because there was no capacity-aware runtime-event source.
 - Final edge review added two more RED cases: a pre-reconciliation same-key waiter remained queued behind its own recovered permit, and a legacy Task 3 binding had no releasable capacity key. The run recorded **2 failed, 9 passed** before both fixes; the focused capacity/recovery/routing/ingestion rerun passed **4 files, 118 tests**.
 - Blocking-review RED runs then reproduced all five reported defects: first-caller cancellation removed a shared queue entry; later-caller cancellation was ignored; failed replacement destruction left the old capacity permit unreachable; slow initial inventory let cleanup release before a stale reservation was installed; and a mismatched persisted key was silently replaced with a reconstructed key. Two test-harness polling assertions were corrected and not counted as product failures. A dedicated virtual-time RED run additionally proved the outer provider deadline expired during a 61-second queue wait while post-admission Railway create had no deadline. The minimum fixes made the final focused server run pass **7 files, 238 tests**.
+- The second timeout-review RED run added five virtual-time stage hangs—checkout, worker connection, remote `session.start`, provider binding persistence, and intent adoption. All five remained pending after 61 seconds post-admission (`expected Failure, received undefined`), proving the create-only timer left the rest of launch unbounded.
+- GREEN coverage verifies 61 seconds of queue time consumes none of the launch budget, every covered stage remains pending at 59 seconds after admission and fails after 61, an uncertain Railway create retains its intent/permit without calling stop, successful post-create cleanup reclaims both before timeout is returned, and failed authoritative cleanup is surfaced while retaining ownership. Workspace tests additionally cover interrupted runtime-ID binding and adoption retry cleanup.
 
 Focused coverage includes max-N admission, strict FIFO N+1, same-key idempotency, cancellation and queue compaction, terminal create cleanup, authoritative destroy, stale-generation replacement ordering, double release, controller restart reconciliation, pending intent occupancy, transient inventory failure, orphan reporting, queued event projection/clearing, legacy binding recovery, and the unchanged local Pi path.
 
@@ -67,11 +84,11 @@ Focused coverage includes max-N admission, strict FIFO N+1, same-key idempotency
 
 All final commands used Node **v24.16.0** in `PATH` and Bun **1.3.12** through `npx`. `bun test` was never used.
 
-- Focused capacity, provisioner, provider timeout, recovery, routed activity, and ingestion suites: **7 files, 238 tests passed**.
+- Round 2 focused capacity, provisioner, provider timeout, recovery, routed activity, and ingestion suites: **9 files, 266 tests passed**.
 - Focused contracts queue projection: **2 files, 54 tests passed**.
 - Focused web queue projection: **2 files, 137 tests passed**.
 - Full `packages/contracts` suite: **20 files, 250 tests passed**.
-- Full `apps/server` suite: **380 files passed, 3 skipped; 4,222 tests passed, 16 skipped**.
+- Full `apps/server` suite: **380 files passed, 3 skipped; 4,231 tests passed, 16 skipped**.
 - Full `apps/web` suite: **334 files, 4,113 tests passed**.
 - `git diff --cached --check`: passed before the implementation commit.
 
