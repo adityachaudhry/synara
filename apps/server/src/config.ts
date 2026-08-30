@@ -106,6 +106,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly externalAuthSecret?: string | undefined;
+  readonly trustedAppOrigins?: ReadonlySet<string>;
   readonly externalRepositoryAllowedOrigins?: ReadonlyArray<string>;
   readonly externalRepositoryAllowedOwners?: ReadonlyArray<string>;
   readonly desktopShutdownToken?: string | undefined;
@@ -266,6 +267,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           host: undefined,
           authToken: undefined,
           externalAuthSecret: undefined,
+          trustedAppOrigins: new Set(),
           externalRepositoryAllowedOrigins: [],
           externalRepositoryAllowedOwners: [],
           desktopShutdownToken: undefined,

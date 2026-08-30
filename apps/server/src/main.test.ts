@@ -379,6 +379,8 @@ it.layer(testLayer)("server CLI command", (it) => {
         SYNARA_EXTERNAL_REPOSITORY_ALLOWED_ORIGINS:
           "https://git.example.com,https://git2.example.com",
         SYNARA_EXTERNAL_REPOSITORY_ALLOWED_OWNERS: "acme,platform",
+        SYNARA_TRUSTED_APP_ORIGINS:
+          "https://glasswing.example.test,https://staging.glasswing.example.test",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
       });
 
@@ -397,11 +399,30 @@ it.layer(testLayer)("server CLI command", (it) => {
         "https://git2.example.com",
       ]);
       assert.deepEqual(resolvedConfig?.externalRepositoryAllowedOwners, ["acme", "platform"]);
+      const trustedAppOrigins = resolvedConfig?.trustedAppOrigins;
+      assert.deepEqual(Array.from(trustedAppOrigins ?? []), [
+        "https://glasswing.example.test",
+        "https://staging.glasswing.example.test",
+      ]);
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
       assert.equal(findAvailablePort.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("rejects insecure remote trusted app origins", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        runCli([], { SYNARA_TRUSTED_APP_ORIGINS: "http://glasswing.example.test" }),
+      );
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        assert.include(Cause.pretty(exit.cause), "SYNARA_TRUSTED_APP_ORIGINS");
+      }
+      assert.equal(start.mock.calls.length, 0);
     }),
   );
 

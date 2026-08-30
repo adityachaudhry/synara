@@ -77,6 +77,7 @@ export function isTrustedAppOrigin(input: {
   return (
     !input.origin ||
     input.origin === input.config.publicUrl?.origin ||
+    input.config.trustedAppOrigins?.has(input.origin) ||
     (input.origin === input.requestOrigin &&
       isTrustedRequestOriginHost(input.requestOrigin, input.config)) ||
     input.origin === input.config.devUrl?.origin ||

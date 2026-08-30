@@ -62,6 +62,26 @@ export class StartupError extends Data.TaggedError("StartupError")<{
 
 const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
 
+function parseTrustedAppOrigins(raw: string | undefined): ReadonlySet<string> {
+  const origins = new Set<string>();
+  for (const value of raw?.split(",").map((entry) => entry.trim()).filter(Boolean) ?? []) {
+    const url = new URL(value);
+    const localHttp = url.protocol === "http:" && isLoopbackHost(url.hostname);
+    if (
+      (url.protocol !== "https:" && !localHttp) ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error("invalid trusted app origin");
+    }
+    origins.add(url.origin);
+  }
+  return origins;
+}
+
 function consumeDesktopShutdownTokenFromProcessEnvironment(): string | undefined {
   const matchingKeys =
     process.platform === "win32"
@@ -162,6 +182,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  trustedAppOrigins: Config.string("SYNARA_TRUSTED_APP_ORIGINS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   externalRepositoryAllowedOrigins: Config.string(
     "SYNARA_EXTERNAL_REPOSITORY_ALLOWED_ORIGINS",
   ).pipe(Config.option, Config.map(Option.getOrUndefined)),
@@ -237,6 +261,15 @@ const ServerConfigLive = (input: CliInput) =>
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      const trustedAppOrigins = yield* Effect.try({
+        try: () => parseTrustedAppOrigins(env.trustedAppOrigins),
+        catch: (cause) =>
+          new StartupError({
+            message:
+              "SYNARA_TRUSTED_APP_ORIGINS must contain comma-separated HTTPS root origins without credentials, paths, queries, or fragments.",
+            cause,
+          }),
+      });
       const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
@@ -295,6 +328,7 @@ const ServerConfigLive = (input: CliInput) =>
         noBrowser,
         authToken,
         externalAuthSecret: env.externalAuthSecret?.trim() || undefined,
+        trustedAppOrigins,
         externalRepositoryAllowedOrigins:
           env.externalRepositoryAllowedOrigins
             ?.split(",")
@@ -348,6 +382,7 @@ export function makeServerStartupLogData(config: ServerConfigShape): Record<stri
   delete safeConfig.externalAuthSecret;
   delete safeConfig.desktopShutdownToken;
   delete safeConfig.devUrl;
+  safeConfig.trustedAppOrigins = Array.from(config.trustedAppOrigins ?? []);
 
   return {
     ...safeConfig,
