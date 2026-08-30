@@ -158,6 +158,108 @@ describe("external project scope", () => {
     }
   });
 
+  it("rejects scoped turn skills that would inline an arbitrary controller file", async () => {
+    const command = {
+      type: "thread.turn.start",
+      commandId: "cmd-scoped-skill",
+      threadId: "allowed-thread",
+      message: {
+        messageId: "message-scoped-skill",
+        role: "user",
+        text: "Use this skill",
+        attachments: [],
+        skills: [{ name: "private", path: "/private/controller-file.md" }],
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      createdAt: "2026-08-29T00:00:00.000Z",
+    };
+
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: { command },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: { command: { ...command, message: { ...command.message, skills: [] } } },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects scoped provider executable overrides while allowing a plain model selection", async () => {
+    const command = {
+      type: "thread.turn.start",
+      commandId: "cmd-scoped-model",
+      threadId: "allowed-thread",
+      message: {
+        messageId: "message-scoped-model",
+        role: "user",
+        text: "Use the selected model",
+        attachments: [],
+      },
+      modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      createdAt: "2026-08-29T00:00:00.000Z",
+    };
+
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: {
+            command: {
+              ...command,
+              providerOptions: { codex: { binaryPath: "/private/attacker-codex" } },
+            },
+          },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: {
+            command: {
+              ...command,
+              modelSelection: {
+                provider: "codex",
+                model: "gpt-5.6-sol",
+                options: { reasoningEffort: "high" },
+              },
+            },
+          },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      await Effect.runPromise(
+        authorizeProjectScopedRpc({
+          method: "orchestration.dispatchCommand",
+          payload: { command },
+          scope: new Set([allowed]),
+          query,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("requires every locator at dev-server, terminal, and provider discovery sinks", async () => {
     for (const [method, payload] of [
       ["projects.runDevServer", { projectId: allowed, cwd: "/denied" }],

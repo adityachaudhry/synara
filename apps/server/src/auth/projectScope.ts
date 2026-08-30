@@ -175,7 +175,25 @@ export function authorizeProjectScopedRpc(input: {
     }
 
     if (commandType === "thread.turn.start" && payload && typeof payload === "object") {
-      const message = (payload as Record<string, unknown>).message;
+      const turnStart = payload as Record<string, unknown>;
+      if (turnStart.providerOptions !== undefined) return false;
+      const modelSelection = turnStart.modelSelection;
+      if (
+        modelSelection !== undefined &&
+        (modelSelection === null ||
+          typeof modelSelection !== "object" ||
+          stringField(modelSelection, "provider") === undefined ||
+          stringField(modelSelection, "model") === undefined ||
+          Object.keys(modelSelection).some((key) => key !== "provider" && key !== "model"))
+      ) {
+        return false;
+      }
+      const message = turnStart.message;
+      const skills =
+        message && typeof message === "object"
+          ? (message as Record<string, unknown>).skills
+          : undefined;
+      if (skills !== undefined && (!Array.isArray(skills) || skills.length > 0)) return false;
       const mentions =
         message && typeof message === "object"
           ? (message as Record<string, unknown>).mentions
