@@ -2,7 +2,7 @@ import {
   ProviderWorkerClientFrame,
   type ProviderWorkerServerFrame,
 } from "@synara/contracts";
-import { Duration, Effect, Schema } from "effect";
+import { Duration, Effect, Schema, Semaphore } from "effect";
 
 import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
 import { ProviderWorkerBrokerError, ProviderWorkerTransportError } from "./Errors";
@@ -60,6 +60,7 @@ export function runProviderWorkerConnection(input: {
   return Effect.gen(function* () {
     let registeredFence: ProviderWorkerFence | undefined;
     let registrationTimedOut = false;
+    const receiveLock = Semaphore.makeUnsafe(1);
 
     const brokerConnection: ProviderWorkerConnection = {
       send: (frame: ProviderWorkerServerFrame) =>
@@ -80,50 +81,52 @@ export function runProviderWorkerConnection(input: {
     };
 
     const handleFrame = (raw: string | Uint8Array) =>
-      decodeFrame(raw).pipe(
-        Effect.flatMap((frame) =>
-          Effect.gen(function* () {
-            if (!registeredFence) {
-              if (frame.type !== "register") {
+      receiveLock.withPermits(1)(
+        decodeFrame(raw).pipe(
+          Effect.flatMap((frame) =>
+            Effect.gen(function* () {
+              if (!registeredFence) {
+                if (frame.type !== "register") {
+                  return yield* transportError(
+                    "register",
+                    "The first provider worker frame must be a registration.",
+                  );
+                }
+                const fence = fenceFromFrame(frame);
+                if (!sameProviderWorkerFence(input.authenticatedFence, fence)) {
+                  return yield* transportError(
+                    "register.fence",
+                    "Worker registration does not match its authenticated generation.",
+                  );
+                }
+                yield* input.broker
+                  .register(fence, brokerConnection)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      transportError("register.broker", "Worker registration failed.", cause),
+                    ),
+                  );
+                registeredFence = fence;
+                return;
+              }
+              if (frame.type === "register") {
                 return yield* transportError(
-                  "register",
-                  "The first provider worker frame must be a registration.",
+                  "register.duplicate",
+                  "A connected worker cannot register twice on one socket.",
                 );
               }
-              const fence = fenceFromFrame(frame);
-              if (!sameProviderWorkerFence(input.authenticatedFence, fence)) {
-                return yield* transportError(
-                  "register.fence",
-                  "Worker registration does not match its authenticated generation.",
-                );
-              }
-              yield* input.broker
-                .register(fence, brokerConnection)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    transportError("register.broker", "Worker registration failed.", cause),
-                  ),
-                );
-              registeredFence = fence;
-              return;
-            }
-            if (frame.type === "register") {
-              return yield* transportError(
-                "register.duplicate",
-                "A connected worker cannot register twice on one socket.",
+              yield* input.broker.accept(frame).pipe(
+                Effect.mapError((cause) =>
+                  transportError("frame.accept", "Worker frame was rejected.", cause),
+                ),
               );
-            }
-            yield* input.broker.accept(frame).pipe(
-              Effect.mapError((cause) =>
-                transportError("frame.accept", "Worker frame was rejected.", cause),
-              ),
-            );
-          }),
-        ),
-        Effect.tapError(() =>
-          input.socket.close(
-            PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE,
-            "Provider worker protocol rejected",
+            }),
+          ),
+          Effect.tapError(() =>
+            input.socket.close(
+              PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE,
+              "Provider worker protocol rejected",
+            ),
           ),
         ),
       );

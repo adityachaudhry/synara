@@ -8,6 +8,7 @@ import {
   runProviderWorkerConnection,
   type ProviderWorkerSocket,
 } from "./providerWorkerConnection";
+import type { ProviderWorkerBrokerShape } from "./Services/ProviderWorkerBroker";
 
 const fence = {
   sandboxId: "ef1b4542-d435-4aae-b8bb-e531685e3cc6",
@@ -99,6 +100,61 @@ describe("runProviderWorkerConnection", () => {
       type: "registered",
       ...fence,
     });
+  });
+
+  it("serializes concurrently delivered worker frames", async () => {
+    let accepting = false;
+    let overlapped = false;
+    const broker = {
+      register: () => Effect.void,
+      accept: () =>
+        Effect.gen(function* () {
+          if (accepting) overlapped = true;
+          accepting = true;
+          yield* Effect.sleep("10 millis");
+          accepting = false;
+        }),
+      disconnect: () => Effect.void,
+    } as unknown as ProviderWorkerBrokerShape;
+    const frames = [
+      registerFrame(),
+      JSON.stringify({
+        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+        ...fence,
+        type: "heartbeat",
+        sentAt: "2026-08-30T16:00:00.000Z",
+      }),
+      JSON.stringify({
+        protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
+        ...fence,
+        type: "heartbeat",
+        sentAt: "2026-08-30T16:00:01.000Z",
+      }),
+    ];
+    const socket: ProviderWorkerSocket = {
+      run: (handler) =>
+        handler(frames[0]!).pipe(
+          Effect.andThen(
+            Effect.forEach(frames.slice(1), handler, {
+              concurrency: "unbounded",
+              discard: true,
+            }),
+          ),
+        ),
+      sendRaw: () => Effect.void,
+      close: () => Effect.void,
+    };
+
+    await Effect.runPromise(
+      runProviderWorkerConnection({
+        socket,
+        authenticatedFence: fence,
+        broker,
+        registrationTimeoutMs: 100,
+      }).pipe(Effect.scoped),
+    );
+
+    expect(overlapped).toBe(false);
   });
 
   it("closes a worker whose registration does not match the pre-authenticated fence", async () => {
