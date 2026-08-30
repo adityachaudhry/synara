@@ -6,6 +6,7 @@ Implemented and committed the generic distributed Railway Pi runtime as:
 
 - `0bd6ce101e2ba8bce1ad7101558155f80c9175ec` — `feat(server): add distributed Railway Pi runtime`
 - `c5fb7269b` — `fix(server): harden distributed Pi runtime lifecycle`
+- `6ca8a9cb3` — `fix(server): persist distributed workspace cleanup ownership`
 
 The implementation is limited to one generic Railway workspace adapter, one provider-worker protocol/broker/provisioner chain, and one routed Pi seam. Existing local Pi sessions and every non-Pi provider retain their upstream paths. Remote execution is admitted only when a Pi session carries the canonical repository binding introduced by Task 2.
 
@@ -33,6 +34,18 @@ No Railway, Gitea, deployment, or other external infrastructure was mutated.
 - Routed Pi discovery now preserves local and healthy remote sessions when one remote worker is unavailable. Non-Pi provider discovery is unchanged.
 - Workspace network isolation is an explicit create policy with `ISOLATED` as the safe default; provider-worker provisioning requests `PRIVATE` only when explicitly configured.
 - Unused remote model, skill, command, and composer protocol methods were removed; local discovery continues through the upstream Pi adapter.
+
+## Second review hardening
+
+- Repository checkout now runs inside an uninterruptible cleanup boundary. Success, typed failure, defect, and fiber interruption all converge on credential erasure before any worker/Pi process can start. An unconfirmed erase aborts provisioning and triggers authoritative sandbox destruction; if destruction also fails, the stronger `workspace.cleanup` failure is surfaced instead of being swallowed.
+- Railway create ownership is now durable rather than a bounded client retry. Migration 98 adds one credential-free `workspace_creation_intents` table containing only the server-generated operation ID, optional returned runtime ID, and creation timestamp.
+- `WorkspaceRuntime.create` commits the intent before calling the Railway SDK. The live controller temporarily reserves the operation ID in memory, binds the returned runtime ID when available, and releases the durable intent only after `RoutedPiAdapter` has persisted the provider runtime binding and calls `adopt`, or after authoritative destruction succeeds.
+- A scoped background reconciler reads pending intents after startup. Known runtime IDs are destroyed directly; lost-response intents are found through the SDK-supported operation marker. A no-match pass does not expire the intent, and transient list/connect/destroy failures retry indefinitely with bounded backoff. Unrelated operation markers are never destroyed.
+- The former process-local 30-attempt create cleanup was removed from the Railway client. This avoids two competing owners and prevents a sandbox that appears after the old window from becoming unowned.
+
+### Why a late create remains owned across restart
+
+The SQLite intent is committed before `Sandbox.create` begins, and it contains no token, repository credential, worker bootstrap credential, or environment payload. The same operation ID is placed in the Railway sandbox's SDK-supported environment marker. If the controller is interrupted before receiving a binding, its in-memory reservation disappears but the SQLite row does not. A restarted controller reloads that row and keeps scanning; an empty inventory scan leaves the row intact forever rather than treating absence as terminal. When the delayed sandbox becomes visible, its operation marker identifies it, destruction is confirmed, and only then is the row removed. If the SDK response arrived first, the stored runtime ID gives the restarted controller a direct destruction path. Normal successful sessions clear the row only after their existing provider runtime binding is durable.
 
 ## Security and scope boundaries
 
@@ -69,15 +82,19 @@ The blocking-review fixes also followed focused RED/GREEN cycles:
 - pre-upgrade header authentication, fence matching, browser rejection, and the worker payload cap: **9 failed, 5 passed** before implementation;
 - mandatory checkout credential erasure: **1 failed, 6 passed** before cleanup failure became fatal;
 - the late acknowledgement/replay race: **1 failed** because `turn.send` executed twice, then passed with the bounded acknowledged-response tombstone.
+- interruption-safe checkout cleanup: **2 failed, 7 passed** before fiber-exit finalization and authoritative destroy failure reporting; the new interruption and double-cleanup-failure cases then passed;
+- durable create ownership: the persistence and Railway cleanup tests first failed on the missing repository/method, then the workspace runtime suite recorded **3 failed, 7 passed** because no intent preceded create, no operation ID was returned, and interruption lost ownership; the minimum durable boundary made all cases green;
+- migration-lineage verification exposed **4 expected-list failures** after adding migration 98; the lineage expectations were updated and all 19 migration tests passed.
 
 ## Final verification
 
 All commands used Node 24 in `PATH` and Bun 1.3.12 through `npx`. `bun test` was never used.
 
-- Focused workspace runtime, Railway adapter, repository checkout, protocol, broker, bootstrap/fencing, reconnect, provisioner lifecycle, routed Pi, persistence/restart, HTTP admission, and release tests: **17 files, 85 tests passed**.
+- Round-two focused workspace runtime, Railway adapter, checkout cleanup, routed Pi adoption, and intent persistence tests: **5 files, 43 tests passed**. The file-backed SQLite restart test also passed independently (**2 tests** in its persistence file).
+- Round-two affected integration suite, including all migrations and the global provider boundary: **8 files, 151 tests passed** after updating migration 98 expectations.
 - Full `packages/contracts` suite: **20 files, 249 tests passed**.
 - Full `packages/shared` suite: **59 files; 565 passed, 1 skipped**.
-- Final full `apps/server` suite: **377 files passed, 3 skipped; 4,185 tests passed, 16 skipped**. One prior pass had an unrelated ACP SDK ordering timeout; that exact test passed immediately in isolation before the clean final full-suite rerun.
+- Final round-two full `apps/server` suite: **378 files passed, 3 skipped; 4,192 tests passed, 16 skipped**.
 - Generic server build: passed, including `dist/provider-worker/workerMain.mjs`.
 - Post-build archive extraction/install and exact-artifact startup probe: **1 test passed**, including header-only authentication and proof that the extracted worker deleted its bootstrap file before registration.
 - Product-coupling scan over the new runtime paths for Glasswing/ChipSage/SuperTokens/company-catalog/Gitea identifiers: no matches.
@@ -91,5 +108,5 @@ Per the explicit task instruction, `bun fmt`, `bun lint`, and `bun typecheck` we
 - Railway must still confirm in canary that its internal proxy preserves the worker `Authorization` header and that the SDK-provided environment marker is visible soon enough for delayed-create reconciliation.
 - Checkout credential removal, file modes, and provider-environment isolation are covered by the adapter/provisioner/archive tests; the live sandbox filesystem boundary remains canary evidence.
 - Capacity limits, FIFO queueing, cancellation, startup capacity reconciliation, and orphan reporting belong to Task 4 and are intentionally absent.
-- Controller ownership remains process-local and assumes one control-plane replica, consistent with the approved initial architecture. Horizontal ownership would require a separate design.
+- Pending Railway create cleanup now survives controller restart in SQLite. Active worker routing still assumes one control-plane replica, consistent with the approved initial architecture; horizontal live-session ownership remains a separate design.
 - Repository authorization is generic and server-configured. Its external identity/project authorization boundary is Task 5; Glasswing company policy remains outside Synara.
