@@ -80,6 +80,7 @@ function makeHarness(options?: {
 describe("ProviderWorkerProvisioner", () => {
   it("checks out only the admitted repository binding before starting the worker", async () => {
     const harness = makeHarness();
+    const onCapacityAdmitted = vi.fn();
     harness.workspace.exec.mockImplementation((_binding, input) =>
       Effect.sync(() => {
         if (input.command.startsWith("rm -f ")) {
@@ -121,7 +122,12 @@ describe("ProviderWorkerProvisioner", () => {
     );
 
     const binding = await Effect.runPromise(
-      provisioner.start({ threadId, lifecycleGeneration: "generation-1", repositoryBinding }),
+      provisioner.start({
+        threadId,
+        lifecycleGeneration: "generation-1",
+        repositoryBinding,
+        onCapacityAdmitted,
+      }),
     );
 
     expect(harness.workspace.create).toHaveBeenCalledWith({
@@ -129,6 +135,7 @@ describe("ProviderWorkerProvisioner", () => {
       lifecycleGeneration: "generation-1",
       environment: {},
       networkIsolation: "ISOLATED",
+      onCapacityAdmitted,
     });
     const checkoutCommand = harness.workspace.exec.mock.calls[0]?.[1]?.command;
     expect(checkoutCommand).not.toContain("SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION");
@@ -379,6 +386,7 @@ describe("ProviderWorkerProvisioner", () => {
 
   it("replaces the sandbox on restart so a stale worker cannot survive recovery", async () => {
     const harness = makeHarness();
+    const onCapacityAdmitted = vi.fn();
     const replacementWorkspace = {
       ...workspaceBinding,
       runtimeId: "f02b6838-4614-4988-93b0-ab3253c589b7",
@@ -422,10 +430,18 @@ describe("ProviderWorkerProvisioner", () => {
         threadId,
         lifecycleGeneration: "generation-2",
         cwd: "/workspace/repo",
+        onCapacityAdmitted,
       }),
     );
 
     expect(binding.workspace).toEqual(replacementWorkspace);
+    expect(harness.workspace.create).toHaveBeenCalledWith({
+      threadId,
+      lifecycleGeneration: "generation-2",
+      environment: {},
+      networkIsolation: "ISOLATED",
+      onCapacityAdmitted,
+    });
     expect(harness.calls).toEqual([
       "retire",
       "revoke",

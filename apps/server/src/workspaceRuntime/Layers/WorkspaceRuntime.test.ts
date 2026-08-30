@@ -160,7 +160,7 @@ function makeIntentRepository(initial: ReadonlyArray<WorkspaceCreationIntent> = 
 }
 
 describe("WorkspaceRuntime", () => {
-  effectIt.effect("starts the Railway create timeout only after capacity admission", () =>
+  effectIt.effect("signals admission before Railway create and retains uncertain create ownership", () =>
     Effect.gen(function* () {
       const capacity = new SandboxCapacity(1);
       const occupied = yield* Effect.promise(() =>
@@ -171,6 +171,7 @@ describe("WorkspaceRuntime", () => {
         }),
       );
       const createStarted = yield* Deferred.make<void>();
+      let admitted = false;
       const fake = makeFakeRailwayClient();
       const client = {
         ...fake.client,
@@ -195,21 +196,24 @@ describe("WorkspaceRuntime", () => {
             threadId: "thread-timeout",
             lifecycleGeneration: "generation-timeout",
             environment: {},
+            onCapacityAdmitted: () => {
+              admitted = true;
+            },
           })
           .pipe(Effect.forkChild({ startImmediately: true }));
 
         yield* TestClock.adjust("61 seconds");
         expect(createFiber.pollUnsafe()).toBeUndefined();
+        expect(admitted).toBe(false);
 
         occupied.release();
         yield* Deferred.await(createStarted);
-        yield* TestClock.adjust("61 seconds");
-        expect(createFiber.pollUnsafe()?._tag).toBe("Failure");
+        expect(admitted).toBe(true);
+        yield* Fiber.interrupt(createFiber);
         expect(capacity.snapshot().activeKeys).toEqual([
           "thread-timeout:generation-timeout",
         ]);
         expect(intents.records.has("operation-timeout")).toBe(true);
-        yield* Fiber.interrupt(createFiber);
       }).pipe(Effect.provide(layer), Effect.scoped);
     }),
   );
@@ -338,6 +342,89 @@ describe("WorkspaceRuntime", () => {
       }).pipe(Effect.provide(layer), Effect.scoped),
     );
   });
+
+  effectIt.effect("destroys and releases when durable runtime binding is interrupted", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeRailwayClient();
+      const capacity = new SandboxCapacity(1);
+      const bindStarted = yield* Deferred.make<void>();
+      const intents = makeIntentRepository();
+      intents.repository.bindRuntime = () =>
+        Deferred.succeed(bindStarted, undefined).pipe(Effect.andThen(Effect.never));
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => "operation-bind-timeout",
+        reconcileIntervalMs: 60_000,
+        capacity,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+        Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const createFiber = yield* runtime
+          .create({
+            threadId: "thread-bind-timeout",
+            lifecycleGeneration: "generation-bind-timeout",
+            environment: {},
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(bindStarted);
+        yield* Fiber.interrupt(createFiber);
+        expect(fake.sandboxes.size).toBe(0);
+        expect(intents.records.has("operation-bind-timeout")).toBe(false);
+        expect(capacity.snapshot().activeKeys).toEqual([]);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
+  effectIt.effect("lets timeout cleanup retry an interrupted intent adoption", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeRailwayClient();
+      const capacity = new SandboxCapacity(1);
+      const adoptStarted = yield* Deferred.make<void>();
+      const intents = makeIntentRepository();
+      const remove = intents.repository.remove;
+      let removeCalls = 0;
+      intents.repository.remove = (operationId) => {
+        removeCalls += 1;
+        return removeCalls === 1
+          ? Deferred.succeed(adoptStarted, undefined).pipe(Effect.andThen(Effect.never))
+          : remove(operationId);
+      };
+      const layer = makeWorkspaceRuntimeLive(enabledConfig, {
+        createOperationId: () => "operation-adopt-timeout",
+        reconcileIntervalMs: 60_000,
+        capacity,
+      }).pipe(
+        Layer.provide(Layer.succeed(RailwaySandboxClient, fake.client)),
+        Layer.provide(Layer.succeed(WorkspaceCreationIntentRepository, intents.repository)),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* WorkspaceRuntime;
+        const binding = yield* runtime.create({
+          threadId: "thread-adopt-timeout",
+          lifecycleGeneration: "generation-adopt-timeout",
+          environment: {},
+        });
+        const adoptFiber = yield* runtime
+          .adopt(binding)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(adoptStarted);
+        yield* Fiber.interrupt(adoptFiber);
+        expect(capacity.snapshot().activeKeys).toEqual([
+          "thread-adopt-timeout:generation-adopt-timeout",
+        ]);
+        expect(intents.records.has("operation-adopt-timeout")).toBe(true);
+
+        yield* runtime.destroy(binding);
+        expect(removeCalls).toBe(2);
+        expect(intents.records.has("operation-adopt-timeout")).toBe(false);
+        expect(capacity.snapshot().activeKeys).toEqual([]);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
 
   it("creates an isolated sandbox by default", async () => {
     const fake = makeFakeRailwayClient();

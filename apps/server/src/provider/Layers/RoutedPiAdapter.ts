@@ -7,7 +7,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderWorkerMethod,
 } from "@synara/contracts";
-import { Effect, Layer, Option, PubSub, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, PubSub, Schema, Stream } from "effect";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -26,6 +26,7 @@ import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
+const REMOTE_PI_LAUNCH_TIMEOUT = "60 seconds";
 
 const ProviderThreadSnapshotSchema = Schema.Struct({
   threadId: ThreadId,
@@ -186,6 +187,44 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ),
       );
 
+  const withCapacityLaunchDeadline = <A, E, R>(
+    launch: (onCapacityAdmitted: () => void) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      const admitted = yield* Deferred.make<void>();
+      const launchFiber = yield* launch(() => {
+        Effect.runSync(Deferred.succeed(admitted, undefined));
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      const initial = yield* Effect.raceFirst(
+        Fiber.await(launchFiber).pipe(
+          Effect.map((exit) => ({ _tag: "Completed" as const, exit })),
+        ),
+        Deferred.await(admitted).pipe(Effect.as({ _tag: "Admitted" as const })),
+      );
+      if (initial._tag === "Completed") {
+        return Exit.isSuccess(initial.exit)
+          ? initial.exit.value
+          : yield* Effect.failCause(initial.exit.cause);
+      }
+      const completed = yield* Fiber.await(launchFiber).pipe(
+        Effect.timeoutOption(REMOTE_PI_LAUNCH_TIMEOUT),
+      );
+      if (Option.isSome(completed)) {
+        return Exit.isSuccess(completed.value)
+          ? completed.value.value
+          : yield* Effect.failCause(completed.value.cause);
+      }
+      yield* Fiber.interrupt(launchFiber);
+      const interrupted = yield* Fiber.await(launchFiber);
+      if (Exit.isFailure(interrupted) && !Cause.hasInterruptsOnly(interrupted.cause)) {
+        return yield* Effect.failCause(interrupted.cause);
+      }
+      return yield* adapterError(
+        "session.start",
+        "Remote Pi launch timed out 60 seconds after Railway capacity admission.",
+      );
+    });
+
   const startSession: PiAdapterShape["startSession"] = (input) =>
     Effect.gen(function* () {
       const persisted = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
@@ -207,36 +246,68 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
       const previous = activeRemote ?? persistedRemote;
-      const binding = previous
-        ? yield* provisioner.restart(previous, {
-            threadId: input.threadId,
-            lifecycleGeneration,
-            ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-            repositoryBinding: input.repositoryBinding,
-          })
-        : yield* provisioner.start({
-            threadId: input.threadId,
-            lifecycleGeneration,
-            ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-            repositoryBinding: input.repositoryBinding,
-          });
-      const { repositoryBinding: _repositoryBinding, ...workerInput } = input;
-      const session = yield* requestDecoded(
-        binding,
-        "session.start",
-        { ...workerInput, cwd: binding.cwd, lifecycleGeneration },
-        ProviderSession,
-      ).pipe(
-        Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
-      );
-      yield* persistRemoteBinding({ threadId: input.threadId, lifecycleGeneration, binding }).pipe(
-        Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
-      );
-      yield* provisioner.adopt(binding).pipe(
-        Effect.onError(() => provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
-      );
-      remoteByThread.set(input.threadId, binding);
-      return session;
+      const launch = (onCapacityAdmitted?: () => void) =>
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const provisionExit = yield* Effect.exit(
+              restore(
+                previous
+                  ? provisioner.restart(previous, {
+                      threadId: input.threadId,
+                      lifecycleGeneration,
+                      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+                      repositoryBinding: input.repositoryBinding,
+                      ...(onCapacityAdmitted === undefined ? {} : { onCapacityAdmitted }),
+                    })
+                  : provisioner.start({
+                      threadId: input.threadId,
+                      lifecycleGeneration,
+                      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+                      repositoryBinding: input.repositoryBinding,
+                      ...(onCapacityAdmitted === undefined ? {} : { onCapacityAdmitted }),
+                    }),
+              ),
+            );
+            if (Exit.isFailure(provisionExit)) {
+              return yield* Effect.failCause(provisionExit.cause);
+            }
+            const binding = provisionExit.value;
+            const { repositoryBinding: _repositoryBinding, ...workerInput } = input;
+            const startExit = yield* Effect.exit(
+              restore(
+                Effect.gen(function* () {
+                  const session = yield* requestDecoded(
+                    binding,
+                    "session.start",
+                    { ...workerInput, cwd: binding.cwd, lifecycleGeneration },
+                    ProviderSession,
+                  );
+                  yield* persistRemoteBinding({
+                    threadId: input.threadId,
+                    lifecycleGeneration,
+                    binding,
+                  });
+                  yield* provisioner.adopt(binding);
+                  remoteByThread.set(input.threadId, binding);
+                  return session;
+                }),
+              ),
+            );
+            if (Exit.isSuccess(startExit)) return startExit.value;
+            const cleanupExit = yield* Effect.exit(provisioner.stop(binding));
+            if (Exit.isFailure(cleanupExit)) {
+              return yield* adapterError(
+                "session.start.cleanup",
+                "Remote Pi launch failed and its sandbox could not be authoritatively destroyed.",
+                Cause.squash(cleanupExit.cause),
+              );
+            }
+            return yield* Effect.failCause(startExit.cause);
+          }),
+        );
+      return yield* capacity === undefined
+        ? launch()
+        : withCapacityLaunchDeadline(launch);
     }).pipe(
       Effect.mapError((cause) =>
         cause instanceof ProviderAdapterRequestError ||

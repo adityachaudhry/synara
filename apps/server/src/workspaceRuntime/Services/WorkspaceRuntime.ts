@@ -30,6 +30,7 @@ export interface WorkspaceRuntimeCreateInput {
   readonly lifecycleGeneration: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";
+  readonly onCapacityAdmitted?: () => void;
 }
 
 export interface WorkspaceExecInput {

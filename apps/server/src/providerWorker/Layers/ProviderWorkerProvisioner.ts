@@ -299,6 +299,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ...(options.environment ?? {}),
           },
           networkIsolation: options.networkIsolation ?? "ISOLATED",
+          ...(input.onCapacityAdmitted === undefined
+            ? {}
+            : { onCapacityAdmitted: input.onCapacityAdmitted }),
         });
         return yield* withWorkspaceCleanup(workspace, provisionConnectedWorker({
           workspace,
@@ -363,6 +366,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ...(options.environment ?? {}),
           },
           networkIsolation: options.networkIsolation ?? "ISOLATED",
+          ...(input.onCapacityAdmitted === undefined
+            ? {}
+            : { onCapacityAdmitted: input.onCapacityAdmitted }),
         });
         return yield* withWorkspaceCleanup(replacementWorkspace, provisionConnectedWorker({
           workspace: replacementWorkspace,

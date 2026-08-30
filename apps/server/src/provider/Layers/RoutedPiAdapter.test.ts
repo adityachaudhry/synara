@@ -1,5 +1,7 @@
 import type { ProviderSessionStartInput } from "@synara/contracts";
-import { Effect, Fiber, Layer, Option, Stream } from "effect";
+import { it as effectIt } from "@effect/vitest";
+import { Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
@@ -9,6 +11,8 @@ import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 import { makeRoutedPiAdapter, makeRoutedPiAdapterWithCapacity } from "./RoutedPiAdapter";
 import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
+import type { SandboxCapacityLease } from "../../workspaceRuntime/SandboxCapacity";
+import type { ProviderWorkerProvisionInput } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 
 const threadId = "11111111-1111-4111-8111-111111111111" as never;
 const repositoryBinding = {
@@ -133,6 +137,232 @@ function makeHarness(
 }
 
 describe("RoutedPiAdapter", () => {
+  for (const stage of [
+    "checkout",
+    "worker-connect",
+    "remote-session-start",
+    "binding-persistence",
+    "intent-adoption",
+  ] as const) {
+    effectIt.effect(`times out a ${stage} hang 60 seconds after capacity admission`, () =>
+      Effect.gen(function* () {
+        const harness = makeHarness();
+        const capacity = new SandboxCapacity(1);
+        const occupied = yield* Effect.promise(() =>
+          capacity.acquire({
+            key: "occupied:generation",
+            threadId: "occupied",
+            lifecycleGeneration: "generation",
+          }),
+        );
+        const stageStarted = yield* Deferred.make<void>();
+        let lifecycleLease: SandboxCapacityLease | undefined;
+        let intentOwned = false;
+        const preBindingHang = stage === "checkout" || stage === "worker-connect";
+        const startRemote = (input: ProviderWorkerProvisionInput & {
+          readonly onCapacityAdmitted?: () => void;
+        }) =>
+          Effect.tryPromise({
+            try: (signal) =>
+              capacity.acquire({
+                key: `${input.threadId}:${input.lifecycleGeneration}`,
+                threadId: input.threadId,
+                lifecycleGeneration: input.lifecycleGeneration,
+                signal,
+              }),
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.tap((lease) =>
+              Effect.sync(() => {
+                lifecycleLease = lease;
+                intentOwned = true;
+                input.onCapacityAdmitted?.();
+              }),
+            ),
+            Effect.flatMap(() =>
+              preBindingHang
+                ? Deferred.succeed(stageStarted, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.succeed(runtimeBinding),
+            ),
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                intentOwned = false;
+                lifecycleLease?.release();
+              }),
+            ),
+          );
+        harness.provisioner.start.mockImplementation(startRemote as never);
+        harness.provisioner.stop.mockImplementation(() =>
+          Effect.sync(() => {
+            intentOwned = false;
+            lifecycleLease?.release();
+          }),
+        );
+        if (stage === "remote-session-start") {
+          harness.request.mockImplementation((_fence, method) =>
+            method === "session.start"
+              ? Deferred.succeed(stageStarted, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.succeed(null),
+          );
+        }
+        if (stage === "binding-persistence") {
+          harness.upsert.mockImplementation(() =>
+            Deferred.succeed(stageStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          );
+        }
+        if (stage === "intent-adoption") {
+          harness.provisioner.adopt.mockImplementation(() =>
+            Deferred.succeed(stageStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          );
+        }
+        const adapter = yield* makeRoutedPiAdapterWithCapacity(capacity).pipe(
+          Effect.provide(harness.layer),
+        );
+        const startFiber = yield* adapter
+          .startSession(startInput({ repositoryBound: true }))
+          .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("61 seconds");
+        expect(startFiber.pollUnsafe()).toBeUndefined();
+
+        occupied.release();
+        yield* Deferred.await(stageStarted);
+        yield* TestClock.adjust("59 seconds");
+        expect(startFiber.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust("2 seconds");
+        expect(yield* Fiber.join(startFiber)).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            method: "session.start",
+            detail: "Remote Pi launch timed out 60 seconds after Railway capacity admission.",
+          },
+        });
+        expect(intentOwned).toBe(false);
+        expect(capacity.snapshot().activeKeys).toEqual([]);
+      }),
+    );
+  }
+
+  effectIt.effect("times out an uncertain Railway create without releasing its cleanup owner", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const capacity = new SandboxCapacity(1);
+      const occupied = yield* Effect.promise(() =>
+        capacity.acquire({
+          key: "occupied:generation",
+          threadId: "occupied",
+          lifecycleGeneration: "generation",
+        }),
+      );
+      const createStarted = yield* Deferred.make<void>();
+      let lease: SandboxCapacityLease | undefined;
+      let intentOwned = false;
+      harness.provisioner.start.mockImplementation((input: ProviderWorkerProvisionInput) =>
+        Effect.tryPromise({
+          try: (signal) =>
+            capacity.acquire({
+              key: `${input.threadId}:${input.lifecycleGeneration}`,
+              threadId: input.threadId,
+              lifecycleGeneration: input.lifecycleGeneration,
+              signal,
+            }),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.tap((acquired) =>
+            Effect.sync(() => {
+              lease = acquired;
+              intentOwned = true;
+              input.onCapacityAdmitted?.();
+            }),
+          ),
+          Effect.andThen(Deferred.succeed(createStarted, undefined)),
+          Effect.andThen(Effect.never),
+        ) as never,
+      );
+      const adapter = yield* makeRoutedPiAdapterWithCapacity(capacity).pipe(
+        Effect.provide(harness.layer),
+      );
+      const startFiber = yield* adapter
+        .startSession(startInput({ repositoryBound: true }))
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+
+      yield* TestClock.adjust("61 seconds");
+      expect(startFiber.pollUnsafe()).toBeUndefined();
+      occupied.release();
+      yield* Deferred.await(createStarted);
+      yield* TestClock.adjust("61 seconds");
+      expect(yield* Fiber.join(startFiber)).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          method: "session.start",
+          detail: "Remote Pi launch timed out 60 seconds after Railway capacity admission.",
+        },
+      });
+      expect(harness.provisioner.stop).not.toHaveBeenCalled();
+      expect(intentOwned).toBe(true);
+      expect(capacity.snapshot().activeKeys).toEqual([`${threadId}:generation-1`]);
+      lease?.release();
+    }),
+  );
+
+  effectIt.effect("surfaces failed authoritative teardown and retains uncertain ownership", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const capacity = new SandboxCapacity(1);
+      const admitted = yield* Deferred.make<void>();
+      let lease: SandboxCapacityLease | undefined;
+      let intentOwned = false;
+      harness.provisioner.start.mockImplementation((input: ProviderWorkerProvisionInput) =>
+        Effect.tryPromise({
+          try: (signal) =>
+            capacity.acquire({
+              key: `${input.threadId}:${input.lifecycleGeneration}`,
+              threadId: input.threadId,
+              lifecycleGeneration: input.lifecycleGeneration,
+              signal,
+            }),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.tap((acquired) =>
+            Effect.sync(() => {
+              lease = acquired;
+              intentOwned = true;
+              input.onCapacityAdmitted?.();
+            }),
+          ),
+          Effect.as(runtimeBinding),
+        ) as never,
+      );
+      harness.request.mockImplementation((_fence, method) =>
+        method === "session.start"
+          ? Deferred.succeed(admitted, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(null),
+      );
+      harness.provisioner.stop.mockImplementation(() =>
+        Effect.fail(new Error("authoritative destroy failed") as never),
+      );
+      const adapter = yield* makeRoutedPiAdapterWithCapacity(capacity).pipe(
+        Effect.provide(harness.layer),
+      );
+      const resultFiber = yield* adapter
+        .startSession(startInput({ repositoryBound: true }))
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+
+      yield* Deferred.await(admitted);
+      yield* TestClock.adjust("61 seconds");
+      const result = yield* Fiber.join(resultFiber);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { method: "session.start.cleanup" },
+      });
+      expect(harness.provisioner.stop).toHaveBeenCalledOnce();
+      expect(intentOwned).toBe(true);
+      expect(capacity.snapshot().activeKeys).toEqual([`${threadId}:generation-1`]);
+      lease?.release();
+    }),
+  );
+
   it("publishes queued positions and clears them when capacity starts", async () => {
     const harness = makeHarness();
     const capacity = new SandboxCapacity(1);

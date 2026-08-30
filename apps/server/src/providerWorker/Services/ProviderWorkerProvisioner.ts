@@ -9,6 +9,7 @@ export interface ProviderWorkerProvisionInput {
   readonly lifecycleGeneration: string;
   readonly cwd?: string;
   readonly repositoryBinding?: ProjectRepositoryBinding;
+  readonly onCapacityAdmitted?: () => void;
 }
 
 export interface ProviderWorkerProvisionerShape {

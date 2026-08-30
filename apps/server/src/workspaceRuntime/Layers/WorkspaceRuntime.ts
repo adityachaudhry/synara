@@ -72,14 +72,12 @@ function requireEnabled(
 
 export interface WorkspaceRuntimeOptions {
   readonly createOperationId?: () => string;
-  readonly createTimeoutMs?: number;
   readonly reconcileIntervalMs?: number;
   readonly capacity?: SandboxCapacity;
 }
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 10_000;
 const MAX_RECONCILE_BACKOFF_MS = 5 * 60_000;
-const DEFAULT_CREATE_TIMEOUT_MS = 60_000;
 
 export function reconcileWorkspaceCreationIntents(input: {
   readonly client: RailwaySandboxClientShape;
@@ -326,6 +324,7 @@ export function makeWorkspaceRuntimeLive(
           Effect.flatMap((capacityLease) =>
             Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
+            input.onCapacityAdmitted?.();
             const enabled = yield* requireEnabled(config, "create");
             const operationId = (options.createOperationId ?? randomUUID)();
             if (ownedOperationIds.has(operationId)) {
@@ -337,9 +336,11 @@ export function makeWorkspaceRuntimeLive(
             }
             ownedOperationIds.add(operationId);
             const putExit = yield* Effect.exit(
-              intents
-                .put({ operationId, createdAt: new Date().toISOString() })
-                .pipe(Effect.mapError(toRuntimeError("creation-intent.put"))),
+              restore(
+                intents
+                  .put({ operationId, createdAt: new Date().toISOString() })
+                  .pipe(Effect.mapError(toRuntimeError("creation-intent.put"))),
+              ),
             );
             if (Exit.isFailure(putExit)) {
               ownedOperationIds.delete(operationId);
@@ -360,10 +361,7 @@ export function makeWorkspaceRuntimeLive(
                     ...(enabled.region === undefined ? {} : { region: enabled.region }),
                     environment: input.environment,
                   })
-                  .pipe(
-                    Effect.timeout(options.createTimeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS),
-                    Effect.mapError(toRuntimeError("create")),
-                  ),
+                  .pipe(Effect.mapError(toRuntimeError("create"))),
               ),
             );
             if (Exit.isFailure(createExit)) {
@@ -372,9 +370,11 @@ export function makeWorkspaceRuntimeLive(
             }
             const record = createExit.value;
             const bindExit = yield* Effect.exit(
-              intents
-                .bindRuntime({ operationId, runtimeId: record.id })
-                .pipe(Effect.mapError(toRuntimeError("creation-intent.bind", record.id))),
+              restore(
+                intents
+                  .bindRuntime({ operationId, runtimeId: record.id })
+                  .pipe(Effect.mapError(toRuntimeError("creation-intent.bind", record.id))),
+              ),
             );
             if (Exit.isFailure(bindExit)) {
               ownedOperationIds.delete(operationId);
@@ -443,13 +443,11 @@ export function makeWorkspaceRuntimeLive(
       const adopt: WorkspaceRuntimeShape["adopt"] = (binding) =>
         binding.creationOperationId === undefined
           ? Effect.void
-          : Effect.uninterruptible(
-              removeIntent(binding.creationOperationId).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    capacityLeaseByOperationId.delete(binding.creationOperationId!);
-                  }),
-                ),
+          : removeIntent(binding.creationOperationId).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  capacityLeaseByOperationId.delete(binding.creationOperationId!);
+                }),
               ),
             );
 
