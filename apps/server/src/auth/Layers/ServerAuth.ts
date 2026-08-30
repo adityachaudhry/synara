@@ -94,7 +94,7 @@ export const makeServerAuth = Effect.gen(function* () {
     issueSession: (assertion) =>
       sessions.issue({
         sessionId: assertion.sessionId,
-        ttl: assertion.ttl,
+        expiresAt: assertion.expiresAt,
         subject: assertion.subject,
         method: "bearer-session-token",
         role: "client",

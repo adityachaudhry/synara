@@ -6,6 +6,7 @@ import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import { resolveDistributedPiRuntimeConfig } from "../distributedRuntimeConfig";
 import { makeProviderWorkerProvisioner } from "./ProviderWorkerProvisioner";
 
 const workspaceBinding: WorkspaceRuntimeBinding = {
@@ -78,6 +79,40 @@ function makeHarness(options?: {
 }
 
 describe("ProviderWorkerProvisioner", () => {
+  it("passes only trusted release provenance through config into the sandbox environment", async () => {
+    const harness = makeHarness();
+    const config = resolveDistributedPiRuntimeConfig({
+      environment: {
+        SYNARA_RAILWAY_SANDBOX_TOKEN: "railway-secret",
+        SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID: "environment",
+        SYNARA_PROVIDER_WORKER_CONTROL_URL:
+          "http://synara.railway.internal:3000/internal/provider-worker",
+        SYNARA_RELEASE: "0.7.3",
+        SYNARA_COMMIT: "abc123",
+        SYNARA_EXTERNAL_AUTH_SECRET: "must-not-forward",
+      },
+    });
+    if (!config.enabled) throw new Error("expected distributed runtime configuration");
+    const provisioner = await Effect.runPromise(
+      makeProviderWorkerProvisioner({
+        artifact: new TextEncoder().encode("worker"),
+        controlUrl: config.controlUrl,
+        environment: config.workerEnvironment,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    await Effect.runPromise(
+      provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
+    );
+
+    expect(harness.workspace.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: { SYNARA_RELEASE: "0.7.3", SYNARA_COMMIT: "abc123" },
+      }),
+    );
+    expect(JSON.stringify(harness.workspace.create.mock.calls)).not.toContain("must-not-forward");
+  });
+
   it("checks out only the admitted repository binding before starting the worker", async () => {
     const harness = makeHarness();
     const onCapacityAdmitted = vi.fn();

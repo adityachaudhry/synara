@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { ProjectId } from "@synara/contracts";
+import { DateTime, Effect, Exit, Layer, Option, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -22,6 +23,7 @@ import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http"
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 
 const tempDirs: string[] = [];
 
@@ -64,7 +66,7 @@ function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerCon
   } as ServerConfigShape;
 }
 
-function makeFakeServerAuth(): ServerAuthShape {
+function makeFakeServerAuth(allowedProjectIds?: ReadonlyArray<ProjectId>): ServerAuthShape {
   const expiresAt = Effect.runSync(DateTime.now);
   const descriptor = {
     policy: "loopback-browser" as const,
@@ -108,7 +110,12 @@ function makeFakeServerAuth(): ServerAuthShape {
     revokeClientSession: () => Effect.succeed(true),
     revokeOtherClientSessions: () => Effect.succeed(1),
     logoutSession: () => Effect.succeed(true),
-    authenticateHttpRequest: () => Effect.succeed({ ...session, credentialSource: "cookie" }),
+    authenticateHttpRequest: () =>
+      Effect.succeed({
+        ...session,
+        credentialSource: "cookie",
+        ...(allowedProjectIds === undefined ? {} : { allowedProjectIds }),
+      }),
     authenticateWebSocketUpgrade: () => Effect.succeed(session),
     issueWebSocketToken: () => Effect.succeed({ token: "ws-token", expiresAt }),
     issueStartupPairingUrl: () => Effect.succeed("http://127.0.0.1:3773/pair#token=PAIRINGTOKEN"),
@@ -119,6 +126,7 @@ async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
   run: (origin: string) => Promise<void>,
+  allowedProjectIds?: ReadonlyArray<ProjectId>,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
@@ -141,7 +149,17 @@ async function withEffectServer(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
-              Layer.succeed(ServerAuth, makeFakeServerAuth()),
+              Layer.succeed(ServerAuth, makeFakeServerAuth(allowedProjectIds)),
+              Layer.succeed(ProjectionSnapshotQuery, {
+                getThreadShellById: () => Effect.succeed(Option.none()),
+                getActiveProjectByWorkspaceRoot: (cwd: string) =>
+                  Effect.succeed(
+                    cwd === config.cwd && allowedProjectIds?.[0]
+                      ? Option.some({ id: allowedProjectIds[0] } as never)
+                      : Option.none(),
+                  ),
+                getShellSnapshot: () => Effect.succeed({ threads: [] } as never),
+              } as never),
               ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
               NodeHttpServer.layerHttpServices,
             ),
@@ -162,6 +180,30 @@ async function withEffectServer(
 }
 
 describe("localImageEffectRouteLayer", () => {
+  it("does not let a project-scoped session read another temp-root image", async () => {
+    const workspace = makeTempDir("synara-effect-scoped-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const otherProject = makeTempDir("synara-effect-other-project-");
+    const imagePath = path.join(otherProject, "private.png");
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const projectId = ProjectId.makeUnsafe("allowed-project");
+    const config = makeServerConfig({ cwd: workspace, authToken: "local-secret" });
+
+    await withEffectServer(
+      config,
+      localImageEffectRouteLayer,
+      async (origin) => {
+        const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+        const response = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Cookie: "synara_session=scoped" },
+        });
+
+        expect(response.status).toBe(404);
+      },
+      [projectId],
+    );
+  });
+
   it("serves an allowlisted workspace image and signals downloads via Content-Disposition", async () => {
     const workspace = makeTempDir("synara-effect-image-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");

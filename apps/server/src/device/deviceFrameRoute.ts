@@ -56,6 +56,10 @@ export interface DeviceFrameSocketWriter {
   readonly sink: DeviceFrameSink;
 }
 
+export interface DeviceFrameUpgradeAdmission {
+  readonly run: <A, E, R>(connection: Effect.Effect<A, E, R>) => Effect.Effect<A, unknown, R>;
+}
+
 /**
  * Wrap a raw write function as a transport sink, accounting for bytes handed
  * to the socket but not yet acknowledged as flushed. The transport reads that
@@ -93,7 +97,7 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
    */
   readonly authorizeUpgrade: (
     request: HttpServerRequest.HttpServerRequest,
-  ) => Effect.Effect<boolean, never, R>;
+  ) => Effect.Effect<DeviceFrameUpgradeAdmission | undefined, never, R>;
 }) {
   return Layer.effectDiscard(
     Effect.gen(function* () {
@@ -112,39 +116,44 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
           if (!udid) {
             return HttpServerResponse.text("Missing udid", { status: 400 });
           }
-          if (!(yield* options.authorizeUpgrade(request))) {
+          const admission = yield* options.authorizeUpgrade(request);
+          if (admission === undefined) {
             return HttpServerResponse.text("Forbidden", { status: 403 });
           }
 
-          const socket = yield* request.upgrade;
-          const writer = yield* socket.writer;
-          let open = true;
-          const sink = makeDeviceFrameSink({
-            send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
-            isOpen: () => open,
-          });
-          const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              open = false;
-              unsubscribe();
+          return yield* admission.run(
+            Effect.gen(function* () {
+              const socket = yield* request.upgrade;
+              const writer = yield* socket.writer;
+              let open = true;
+              const sink = makeDeviceFrameSink({
+                send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
+                isOpen: () => open,
+              });
+              const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  open = false;
+                  unsubscribe();
+                }),
+              );
+              // The only thing a client may send is a resync request, when its
+              // decoder hits a sequence gap or an error. Handled here rather than
+              // as an RPC because it is a property of this stream, and because a
+              // frozen canvas should not depend on a second socket being healthy.
+              // Anything unrecognized is ignored: a stray message must not kill a
+              // stream.
+              yield* socket.run((message) => {
+                if (decodeResyncRequest(message) === null) return;
+                Effect.runFork(
+                  Effect.promise(() =>
+                    deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
+                  ),
+                );
+              });
+              return HttpServerResponse.empty();
             }),
           );
-          // The only thing a client may send is a resync request, when its
-          // decoder hits a sequence gap or an error. Handled here rather than
-          // as an RPC because it is a property of this stream, and because a
-          // frozen canvas should not depend on a second socket being healthy.
-          // Anything unrecognized is ignored: a stray message must not kill a
-          // stream.
-          yield* socket.run((message) => {
-            if (decodeResyncRequest(message) === null) return;
-            Effect.runFork(
-              Effect.promise(() =>
-                deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
-              ),
-            );
-          });
-          return HttpServerResponse.empty();
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.as(

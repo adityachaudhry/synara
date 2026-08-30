@@ -319,8 +319,15 @@ export const makeSessionCredentialService = Effect.gen(function* () {
   const issue: SessionCredentialServiceShape["issue"] = (input) =>
     Effect.gen(function* () {
       const sessionId = input?.sessionId ?? AuthSessionId.makeUnsafe(Crypto.randomUUID());
+      if (input?.sessionId && Option.isSome(yield* authSessions.getById({ sessionId }))) {
+        return yield* new SessionCredentialError({
+          message: "Session credential id was already used.",
+          status: 409,
+        });
+      }
       const issuedAt = yield* DateTime.now;
-      const expiresAt = DateTime.addDuration(issuedAt, input?.ttl ?? DEFAULT_SESSION_TTL);
+      const expiresAt =
+        input?.expiresAt ?? DateTime.addDuration(issuedAt, input?.ttl ?? DEFAULT_SESSION_TTL);
       const client = input?.client ?? createDefaultClientMetadata();
       const claims: SessionClaims = {
         v: 1,
@@ -381,7 +388,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
       } satisfies IssuedSession;
     }).pipe(
       Effect.mapError((cause) =>
-        toSessionCredentialError("Failed to issue session credential.", cause),
+        cause instanceof SessionCredentialError
+          ? cause
+          : toSessionCredentialError("Failed to issue session credential.", cause),
       ),
     );
 

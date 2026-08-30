@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canaryCloneArgs,
+  canaryRuntimeEnvironment,
   canaryStartArgs,
   parseCanaryArgs,
   resolveCanaryPaths,
@@ -56,6 +57,14 @@ describe("canary tooling", () => {
 
   it("starts the desktop launcher directly so the persisted PID stays alive", () => {
     expect(canaryStartArgs()).toEqual(["apps/desktop/scripts/start-electron.mjs"]);
+  });
+
+  it("passes the canonical release commit into the Canary server runtime", () => {
+    const paths = resolveCanaryPaths({}, "/Users/tester");
+    expect(canaryRuntimeEnvironment({}, paths, "a".repeat(40))).toMatchObject({
+      SYNARA_COMMIT: "a".repeat(40),
+      SYNARA_COMMIT_HASH: "a".repeat(40),
+    });
   });
 
   it("keeps updating the selected stacked ref until explicitly moved to main", () => {

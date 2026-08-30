@@ -1290,6 +1290,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.deleted",
         payload: {
           threadId: command.threadId,
+          projectId: thread.projectId,
           deletedAt: occurredAt,
         },
       };

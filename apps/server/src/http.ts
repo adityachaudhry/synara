@@ -359,32 +359,51 @@ const requireProjectScopeAccess = Effect.fn(function* (input: {
   if (input.session.allowedProjectIds === undefined) return;
   const allowed = new Set(input.session.allowedProjectIds);
   const snapshots = yield* ProjectionSnapshotQuery;
-  const permitted = input.threadId
-    ? Option.match(yield* snapshots.getThreadShellById(ThreadId.makeUnsafe(input.threadId)), {
+  let located = false;
+  if (input.threadId) {
+    located = true;
+    const permitted = Option.match(
+      yield* snapshots.getThreadShellById(ThreadId.makeUnsafe(input.threadId)),
+      {
         onNone: () => false,
         onSome: (thread) => allowed.has(thread.projectId),
-      })
-    : input.workspaceRoot
-      ? yield* snapshots.getActiveProjectByWorkspaceRoot(input.workspaceRoot).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                snapshots.getShellSnapshot().pipe(
-                  Effect.map((snapshot) =>
-                    snapshot.threads.some(
-                      (thread) =>
-                        allowed.has(thread.projectId) &&
-                        (thread.worktreePath === input.workspaceRoot ||
-                          thread.workingDirectory === input.workspaceRoot),
-                    ),
-                  ),
+      },
+    );
+    if (!permitted) {
+      return yield* new AuthError({
+        message: "This session is not authorized for the requested project resource.",
+        status: 403,
+      });
+    }
+  }
+  if (input.workspaceRoot) {
+    located = true;
+    const permitted = yield* snapshots.getActiveProjectByWorkspaceRoot(input.workspaceRoot).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            snapshots.getShellSnapshot().pipe(
+              Effect.map((snapshot) =>
+                snapshot.threads.some(
+                  (thread) =>
+                    allowed.has(thread.projectId) &&
+                    (thread.worktreePath === input.workspaceRoot ||
+                      thread.workingDirectory === input.workspaceRoot),
                 ),
-              onSome: (project) => Effect.succeed(allowed.has(project.id)),
-            }),
-          ),
-        )
-      : false;
-  if (!permitted) {
+              ),
+            ),
+          onSome: (project) => Effect.succeed(allowed.has(project.id)),
+        }),
+      ),
+    );
+    if (!permitted) {
+      return yield* new AuthError({
+        message: "This session is not authorized for the requested project resource.",
+        status: 403,
+      });
+    }
+  }
+  if (!located) {
     return yield* new AuthError({
       message: "This session is not authorized for the requested project resource.",
       status: 403,
@@ -940,6 +959,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
         scratchWorkspacesRoot: resolveScratchWorkspacesRoot(),
         allowAbsoluteLocalPreviewFile: true,
         previewGrant: url.searchParams.get("grant"),
+        workspaceOnly: session?.allowedProjectIds !== undefined,
       }).catch(() => null),
     );
     if (!previewFile) {
@@ -1121,7 +1141,8 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
     if (authenticatedSession) {
       yield* requireProjectScopeAccess({
         session: authenticatedSession,
-        ...(threadId ? { threadId } : { workspaceRoot: cwd }),
+        ...(threadId ? { threadId } : {}),
+        workspaceRoot: cwd,
       });
     }
     const releaseUpload = voiceUploadAdmissionGate.tryAcquire();

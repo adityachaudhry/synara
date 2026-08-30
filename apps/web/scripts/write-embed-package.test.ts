@@ -163,6 +163,19 @@ describe("writeEmbedPackage", () => {
     ).rejects.toThrow("SYNARA_COMMIT");
   });
 
+  it("rejects missing protocol provenance instead of assuming a protocol version", async () => {
+    const fixture = await makeFixture("missing-protocol");
+    await expect(
+      writeEmbedPackage({
+        ...fixture,
+        version: "0.7.3",
+        synaraCommit: "synara-sha",
+        protocolVersion: Number(undefined),
+        routerVersion: "^1.160.2",
+      }),
+    ).rejects.toThrow("SYNARA_PROTOCOL_VERSION");
+  });
+
   it("rejects bundled CommonJS modules that dynamically require peer React", async () => {
     const fixture = await makeFixture("dynamic-react");
     await fs.writeFile(

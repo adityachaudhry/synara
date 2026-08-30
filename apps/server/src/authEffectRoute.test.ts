@@ -5,12 +5,13 @@ import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthSessionId } from "@synara/contracts";
+import { AuthSessionId, ProjectId } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
+  VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
-import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { DateTime, Effect, Exit, Layer, Option, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
@@ -28,6 +29,7 @@ import {
   binaryUploadEffectRouteLayer,
 } from "./http";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 
 const currentSessionId = AuthSessionId.makeUnsafe("11111111-1111-4111-8111-111111111111");
 const otherSessionId = AuthSessionId.makeUnsafe("22222222-2222-4222-8222-222222222222");
@@ -38,7 +40,10 @@ function makeSessionCredentialService(): SessionCredentialServiceShape {
   } as SessionCredentialServiceShape;
 }
 
-function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
+function makeServerAuth(
+  sideEffects: { count: number },
+  allowedProjectIds?: ReadonlyArray<ProjectId>,
+): ServerAuthShape {
   const expiresAt = DateTime.toUtc(Effect.runSync(DateTime.now));
   const descriptor = {
     policy: "remote-reachable" as const,
@@ -101,6 +106,7 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         role: "owner",
         expiresAt,
         credentialSource: bearer ? "bearer" : "cookie",
+        ...(allowedProjectIds === undefined ? {} : { allowedProjectIds }),
       });
     },
     authenticateWebSocketUpgrade: () =>
@@ -129,9 +135,27 @@ async function withAuthEffectServer(
           Layer.succeed(ServerAuth, serverAuth),
           Layer.succeed(SessionCredentialService, makeSessionCredentialService()),
           Layer.succeed(ProviderAdapterRegistry, {
-            getByProvider: () => Effect.die("voice adapter not used in this test"),
+            getByProvider: () =>
+              Effect.succeed({ transcribeVoice: () => Effect.succeed({ text: "transcribed" }) } as never),
             listProviders: () => Effect.succeed([]),
           }),
+          Layer.succeed(ProjectionSnapshotQuery, {
+            getThreadShellById: (threadId: string) =>
+              Effect.succeed(
+                Option.some({
+                  projectId: ProjectId.makeUnsafe(
+                    threadId === "allowed-thread" ? "allowed-project" : "denied-project",
+                  ),
+                } as never),
+              ),
+            getActiveProjectByWorkspaceRoot: (cwd: string) =>
+              Effect.succeed(
+                Option.some({
+                  id: ProjectId.makeUnsafe(cwd === "/allowed" ? "allowed-project" : "denied-project"),
+                } as never),
+              ),
+            getShellSnapshot: () => Effect.die("not needed"),
+          } as never),
           ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
           NodeServices.layer,
         ),
@@ -383,6 +407,36 @@ describe("authEffectRouteLayer", () => {
 });
 
 describe("binaryUploadEffectRouteLayer", () => {
+  it("rejects voice upload when an allowed thread is paired with another project cwd", async () => {
+    const config = { host: "127.0.0.1", authToken: "local-secret" } as ServerConfigShape;
+    await withAuthEffectServer(
+      config,
+      makeServerAuth({ count: 0 }, [ProjectId.makeUnsafe("allowed-project")]),
+      async (serverOrigin) => {
+        const params = new URLSearchParams({
+          provider: "pi",
+          cwd: "/denied",
+          threadId: "allowed-thread",
+          mimeType: "audio/webm",
+          sampleRateHz: "16000",
+          durationMs: "1000",
+        });
+        const response = await fetch(
+          `${serverOrigin}${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`,
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer bearer-token" },
+            body: Uint8Array.from([1]),
+          },
+        );
+
+        const payload = await response.json();
+        expect(response.status, JSON.stringify(payload)).toBe(403);
+      },
+      binaryUploadEffectRouteLayer,
+    );
+  });
+
   it("allows credentialed Canary attachment upload preflights", async () => {
     const config = {
       host: "127.0.0.1",

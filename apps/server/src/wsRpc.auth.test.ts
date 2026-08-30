@@ -7,6 +7,7 @@ import {
   authenticateRpcWebSocketUpgrade,
   authorizeDeviceFrameWebSocketUpgrade,
   canManageExternalMcp,
+  makeDeviceFrameUpgradeAdmission,
 } from "./wsRpc";
 
 it("reserves external MCP management for owner sessions", () => {
@@ -133,7 +134,7 @@ it.effect("preserves the legacy loopback token on the device frame socket", () =
       serverAuth: { authenticateWebSocketUpgrade },
     });
 
-    assert.isTrue(authorized);
+    assert.isNull(authorized);
     assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 0);
   }),
 );
@@ -157,6 +158,65 @@ it.effect("rejects an invalid legacy token on a remotely exposed device frame so
 
     assert.isFalse(authorized);
     assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 1);
+  }),
+);
+
+it.effect("rejects project-scoped sessions on the unscoped device frame socket", () =>
+  Effect.gen(function* () {
+    const authenticateWebSocketUpgrade = vi.fn(() =>
+      Effect.succeed({
+        sessionId: "scoped-session" as never,
+        subject: "glasswing:user-1",
+        method: "bearer-session-token" as const,
+        role: "client" as const,
+        allowedProjectIds: ["allowed-project" as never],
+      }),
+    );
+
+    const authorized = yield* authorizeDeviceFrameWebSocketUpgrade({
+      config: { host: "0.0.0.0", authToken: "remote-secret", publicUrl: undefined },
+      legacyToken: null,
+      request: {
+        headers: {},
+        cookies: {},
+        url: new URL("http://192.168.1.50:3773/ws/device-frames?udid=other-device"),
+      },
+      serverAuth: { authenticateWebSocketUpgrade },
+    });
+
+    assert.isFalse(authorized);
+  }),
+);
+
+it.effect("keeps the full unscoped device-frame session in the revocable connection lifecycle", () =>
+  Effect.gen(function* () {
+    const authenticatedSession = {
+      sessionId: "unscoped-session" as never,
+      subject: "owner-bootstrap",
+      method: "browser-session-cookie" as const,
+      role: "owner" as const,
+    };
+    const authorization = yield* authorizeDeviceFrameWebSocketUpgrade({
+      config: { host: "0.0.0.0", authToken: "remote-secret", publicUrl: undefined },
+      legacyToken: null,
+      request: {
+        headers: {},
+        cookies: { "synara-session": "credential" },
+        url: new URL("http://192.168.1.50:3773/ws/device-frames?udid=device-1"),
+      },
+      serverAuth: {
+        authenticateWebSocketUpgrade: () => Effect.succeed(authenticatedSession),
+      },
+    });
+    const runAuthenticatedConnection = vi.fn((_sessionId, connection) => connection);
+    const admission = makeDeviceFrameUpgradeAdmission({
+      authenticatedSession: authorization,
+      sessions: { runAuthenticatedConnection: runAuthenticatedConnection as never },
+    });
+
+    assert.strictEqual(authorization, authenticatedSession);
+    assert.equal(yield* admission!.run(Effect.succeed("connected")), "connected");
+    assert.equal(runAuthenticatedConnection.mock.calls[0]?.[0], authenticatedSession.sessionId);
   }),
 );
 

@@ -1913,6 +1913,8 @@ export const ThreadCreatedPayload = Schema.Struct({
 
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
+  // Required for new events, optional for legacy events.
+  projectId: Schema.optional(ProjectId),
   deletedAt: IsoDateTime,
 });
 

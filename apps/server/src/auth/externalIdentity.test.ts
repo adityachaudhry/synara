@@ -18,7 +18,7 @@ describe("external identity exchange", () => {
         issueSession: (input) =>
           Effect.sync(() => {
             issued.push(input);
-            return { token: "session-token", expiresAt: DateTime.makeUnsafe(Date.parse(input.expiresAt)) };
+            return { token: "session-token", expiresAt: input.expiresAt };
           }),
       }),
     );

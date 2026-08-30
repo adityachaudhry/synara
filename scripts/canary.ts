@@ -99,6 +99,24 @@ export function canaryStartArgs(): ReadonlyArray<string> {
   return ["apps/desktop/scripts/start-electron.mjs"];
 }
 
+export function canaryRuntimeEnvironment(
+  environment: NodeJS.ProcessEnv,
+  paths: CanaryPaths,
+  commit: string,
+): NodeJS.ProcessEnv {
+  const result = { ...environment };
+  delete result.VITE_DEV_SERVER_URL;
+  delete result.ELECTRON_RENDERER_PORT;
+  delete result.SYNARA_AUTH_TOKEN;
+  return Object.assign(result, {
+    SYNARA_DESKTOP_FLAVOR: "canary",
+    SYNARA_DISABLE_AUTO_UPDATE: "1",
+    SYNARA_HOME: paths.home,
+    SYNARA_COMMIT: commit,
+    SYNARA_COMMIT_HASH: commit,
+  });
+}
+
 function run(command: string, args: ReadonlyArray<string>, cwd: string): void {
   const result = spawnSync(command, [...args], {
     cwd,
@@ -256,16 +274,7 @@ function startCanary(paths: CanaryPaths): void {
     throw new Error("Synara Canary is not built. Run `bun run canary:setup` first.");
   }
   FS.mkdirSync(paths.home, { recursive: true });
-  const env = { ...process.env };
-  delete env.VITE_DEV_SERVER_URL;
-  delete env.ELECTRON_RENDERER_PORT;
-  delete env.SYNARA_AUTH_TOKEN;
-  Object.assign(env, {
-    SYNARA_DESKTOP_FLAVOR: "canary",
-    SYNARA_DISABLE_AUTO_UPDATE: "1",
-    SYNARA_HOME: paths.home,
-    SYNARA_COMMIT_HASH: commit,
-  });
+  const env = canaryRuntimeEnvironment(process.env, paths, commit);
   const logDescriptor = FS.openSync(paths.log, "a", 0o600);
   try {
     FS.writeSync(logDescriptor, `\n[${new Date().toISOString()}] Starting ${commit}\n`);

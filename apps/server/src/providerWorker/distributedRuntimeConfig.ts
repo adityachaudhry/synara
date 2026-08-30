@@ -77,6 +77,10 @@ export function resolveDistributedPiRuntimeConfig(input: {
     const value = environment[key]?.trim();
     if (value) workerEnvironment[key] = value;
   }
+  for (const key of ["SYNARA_RELEASE", "SYNARA_COMMIT"] as const) {
+    const value = environment[key]?.trim();
+    if (value) workerEnvironment[key] = value;
+  }
 
   const networkIsolationInput =
     environment.SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION?.trim().toUpperCase() || "ISOLATED";

@@ -153,4 +153,25 @@ describe("decider thread archive cascade", () => {
     expect(events.every((event) => event.type === "thread.unarchived")).toBe(true);
     expect(eventThreadIds(result)).toEqual([CHILD_THREAD_ID, PARENT_THREAD_ID]);
   });
+
+  it("records project ownership on thread deletion events", async () => {
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.delete",
+          commandId: CommandId.makeUnsafe("cmd-delete-thread"),
+          threadId: PARENT_THREAD_ID,
+        },
+        readModel: makeReadModel([makeThread({ id: PARENT_THREAD_ID })]),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      type: "thread.deleted",
+      payload: {
+        threadId: PARENT_THREAD_ID,
+        projectId: ProjectId.makeUnsafe("project-archive"),
+      },
+    });
+  });
 });

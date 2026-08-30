@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { AuthSessionId, ProjectId } from "@synara/contracts";
-import { Clock, Data, DateTime, Duration, Effect, Ref, Schema } from "effect";
+import { Clock, Data, DateTime, Effect, Ref, Schema } from "effect";
 
 const MAX_EXTERNAL_SESSION_TTL_MS = 15 * 60 * 1_000;
 const ASSERTION_KEYS = new Set([
@@ -35,8 +35,7 @@ export interface ExternalIdentitySessionIssueInput {
   readonly subject: string;
   readonly email: string;
   readonly allowedProjectIds: ReadonlyArray<ProjectId>;
-  readonly expiresAt: string;
-  readonly ttl: Duration.Duration;
+  readonly expiresAt: DateTime.DateTime;
 }
 
 export interface ExternalIdentityExchangeShape<A> {
@@ -132,18 +131,23 @@ export const makeExternalIdentityExchange = Effect.fn(function* <A>(input: {
           subject: assertion.subject,
           email: assertion.email,
           allowedProjectIds: Array.from(new Set(assertion.allowedProjectIds)),
-          expiresAt: DateTime.formatIso(assertion.expiresAt),
-          ttl: Duration.millis(expiresAtMillis - now),
+          expiresAt: assertion.expiresAt,
         })
         .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ExternalIdentityError({
-                message: "Failed to issue external identity session.",
-                status: 500,
-                cause,
-              }),
-          ),
+          Effect.mapError((cause) => {
+            const replayed =
+              cause !== null &&
+              typeof cause === "object" &&
+              "status" in cause &&
+              cause.status === 409;
+            return new ExternalIdentityError({
+              message: replayed
+                ? "External identity assertion nonce was already used."
+                : "Failed to issue external identity session.",
+              status: replayed ? 409 : 500,
+              cause,
+            });
+          }),
         );
     });
 

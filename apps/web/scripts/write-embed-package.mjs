@@ -142,7 +142,7 @@ if (invokedPath === import.meta.url) {
     readmePath: path.join(webDir, "README.embed.md"),
     version: packageManifest.version,
     synaraCommit: process.env.SYNARA_COMMIT,
-    protocolVersion: Number(process.env.SYNARA_PROTOCOL_VERSION ?? "1"),
+    protocolVersion: Number(process.env.SYNARA_PROTOCOL_VERSION),
     routerVersion: packageManifest.dependencies["@tanstack/react-router"],
   });
 }

@@ -1,9 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Deferred, Duration, Effect, Fiber, Layer, Ref } from "effect";
+import { DateTime, Deferred, Duration, Effect, Fiber, Layer, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
+import {
+  makeExternalIdentityExchange,
+  type ExternalIdentitySessionIssueInput,
+} from "../externalIdentity";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite";
 import { ServerSecretStoreLive } from "./ServerSecretStore";
 import {
@@ -112,6 +116,82 @@ describe("SessionCredentialServiceLive", () => {
         expect(yield* Effect.result(sessions.verifyWebSocketToken(websocket.token))).toMatchObject({
           _tag: "Failure",
         });
+      }),
+    );
+  });
+
+  it("keeps claim and persisted expiry at an absolute deadline after delayed issuance", async () => {
+    await Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      const expiresAt = DateTime.makeUnsafe(61_000);
+      yield* TestClock.setTime(1_000);
+      yield* TestClock.adjust(Duration.seconds(30));
+
+      const issued = yield* sessions.issue({ expiresAt });
+      const verified = yield* sessions.verify(issued.token);
+      const persisted = yield* sessions.listActive();
+
+      expect(DateTime.toEpochMillis(issued.expiresAt)).toBe(61_000);
+      expect(DateTime.toEpochMillis(verified.expiresAt!)).toBe(61_000);
+      expect(DateTime.toEpochMillis(persisted[0]!.expiresAt)).toBe(61_000);
+    }).pipe(
+      Effect.provide(Layer.merge(testLayer, TestClock.layer())),
+      Effect.scoped,
+      Effect.runPromise,
+    );
+  });
+
+  it("keeps absolute expiry when the issuance clock moves backward", async () => {
+    await Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      const expiresAt = DateTime.makeUnsafe(61_000);
+      yield* TestClock.setTime(30_000);
+      yield* TestClock.setTime(10_000);
+
+      const issued = yield* sessions.issue({ expiresAt });
+
+      expect(DateTime.toEpochMillis(issued.expiresAt)).toBe(61_000);
+    }).pipe(
+      Effect.provide(Layer.merge(testLayer, TestClock.layer())),
+      Effect.scoped,
+      Effect.runPromise,
+    );
+  });
+
+  it("reports a persisted nonce replay after exchange restart as conflict", async () => {
+    await runSessionTest(
+      Effect.gen(function* () {
+        const sessions = yield* SessionCredentialService;
+        const issueSession = (input: ExternalIdentitySessionIssueInput) =>
+          sessions.issue({
+            sessionId: input.sessionId,
+            expiresAt: input.expiresAt,
+            subject: input.subject,
+            method: "bearer-session-token",
+            allowedProjectIds: input.allowedProjectIds,
+          });
+        const assertion = {
+          subject: "glasswing:user-123",
+          email: "person@example.com",
+          allowedProjectIds: ["external-project-1"],
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          nonce: "persisted-restart-nonce",
+        };
+        const first = yield* makeExternalIdentityExchange({
+          secret: "shared-secret",
+          issueSession,
+        });
+        yield* first.exchange({ authorization: "Bearer shared-secret", payload: assertion });
+        const restarted = yield* makeExternalIdentityExchange({
+          secret: "shared-secret",
+          issueSession,
+        });
+
+        const replay = yield* Effect.flip(
+          restarted.exchange({ authorization: "Bearer shared-secret", payload: assertion }),
+        );
+
+        expect(replay.status).toBe(409);
       }),
     );
   });

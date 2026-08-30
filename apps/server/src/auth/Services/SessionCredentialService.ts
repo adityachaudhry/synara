@@ -44,6 +44,7 @@ export type SessionCredentialChange =
 export class SessionCredentialError extends Data.TaggedError("SessionCredentialError")<{
   readonly message: string;
   readonly cause?: unknown;
+  readonly status?: 409;
 }> {}
 
 export class SessionCapacityError extends Data.TaggedError("SessionCapacityError")<{
@@ -58,6 +59,7 @@ export interface SessionCredentialServiceShape {
   readonly cookieName: string;
   readonly issue: (input?: {
     readonly sessionId?: AuthSessionId;
+    readonly expiresAt?: DateTime.DateTime;
     readonly ttl?: Duration.Duration;
     readonly subject?: string;
     readonly method?: ServerAuthSessionMethod;

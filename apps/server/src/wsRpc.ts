@@ -46,12 +46,16 @@ import {
   type AuthenticatedSession,
   type ServerAuthShape,
 } from "./auth/Services/ServerAuth";
-import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
+import {
+  SessionCredentialService,
+  type SessionCredentialServiceShape,
+} from "./auth/Services/SessionCredentialService";
 import {
   authorizeProjectScopedRpc,
   CurrentProjectScope,
   filterReadModelByProjectScope,
   filterShellSnapshotByProjectScope,
+  projectScopePayloadForEvent,
 } from "./auth/projectScope";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
@@ -70,7 +74,10 @@ import {
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { DeviceService } from "./device/Services/DeviceService";
 import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
-import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
+import {
+  makeDeviceFrameRouteLayer,
+  type DeviceFrameUpgradeAdmission,
+} from "./device/deviceFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
 import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
@@ -650,14 +657,7 @@ const makeWsRpcHandlersLayer = () =>
                     Stream.filterEffect((event) =>
                       authorizeProjectScopedRpc({
                         method: "orchestration.event",
-                        payload: {
-                          ...(event.payload as Record<string, unknown>),
-                          ...(event.aggregateKind === "project"
-                            ? { projectId: event.aggregateId }
-                            : event.aggregateKind === "thread"
-                              ? { threadId: event.aggregateId }
-                              : {}),
-                        },
+                        payload: projectScopePayloadForEvent(event),
                         scope,
                         query: projectionReadModelQuery,
                       }),
@@ -2236,11 +2236,29 @@ export function authorizeDeviceFrameWebSocketUpgrade(input: {
   readonly legacyToken: string | null;
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
-}): Effect.Effect<boolean> {
+}): Effect.Effect<AuthenticatedSession | null | false> {
   return authenticateRpcWebSocketUpgrade(input).pipe(
-    Effect.as(true),
+    Effect.map((session) =>
+      session?.allowedProjectIds === undefined ? session : false,
+    ),
     Effect.orElseSucceed(() => false),
   );
+}
+
+export function makeDeviceFrameUpgradeAdmission(input: {
+  readonly authenticatedSession: AuthenticatedSession | null | false;
+  readonly sessions: Pick<SessionCredentialServiceShape, "runAuthenticatedConnection">;
+}): DeviceFrameUpgradeAdmission | undefined {
+  if (input.authenticatedSession === false) return undefined;
+  return {
+    run: (connection) =>
+      input.authenticatedSession === null
+        ? connection
+        : input.sessions.runAuthenticatedConnection(
+            input.authenticatedSession.sessionId,
+            connection,
+          ),
+  };
 }
 
 export function makeWebsocketRpcRouteLayer<R>(
@@ -2444,14 +2462,16 @@ const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
     Effect.gen(function* () {
       const config = yield* ServerConfig;
       const serverAuth = yield* ServerAuth;
+      const sessions = yield* SessionCredentialService;
       const url = trustedWebSocketRequestUrl(request, config);
-      if (url === null) return false;
-      return yield* authorizeDeviceFrameWebSocketUpgrade({
+      if (url === null) return undefined;
+      const authenticatedSession = yield* authorizeDeviceFrameWebSocketUpgrade({
         config,
         legacyToken: url.searchParams.get("token"),
         request: makeEffectAuthRequest(request),
         serverAuth,
       });
+      return makeDeviceFrameUpgradeAdmission({ authenticatedSession, sessions });
     }),
 });
 

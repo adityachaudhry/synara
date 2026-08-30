@@ -128,6 +128,7 @@ export async function resolveAllowedLocalPreviewFile(input: {
   readonly scratchWorkspacesRoot?: string;
   readonly allowAbsoluteLocalPreviewFile?: boolean;
   readonly previewGrant?: string | null;
+  readonly workspaceOnly?: boolean;
 }): Promise<ResolvedLocalPreviewFile | null> {
   const requestedPath = input.requestedPath?.trim();
   if (
@@ -162,6 +163,7 @@ export async function resolveAllowedLocalPreviewFile(input: {
   if (workspaceRoot !== null && isPathInside(realFilePath, workspaceRoot)) {
     return resolved;
   }
+  if (input.workspaceOnly) return null;
 
   // Sessions that start before a project workspace exists run in per-thread
   // scratch directories. Files agents create there are workspace-equivalent,
