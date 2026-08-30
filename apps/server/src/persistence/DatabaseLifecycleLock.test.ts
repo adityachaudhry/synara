@@ -27,7 +27,11 @@ async function makeDbPath(): Promise<string> {
 async function writeOwnedDirectory(
   directoryPath: string,
   pid: number,
-  options: { readonly runtimeId?: string; readonly createdAt?: string } = {},
+  options: {
+    readonly runtimeId?: string;
+    readonly createdAt?: string;
+    readonly processInstanceId?: string;
+  } = {},
 ): Promise<void> {
   await fs.mkdir(directoryPath, { mode: 0o700 });
   await fs.writeFile(
@@ -37,6 +41,9 @@ async function writeOwnedDirectory(
       token: randomUUID(),
       createdAt: options.createdAt ?? new Date().toISOString(),
       ...(options.runtimeId === undefined ? {} : { runtimeId: options.runtimeId }),
+      ...(options.processInstanceId === undefined
+        ? {}
+        : { processInstanceId: options.processInstanceId }),
     })}\n`,
     { mode: 0o600 },
   );
@@ -160,6 +167,11 @@ describe("database lifecycle lock", () => {
       for (const malformed of [
         { runtimeId: " ", createdAt: new Date(Date.now() - 60_000).toISOString() },
         { runtimeId: "replica-previous", createdAt: "0" },
+        {
+          runtimeId: "replica-previous",
+          createdAt: new Date(Date.now() - 60_000).toISOString(),
+          processInstanceId: "not-a-uuid",
+        },
       ]) {
         const dbPath = await makeDbPath();
         const lockPath = `${dbPath}.lifecycle-lock`;
@@ -173,6 +185,28 @@ describe("database lifecycle lock", () => {
     } finally {
       if (previousReplicaId === undefined) delete process.env.RAILWAY_REPLICA_ID;
       else process.env.RAILWAY_REPLICA_ID = previousReplicaId;
+    }
+  });
+
+  it("does not reap its live process lock when the wall clock moves backward", async () => {
+    const dbPath = await makeDbPath();
+    const lock = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+    const ownerPath = path.join(lock.lockPath, "owner.json");
+    const owner = JSON.parse(await fs.readFile(ownerPath, "utf8")) as Record<string, unknown>;
+    expect(owner.processInstanceId).toBe(lock.owner.processInstanceId);
+    await fs.writeFile(
+      ownerPath,
+      `${JSON.stringify({ ...owner, createdAt: "2000-01-01T00:00:00.000Z" })}\n`,
+      { mode: 0o600 },
+    );
+
+    try {
+      await expect(Effect.runPromise(acquireDatabaseLifecycleLock(dbPath))).rejects.toBeInstanceOf(
+        DatabaseLifecycleLockedError,
+      );
+      await expect(fs.stat(lock.lockPath)).resolves.toBeDefined();
+    } finally {
+      await Effect.runPromise(releaseDatabaseLifecycleLock(lock));
     }
   });
 

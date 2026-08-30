@@ -14,6 +14,7 @@ type DatabaseLifecycleLockOwner = {
   readonly token: string;
   readonly createdAt: string;
   readonly runtimeId?: string;
+  readonly processInstanceId?: string;
 };
 
 export type DatabaseLifecycleLock = {
@@ -111,7 +112,12 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
       (typeof owner.runtimeId !== "string" ||
         owner.runtimeId.length === 0 ||
         owner.runtimeId.length > 512 ||
-        owner.runtimeId.trim() !== owner.runtimeId))
+        owner.runtimeId.trim() !== owner.runtimeId)) ||
+    (owner.processInstanceId !== undefined &&
+      (typeof owner.processInstanceId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          owner.processInstanceId,
+        )))
   ) {
     throw new Error("lock owner metadata is invalid");
   }
@@ -125,11 +131,18 @@ function railwayRuntimeId(): string | undefined {
 }
 
 const PROCESS_STARTED_AT_MS = Date.now() - process.uptime() * 1_000;
+const PROCESS_INSTANCE_ID = randomUUID();
 
 function ownerProcessState(owner: DatabaseLifecycleLockOwner): "live" | "dead" | "unknown" {
   const currentRuntimeId = railwayRuntimeId();
   const ownerCreatedAtMs = Date.parse(owner.createdAt);
-  if (owner.pid === process.pid && ownerCreatedAtMs < PROCESS_STARTED_AT_MS) return "dead";
+  if (owner.pid === process.pid) {
+    if (owner.processInstanceId !== undefined) {
+      if (owner.processInstanceId !== PROCESS_INSTANCE_ID) return "dead";
+    } else if (ownerCreatedAtMs < PROCESS_STARTED_AT_MS) {
+      return "dead";
+    }
+  }
   if (currentRuntimeId !== undefined) {
     if (owner.runtimeId !== undefined && owner.runtimeId !== currentRuntimeId) return "dead";
   }
@@ -225,6 +238,7 @@ async function acquireReaperGuard(dbPath: string, lockPath: string): Promise<Rea
       pid: process.pid,
       token: randomUUID(),
       createdAt: new Date().toISOString(),
+      processInstanceId: PROCESS_INSTANCE_ID,
       ...(railwayRuntimeId() === undefined ? {} : { runtimeId: railwayRuntimeId() }),
     };
     if (await tryPublishOwnedDirectory(reaperPath, owner)) {
@@ -344,6 +358,7 @@ async function acquire(dbPath: string): Promise<DatabaseLifecycleLock> {
       pid: process.pid,
       token: randomUUID(),
       createdAt: new Date().toISOString(),
+      processInstanceId: PROCESS_INSTANCE_ID,
       ...(railwayRuntimeId() === undefined ? {} : { runtimeId: railwayRuntimeId() }),
     };
     const published = await tryPublishOwnedDirectory(lockPath, owner);
