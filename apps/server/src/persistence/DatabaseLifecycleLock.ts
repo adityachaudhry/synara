@@ -98,16 +98,20 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
     await handle.close();
   }
   const owner = JSON.parse(text) as Partial<DatabaseLifecycleLockOwner>;
+  const createdAtMs = typeof owner.createdAt === "string" ? Date.parse(owner.createdAt) : NaN;
   if (
     !Number.isSafeInteger(owner.pid) ||
     owner.pid! <= 0 ||
     typeof owner.token !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(owner.token) ||
     typeof owner.createdAt !== "string" ||
+    !Number.isFinite(createdAtMs) ||
+    new Date(createdAtMs).toISOString() !== owner.createdAt ||
     (owner.runtimeId !== undefined &&
       (typeof owner.runtimeId !== "string" ||
         owner.runtimeId.length === 0 ||
-        owner.runtimeId.length > 512))
+        owner.runtimeId.length > 512 ||
+        owner.runtimeId.trim() !== owner.runtimeId))
   ) {
     throw new Error("lock owner metadata is invalid");
   }
@@ -124,12 +128,10 @@ const PROCESS_STARTED_AT_MS = Date.now() - process.uptime() * 1_000;
 
 function ownerProcessState(owner: DatabaseLifecycleLockOwner): "live" | "dead" | "unknown" {
   const currentRuntimeId = railwayRuntimeId();
+  const ownerCreatedAtMs = Date.parse(owner.createdAt);
+  if (owner.pid === process.pid && ownerCreatedAtMs < PROCESS_STARTED_AT_MS) return "dead";
   if (currentRuntimeId !== undefined) {
     if (owner.runtimeId !== undefined && owner.runtimeId !== currentRuntimeId) return "dead";
-    if (owner.runtimeId === undefined) {
-      const createdAtMs = Date.parse(owner.createdAt);
-      if (Number.isFinite(createdAtMs) && createdAtMs < PROCESS_STARTED_AT_MS) return "dead";
-    }
   }
   try {
     process.kill(owner.pid, 0);

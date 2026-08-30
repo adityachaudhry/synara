@@ -132,6 +132,50 @@ describe("database lifecycle lock", () => {
     }
   });
 
+  it("recovers a Railway lock from an earlier process in the same replica", async () => {
+    const previousReplicaId = process.env.RAILWAY_REPLICA_ID;
+    process.env.RAILWAY_REPLICA_ID = "replica-current";
+    const dbPath = await makeDbPath();
+    const lockPath = `${dbPath}.lifecycle-lock`;
+    await writeOwnedDirectory(lockPath, process.pid, {
+      runtimeId: "replica-current",
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    try {
+      const acquired = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+      expect(acquired.owner.pid).toBe(process.pid);
+      await Effect.runPromise(releaseDatabaseLifecycleLock(acquired));
+    } finally {
+      if (previousReplicaId === undefined) delete process.env.RAILWAY_REPLICA_ID;
+      else process.env.RAILWAY_REPLICA_ID = previousReplicaId;
+    }
+  });
+
+  it("fails closed for non-canonical owner metadata", async () => {
+    const previousReplicaId = process.env.RAILWAY_REPLICA_ID;
+    process.env.RAILWAY_REPLICA_ID = "replica-current";
+
+    try {
+      for (const malformed of [
+        { runtimeId: " ", createdAt: new Date(Date.now() - 60_000).toISOString() },
+        { runtimeId: "replica-previous", createdAt: "0" },
+      ]) {
+        const dbPath = await makeDbPath();
+        const lockPath = `${dbPath}.lifecycle-lock`;
+        await writeOwnedDirectory(lockPath, process.pid, malformed);
+
+        await expect(Effect.runPromise(acquireDatabaseLifecycleLock(dbPath))).rejects.toBeInstanceOf(
+          DatabaseLifecycleLockedError,
+        );
+        await expect(fs.stat(lockPath)).resolves.toBeDefined();
+      }
+    } finally {
+      if (previousReplicaId === undefined) delete process.env.RAILWAY_REPLICA_ID;
+      else process.env.RAILWAY_REPLICA_ID = previousReplicaId;
+    }
+  });
+
   it("recovers a reaper guard whose owner process died", async () => {
     const dbPath = await makeDbPath();
     const lockPath = `${dbPath}.lifecycle-lock`;
