@@ -1227,6 +1227,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             role: event.payload.role,
             text: resolvedText,
+            ...(event.payload.author !== undefined
+              ? { author: event.payload.author }
+              : Option.isSome(existingMessage) && existingMessage.value.author !== undefined
+                ? { author: existingMessage.value.author }
+                : {}),
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             ...(event.payload.skills !== undefined ? { skills: event.payload.skills } : {}),
             ...(event.payload.mentions !== undefined ? { mentions: event.payload.mentions } : {}),

@@ -2,6 +2,7 @@ import {
   ChatAttachment,
   MessageDispatchOrigin,
   NonNegativeInt,
+  OrchestrationMessageAuthor,
   ProviderMentionReference,
   ProviderSkillReference,
   TurnDispatchMode,
@@ -17,6 +18,7 @@ import {
 export const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
+    author: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageAuthor)),
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     skills: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderSkillReference))),
     mentions: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderMentionReference))),
@@ -39,6 +41,7 @@ export function projectionThreadMessageFromRow(
     turnId: row.turnId,
     role: row.role,
     text: row.text,
+    ...(row.author !== null ? { author: row.author } : {}),
     ...(row.textSegments !== undefined ? { textSegments: row.textSegments } : {}),
     isStreaming: row.isStreaming === 1,
     source: row.source,
@@ -60,6 +63,7 @@ export function orchestrationMessageFromProjectionRow(
     id: row.messageId,
     role: row.role,
     text: row.text,
+    ...(row.author !== null ? { author: row.author } : {}),
     ...(row.textSegments !== undefined ? { textSegments: row.textSegments } : {}),
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
     ...(row.skills !== null ? { skills: row.skills } : {}),

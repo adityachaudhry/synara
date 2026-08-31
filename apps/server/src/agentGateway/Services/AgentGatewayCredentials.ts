@@ -79,6 +79,11 @@ export interface AgentGatewayCredentialsShape {
     threadId: ThreadId,
     provider: ProviderKind,
   ) => AgentGatewayMcpConnection;
+  /** Read-only connection suitable for an isolated remote provider runtime. */
+  readonly readOnlyConnectionForThread: (
+    threadId: ThreadId,
+    provider: ProviderKind,
+  ) => AgentGatewayMcpConnection;
   /** Spawn spec for the stdio->HTTP proxy used by stdio-only MCP clients. */
   readonly stdioProxy: AgentGatewayStdioProxySpawn;
 }

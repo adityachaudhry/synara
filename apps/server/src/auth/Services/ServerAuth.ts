@@ -2,6 +2,7 @@ import type {
   AuthBearerBootstrapResult,
   AuthBootstrapResult,
   AuthClientMetadata,
+  AuthClientMetadata,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
   AuthPairingCredentialResult,
@@ -30,6 +31,7 @@ export interface AuthenticatedSession {
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly role: SessionRole;
+  readonly client?: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
   readonly allowedProjectIds?: ReadonlyArray<ProjectId>;
 }

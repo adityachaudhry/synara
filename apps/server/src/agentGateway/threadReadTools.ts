@@ -61,6 +61,13 @@ export interface ThreadReadToolsInput {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
+  readonly resolveThreadReadScope: (
+    callerThreadId: string,
+  ) => Effect.Effect<{ readonly externalProjectId: string | null }, unknown, never>;
+  readonly requireReadableThreadShell: (
+    callerThreadId: string,
+    threadId: string,
+  ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
   readonly workspacePaths: SpaceAssignmentWorkspacePaths;
 }
 
@@ -71,6 +78,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     providerDiscovery,
     loadProviderAvailabilities,
     requireThreadShell,
+    resolveThreadReadScope,
+    requireReadableThreadShell,
     workspacePaths,
   } = input;
 
@@ -180,29 +189,31 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { title: "List Synara projects", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: () =>
-      snapshotQuery.getShellSnapshot().pipe(
-        Effect.map((snapshot) =>
-          mcpToolResultJson({
-            projects: snapshot.projects
-              .filter((project) =>
-                isOrdinaryProjectRow({
-                  projectKind: project.kind,
-                  projectTitle: project.title,
-                  projectWorkspaceRoot: project.workspaceRoot,
-                  workspacePaths,
-                }),
-              )
-              .map((project) => ({
-                projectId: project.id,
-                title: project.title,
-                workspaceRoot: project.workspaceRoot,
-                isPinned: project.isPinned,
-              })),
-          }),
-        ),
-        Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
-      ),
+    handler: (_args, context) =>
+      Effect.gen(function* () {
+        const scope = yield* resolveThreadReadScope(context.callerThreadId);
+        const snapshot = yield* snapshotQuery.getShellSnapshot();
+        return mcpToolResultJson({
+          projects: snapshot.projects
+            .filter((project) =>
+              scope.externalProjectId === null ? true : project.id === scope.externalProjectId,
+            )
+            .filter((project) =>
+              isOrdinaryProjectRow({
+                projectKind: project.kind,
+                projectTitle: project.title,
+                projectWorkspaceRoot: project.workspaceRoot,
+                workspacePaths,
+              }),
+            )
+            .map((project) => ({
+              projectId: project.id,
+              title: project.title,
+              workspaceRoot: project.workspaceRoot,
+              isPinned: project.isPinned,
+            })),
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
   const listThreads: ToolEntry = {
@@ -256,10 +267,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             LIST_THREADS_MAX_LIMIT,
           ),
         );
+        const scope = yield* resolveThreadReadScope(context.callerThreadId);
         const snapshot = yield* snapshotQuery
           .getShellSnapshot()
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         const matching = snapshot.threads
+          .filter((thread) =>
+            scope.externalProjectId === null
+              ? true
+              : thread.projectId === scope.externalProjectId,
+          )
+          .filter((thread) =>
+            scope.externalProjectId === null ||
+            thread.id === context.callerThreadId ||
+            thread.sidechatSourceThreadId === null,
+          )
           .filter((thread) => (projectId ? thread.projectId === projectId : true))
           .filter((thread) => (parentThreadId ? thread.parentThreadId === parentThreadId : true))
           .filter((thread) => (provider ? thread.modelSelection.provider === provider : true))
@@ -310,6 +332,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const cursor = readStringArg(args, "cursor");
         const messageLimit = readNumberArg(args, "messageLimit");
         const maxMessageChars = readNumberArg(args, "maxMessageChars");
+        yield* requireReadableThreadShell(context.callerThreadId, threadId);
         const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
@@ -377,22 +400,12 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const timeoutMs = waitInput.timeoutMs ?? 30_000;
         const deadline = Date.now() + timeoutMs;
         const pinned = yield* Effect.forEach(waitInput.threadIds, (threadId, index) =>
-          snapshotQuery.getThreadShellById(threadId).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
-                    new GatewayToolError("thread_not_found", `Thread "${threadId}" was not found.`),
-                  ),
-                onSome: (thread) =>
-                  Effect.succeed({
-                    threadId,
-                    runId: waitInput.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
-                    shell: thread,
-                  }),
-              }),
-            ),
+          requireReadableThreadShell(context.callerThreadId, threadId).pipe(
+            Effect.map((thread) => ({
+              threadId,
+              runId: waitInput.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
+              shell: thread,
+            })),
           ),
         );
 

@@ -24,6 +24,7 @@ import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
+import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -66,7 +67,16 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   const provisioner = yield* ProviderWorkerProvisioner;
   const broker = yield* ProviderWorkerBroker;
   const directory = yield* ProviderSessionDirectory;
+  const agentGatewayCredentials = Option.getOrUndefined(
+    yield* Effect.serviceOption(AgentGatewayCredentials),
+  );
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
+  const remoteGatewayTokenByThread = new Map<string, string>();
+  const revokeRemoteGatewayToken = (threadId: string) => {
+    const token = remoteGatewayTokenByThread.get(threadId);
+    if (token && agentGatewayCredentials) agentGatewayCredentials.revokeSessionToken(token);
+    remoteGatewayTokenByThread.delete(threadId);
+  };
   const capacityEvents = capacity === undefined
     ? undefined
     : yield* PubSub.unbounded<ProviderRuntimeEvent>();
@@ -274,12 +284,18 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             ),
           );
           remoteByThread.delete(input.threadId);
+          revokeRemoteGatewayToken(input.threadId);
         }
         return yield* local.startSession(input);
       }
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
       const previous = activeRemote ?? persistedRemote;
+      const agentGatewayConnection = agentGatewayCredentials?.readOnlyConnectionForThread(
+        input.threadId,
+        "pi",
+      );
+      const previousGatewayToken = remoteGatewayTokenByThread.get(input.threadId);
       const launch = (onCapacityAdmitted?: () => void) =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -291,6 +307,9 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       lifecycleGeneration,
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding: input.repositoryBinding,
+                      ...(agentGatewayConnection === undefined
+                        ? {}
+                        : { agentGatewayConnection }),
                       ...(onCapacityAdmitted === undefined ? {} : { onCapacityAdmitted }),
                     })
                   : provisioner.start({
@@ -298,6 +317,9 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       lifecycleGeneration,
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding: input.repositoryBinding,
+                      ...(agentGatewayConnection === undefined
+                        ? {}
+                        : { agentGatewayConnection }),
                       ...(onCapacityAdmitted === undefined ? {} : { onCapacityAdmitted }),
                     }),
               ),
@@ -339,9 +361,32 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             return yield* Effect.failCause(startExit.cause);
           }),
         );
-      return yield* capacity === undefined
-        ? launch()
-        : withCapacityLaunchDeadline(launch);
+      return yield* (capacity === undefined ? launch() : withCapacityLaunchDeadline(launch)).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (agentGatewayConnection !== undefined) {
+              remoteGatewayTokenByThread.set(
+                input.threadId,
+                agentGatewayConnection.bearerToken,
+              );
+            }
+            if (
+              previousGatewayToken &&
+              previousGatewayToken !== agentGatewayConnection?.bearerToken &&
+              agentGatewayCredentials
+            ) {
+              agentGatewayCredentials.revokeSessionToken(previousGatewayToken);
+            }
+          }),
+        ),
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            if (agentGatewayConnection && agentGatewayCredentials) {
+              agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken);
+            }
+          }),
+        ),
+      );
     }).pipe(
       Effect.mapError((cause) =>
         cause instanceof ProviderAdapterRequestError ||
@@ -368,6 +413,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                 Effect.tap(() =>
                   Effect.sync(() => {
                     remoteByThread.delete(input.threadId);
+                    revokeRemoteGatewayToken(input.threadId);
                   }),
                 ),
                 Effect.mapError((cleanupCause) =>
@@ -461,6 +507,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ),
       );
       remoteByThread.delete(threadId);
+      revokeRemoteGatewayToken(threadId);
     });
 
   const listSessions: PiAdapterShape["listSessions"] = () =>
@@ -533,6 +580,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ([threadId, binding]) =>
           provisioner.stop(binding).pipe(
             Effect.tap(() => Effect.sync(() => remoteByThread.delete(threadId))),
+            Effect.tap(() => Effect.sync(() => revokeRemoteGatewayToken(threadId))),
             Effect.mapError((cause) =>
               adapterError("runtime.stopAll", "Failed to destroy a remote Pi runtime.", cause),
             ),

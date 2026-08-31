@@ -497,6 +497,12 @@ export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+export const OrchestrationMessageAuthor = Schema.Struct({
+  subject: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  label: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(320))),
+});
+export type OrchestrationMessageAuthor = typeof OrchestrationMessageAuthor.Type;
+
 export const OrchestrationMessageTextSegment = Schema.Struct({
   /** Causal orchestration-event order; disambiguates equal timestamps. */
   sequence: NonNegativeInt,
@@ -514,6 +520,7 @@ export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
+  author: Schema.optional(OrchestrationMessageAuthor),
   textSegments: Schema.optional(Schema.Array(OrchestrationMessageTextSegment)),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
@@ -1362,6 +1369,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+    author: Schema.optional(OrchestrationMessageAuthor),
     attachments: ChatAttachmentList,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
@@ -2036,6 +2044,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   messageId: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
+  author: Schema.optional(OrchestrationMessageAuthor),
   // Mirrors ThreadMessageAssistantDeltaCommand.segmentStartedAt: set on the
   // first delta of a new text segment (after a row-making event). The message
   // projection persists segment boundaries into the message's textSegments.

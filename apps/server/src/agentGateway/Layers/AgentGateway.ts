@@ -176,6 +176,36 @@ export const makeAgentGateway = Effect.gen(function* () {
       ),
     );
 
+  const resolveThreadReadScope = (callerThreadId: string) =>
+    Effect.gen(function* () {
+      const caller = yield* requireThreadShell(callerThreadId);
+      const project = yield* snapshotQuery.getProjectShellById(caller.projectId).pipe(
+        Effect.mapError((error) => new ToolInputError(errorText(error))),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new ToolInputError(`Project "${caller.projectId}" was not found.`)),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
+      return { externalProjectId: project.externalKey === null ? null : caller.projectId };
+    });
+
+  const requireReadableThreadShell = (callerThreadId: string, threadId: string) =>
+    Effect.gen(function* () {
+      const scope = yield* resolveThreadReadScope(callerThreadId);
+      const target = yield* requireThreadShell(threadId);
+      if (
+        scope.externalProjectId !== null &&
+        (target.projectId !== scope.externalProjectId ||
+          (target.id !== callerThreadId && target.sidechatSourceThreadId !== null))
+      ) {
+        return yield* Effect.fail(new ToolInputError(`Thread "${threadId}" was not found.`));
+      }
+      return target;
+    });
+
   // Privilege boundary shared by every tool that makes another thread execute
   // work or mutates another thread's state: a caller must not drive a thread
   // that runs with more privileges than the user granted the caller itself —
@@ -211,6 +241,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     providerDiscovery,
     loadProviderAvailabilities,
     requireThreadShell,
+    resolveThreadReadScope,
+    requireReadableThreadShell,
     workspacePaths: {
       homeDir: serverConfig.homeDir,
       chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
@@ -222,7 +254,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     eventStore,
     providerRuntimeEvents,
     eventDeliveries,
-    requireThreadShell,
+    requireReadableThreadShell,
   });
 
   // --- write tools ----------------------------------------------------------

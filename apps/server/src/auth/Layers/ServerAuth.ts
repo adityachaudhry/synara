@@ -1,6 +1,7 @@
 import type {
   AuthBearerBootstrapResult,
   AuthBootstrapResult,
+  AuthClientMetadata,
   AuthClientSession,
   AuthPairingCredentialResult,
   AuthSessionState,
@@ -67,6 +68,7 @@ function toAuthenticatedSession(session: {
   readonly subject: string;
   readonly method: AuthenticatedSession["method"];
   readonly role: AuthenticatedSession["role"];
+  readonly client?: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
   readonly allowedProjectIds?: AuthenticatedSession["allowedProjectIds"];
 }): AuthenticatedSession {
@@ -75,6 +77,7 @@ function toAuthenticatedSession(session: {
     subject: session.subject,
     method: session.method,
     role: session.role,
+    ...(session.client === undefined ? {} : { client: session.client }),
     ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
     ...(session.allowedProjectIds === undefined
       ? {}

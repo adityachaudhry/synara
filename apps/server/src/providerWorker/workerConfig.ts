@@ -12,6 +12,8 @@ export interface ProviderWorkerConfigInput {
   readonly lifecycleGeneration?: string;
   readonly cwd?: string;
   readonly homeDir?: string;
+  readonly agentGatewayUrl?: string;
+  readonly agentGatewayBearerToken?: string;
 }
 
 export const PROVIDER_WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
@@ -35,6 +37,8 @@ export function parseProviderWorkerConfigFile(raw: string): ProviderWorkerConfig
     "lifecycleGeneration",
     "cwd",
     "homeDir",
+    "agentGatewayUrl",
+    "agentGatewayBearerToken",
   ] as const) {
     const field = (value as Record<string, unknown>)[key];
     if (field !== undefined && typeof field !== "string") {
@@ -76,6 +80,19 @@ export function resolveProviderWorkerConfig(input: ProviderWorkerConfigInput) {
   const bootstrapCredential = required(input, "bootstrapCredential");
   const cwd = input.cwd?.trim() || "/workspace";
   const homeDir = input.homeDir?.trim() || "/tmp/synara-provider-worker";
+  const agentGatewayUrl = input.agentGatewayUrl?.trim();
+  const agentGatewayBearerToken = input.agentGatewayBearerToken?.trim();
+  if ((agentGatewayUrl === undefined) !== (agentGatewayBearerToken === undefined)) {
+    throw new Error(
+      "Provider worker configuration requires both agentGatewayUrl and agentGatewayBearerToken.",
+    );
+  }
+  if (agentGatewayUrl !== undefined) {
+    const gatewayUrl = new URL(agentGatewayUrl);
+    if (gatewayUrl.protocol !== "http:" && gatewayUrl.protocol !== "https:") {
+      throw new Error("Provider worker agentGatewayUrl must use http or https.");
+    }
+  }
 
   return {
     controlUrl: url.toString(),
@@ -85,6 +102,14 @@ export function resolveProviderWorkerConfig(input: ProviderWorkerConfigInput) {
     lifecycleGeneration,
     cwd,
     homeDir,
+    ...(agentGatewayUrl === undefined || agentGatewayBearerToken === undefined
+      ? {}
+      : {
+          agentGatewayConnection: {
+            url: agentGatewayUrl,
+            bearerToken: agentGatewayBearerToken,
+          },
+        }),
     safeDescription: {
       controlOrigin: url.origin,
       sandboxId,

@@ -39,7 +39,7 @@ Attachment IDs are unique and staging is idempotent within the thread sandbox. A
 
 ## Slice 2: Company Thread Context
 
-User messages retain the authenticated external subject and display email. Agent Gateway derives the allowed project from the calling thread, filters list results to that project, excludes side chats, and rejects direct reads outside the project.
+User messages retain the authenticated external subject and display email. The control plane gives each remote Pi worker a thread-bound, read-only Agent Gateway connection through its consumed worker config. Agent Gateway derives the allowed project from the calling thread, filters list results to that project, excludes side chats, and rejects direct reads outside the project. The credential exposes only `thread:read`, is revoked with the remote runtime, and never grants sandbox-side write authority.
 
 ```mermaid
 sequenceDiagram
@@ -48,8 +48,10 @@ sequenceDiagram
     participant Projection as Thread projection
     participant Pi as Analyst B's Pi
     participant Gateway as Agent Gateway
+    participant Control as Synara control plane
     AnalystA->>Projection: Visible message plus author
     AnalystB->>Pi: Ask about prior deal work
+    Control->>Pi: Thread-bound read-only Gateway connection
     Pi->>Gateway: synara_list_threads
     Gateway->>Projection: Resolve caller project and list normal threads
     Projection-->>Gateway: Same-project metadata

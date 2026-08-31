@@ -35,6 +35,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     execute: (row) => {
       const nextAttachmentsJson =
         row.attachments !== undefined ? JSON.stringify(row.attachments) : null;
+      const nextAuthorJson = row.author !== undefined ? JSON.stringify(row.author) : null;
       const nextSkillsJson = row.skills !== undefined ? JSON.stringify(row.skills) : null;
       const nextMentionsJson = row.mentions !== undefined ? JSON.stringify(row.mentions) : null;
       return sql`
@@ -44,6 +45,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id,
           role,
           text,
+          author_json,
           attachments_json,
           skills_json,
           mentions_json,
@@ -61,6 +63,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${row.turnId},
           ${row.role},
           ${row.text},
+          ${nextAuthorJson},
           ${nextAttachmentsJson},
           ${nextSkillsJson},
           ${nextMentionsJson},
@@ -77,6 +80,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id = excluded.turn_id,
           role = excluded.role,
           text = excluded.text,
+          author_json = COALESCE(
+            excluded.author_json,
+            projection_thread_messages.author_json
+          ),
           attachments_json = COALESCE(
             excluded.attachments_json,
             projection_thread_messages.attachments_json
@@ -117,6 +124,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           role,
           text,
+          author_json AS "author",
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",
@@ -167,6 +175,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           role,
           text,
+          author_json AS "author",
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",

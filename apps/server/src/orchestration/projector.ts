@@ -984,6 +984,7 @@ export function projectEvent(
             id: payload.messageId,
             role: payload.role,
             text: payload.text,
+            ...(payload.author !== undefined ? { author: payload.author } : {}),
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
             ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
@@ -1037,6 +1038,7 @@ export function projectEvent(
               incomingTurnId: message.turnId,
             }),
             ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            ...(message.author !== undefined ? { author: message.author } : {}),
             ...(message.skills !== undefined ? { skills: message.skills } : {}),
             ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
           };

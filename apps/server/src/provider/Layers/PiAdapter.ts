@@ -451,6 +451,7 @@ export interface PiAdapterLiveOptions {
   readonly spawnProcess?: PiBashProcessSupervisorOptions["spawnProcess"];
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
   readonly agentGatewayFetch?: AgentGatewayMcpFetch;
+  readonly agentGatewayConnection?: AgentGatewayMcpConnection;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1368,6 +1369,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
+    const acquireGatewayLease = (threadId: ThreadId): AgentGatewaySessionLease | undefined => {
+      if (options?.agentGatewayConnection === undefined) {
+        return acquireAgentGatewaySessionLease(agentGatewayCredentials, threadId, PROVIDER);
+      }
+      return {
+        connection: { ...options.agentGatewayConnection },
+        cancelTurn: () => Promise.resolve(),
+        retireTurn: () => Promise.resolve(),
+        release: () => {},
+      };
+    };
     const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
@@ -2075,11 +2087,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             const outgoingLease = context.gatewaySessionLease;
             const drainage = outgoingLease.retireTurn(turnId);
             outgoingLease.release();
-            const replacementLease = acquireAgentGatewaySessionLease(
-              agentGatewayCredentials,
-              context.session.threadId,
-              PROVIDER,
-            );
+            const replacementLease = acquireGatewayLease(context.session.threadId);
             if (replacementLease) {
               context.gatewaySessionLease = replacementLease;
               Object.assign(context.gatewayConnection, replacementLease.connection);
@@ -2223,11 +2231,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             sessions.delete(input.threadId);
           }
         }
-        const agentGatewaySessionLease = acquireAgentGatewaySessionLease(
-          agentGatewayCredentials,
-          input.threadId,
-          PROVIDER,
-        );
+        const agentGatewaySessionLease = acquireGatewayLease(input.threadId);
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
         const gatewayTools = agentGatewayConnection
           ? yield* releaseAgentGatewaySessionLeaseOnInterrupt(

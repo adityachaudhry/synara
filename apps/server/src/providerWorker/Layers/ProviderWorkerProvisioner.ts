@@ -34,6 +34,13 @@ function workerLaunchCommand(homeDir: string) {
   return `mkdir -p ${shellQuote(logsDir)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
 }
 
+function agentGatewayUrl(controlUrl: string): string {
+  const url = new URL("/mcp", controlUrl);
+  if (url.protocol === "ws:") url.protocol = "http:";
+  if (url.protocol === "wss:") url.protocol = "https:";
+  return url.toString();
+}
+
 export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
   readonly controlUrl: string;
@@ -103,6 +110,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly homeDir: string;
       readonly repositoryBinding?: NonNullable<
         Parameters<ProviderWorkerProvisionerShape["start"]>[0]["repositoryBinding"]
+      >;
+      readonly agentGatewayConnection?: NonNullable<
+        Parameters<ProviderWorkerProvisionerShape["start"]>[0]["agentGatewayConnection"]
       >;
       readonly checkoutCommand?: string;
       readonly repositoryCredential?: string;
@@ -220,6 +230,12 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             lifecycleGeneration: fence.lifecycleGeneration,
             cwd: input.cwd,
             homeDir: input.homeDir,
+            ...(input.agentGatewayConnection === undefined
+              ? {}
+              : {
+                  agentGatewayUrl: agentGatewayUrl(options.controlUrl),
+                  agentGatewayBearerToken: input.agentGatewayConnection.bearerToken,
+                }),
           }),
           mode: 0o600,
         });
@@ -315,6 +331,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ...(input.repositoryBinding === undefined
             ? {}
             : { repositoryBinding: input.repositoryBinding }),
+          ...(input.agentGatewayConnection === undefined
+            ? {}
+            : { agentGatewayConnection: input.agentGatewayConnection }),
           ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
           ...(input.repositoryBinding === undefined || options.repositoryAuthorization === undefined
             ? {}
@@ -380,6 +399,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           cwd: checkout?.cwd ?? input.cwd?.trim() ?? binding.cwd,
           homeDir: binding.homeDir,
           ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
+          ...(input.agentGatewayConnection === undefined
+            ? {}
+            : { agentGatewayConnection: input.agentGatewayConnection }),
           ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
           ...(repositoryBinding === undefined || options.repositoryAuthorization === undefined
             ? {}

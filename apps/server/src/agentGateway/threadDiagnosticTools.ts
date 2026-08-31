@@ -47,7 +47,8 @@ export function makeThreadDiagnosticTools(input: {
   readonly eventStore: OrchestrationEventStoreShape;
   readonly providerRuntimeEvents: ProviderRuntimeEventRepositoryShape;
   readonly eventDeliveries: OrchestrationEventDeliveryRepositoryShape;
-  readonly requireThreadShell: (
+  readonly requireReadableThreadShell: (
+    callerThreadId: string,
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
 }): ReadonlyArray<ToolEntry> {
@@ -75,10 +76,10 @@ export function makeThreadDiagnosticTools(input: {
       },
       annotations: { title: "Read thread activity", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        yield* input.requireThreadShell(threadId);
+        yield* input.requireReadableThreadShell(context.callerThreadId, threadId);
         const turnId = readStringArg(args, "turnId") ?? null;
         const kinds = readStringArrayArg(args, "kinds") ?? [];
         const filterFingerprint = diagnosticFilterFingerprint({ turnId, kinds });
@@ -160,10 +161,10 @@ export function makeThreadDiagnosticTools(input: {
       },
       annotations: { title: "Read thread events", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        yield* input.requireThreadShell(threadId);
+        yield* input.requireReadableThreadShell(context.callerThreadId, threadId);
         const eventTypes = readStringArrayArg(args, "eventTypes") ?? [];
         const filterFingerprint = diagnosticFilterFingerprint({ eventTypes });
         const cursor = decodeDiagnosticCursor(readStringArg(args, "cursor"), {
@@ -269,10 +270,10 @@ export function makeThreadDiagnosticTools(input: {
       },
       annotations: { title: "Read thread runtime events", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        yield* input.requireThreadShell(threadId);
+        yield* input.requireReadableThreadShell(context.callerThreadId, threadId);
         const turnId = readStringArg(args, "turnId") ?? null;
         const eventTypes = readStringArrayArg(args, "eventTypes") ?? [];
         const filterFingerprint = diagnosticFilterFingerprint({ turnId, eventTypes });
@@ -354,7 +355,7 @@ export function makeThreadDiagnosticTools(input: {
     handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        yield* input.requireThreadShell(threadId);
+        yield* input.requireReadableThreadShell(context.callerThreadId, threadId);
         const detail = yield* input.snapshotQuery
           .getThreadDetailById(ThreadId.makeUnsafe(threadId))
           .pipe(

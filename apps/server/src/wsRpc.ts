@@ -144,6 +144,7 @@ import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnostics
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
+  CurrentWsMessageAuthor,
   CurrentWsSessionRole,
   lookupWsConnectionProjectScope,
   provideWsConnectionSession,
@@ -645,8 +646,13 @@ const makeWsRpcHandlersLayer = () =>
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
         Effect.gen(function* () {
           const attachmentPrincipal = yield* CurrentManagedAttachmentPrincipal;
+          const messageAuthor = yield* CurrentWsMessageAuthor;
+          const attributedCommand =
+            command.type === "thread.turn.start" && messageAuthor !== null
+              ? { ...command, message: { ...command.message, author: messageAuthor } }
+              : command;
           return yield* runtimeStartup.enqueueCommand(
-            orchestrationEngine.dispatch(command, { attachmentPrincipal }),
+            orchestrationEngine.dispatch(attributedCommand, { attachmentPrincipal }),
           );
         });
 
@@ -2358,6 +2364,12 @@ export function makeWebsocketRpcRouteLayer<R>(
             runWithConnectionSession(request, {
               role: authenticatedSession.role,
               attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+              messageAuthor: {
+                subject: authenticatedSession.subject,
+                ...(authenticatedSession.client?.label
+                  ? { label: authenticatedSession.client.label }
+                  : {}),
+              },
               ...(authenticatedSession.allowedProjectIds === undefined
                 ? {}
                 : { allowedProjectIds: authenticatedSession.allowedProjectIds }),

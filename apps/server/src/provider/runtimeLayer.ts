@@ -89,6 +89,7 @@ export function makeServerProviderLayer(
     const piAdapterLayer = makeRoutedPiAdapterLive(options.sandboxCapacity).pipe(
       Layer.provide(localPiAdapterLayer),
       Layer.provide(providerSessionDirectoryLayer),
+      Layer.provide(agentGatewayCredentialsLayer),
     );
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),

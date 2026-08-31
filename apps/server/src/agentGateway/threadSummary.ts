@@ -94,6 +94,7 @@ export interface AgentThreadMessageSummary {
   readonly index: number;
   readonly role: string;
   readonly text: string;
+  readonly author?: OrchestrationMessage["author"];
   readonly truncated: boolean;
   readonly dispatchOrigin?: string;
   readonly createdAt: string;
@@ -181,6 +182,7 @@ export function paginateThreadMessages(input: {
       index: startInclusive + offset,
       role: message.role,
       text,
+      ...(message.author !== undefined ? { author: message.author } : {}),
       truncated,
       ...(message.dispatchOrigin !== undefined ? { dispatchOrigin: message.dispatchOrigin } : {}),
       createdAt: message.createdAt,

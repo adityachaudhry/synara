@@ -1,5 +1,6 @@
 import { ServiceMap, type Effect } from "effect";
 import type { ChatAttachment, ProjectRepositoryBinding, ThreadId } from "@synara/contracts";
+import type { AgentGatewayMcpConnection } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 
 import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
@@ -9,6 +10,7 @@ export interface ProviderWorkerProvisionInput {
   readonly lifecycleGeneration: string;
   readonly cwd?: string;
   readonly repositoryBinding?: ProjectRepositoryBinding;
+  readonly agentGatewayConnection?: AgentGatewayMcpConnection;
   readonly onCapacityAdmitted?: () => void;
 }
 

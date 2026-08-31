@@ -114,6 +114,7 @@ import Migration0095 from "./Migrations/095_ProjectionThreadsGoalTiming.ts";
 import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts";
 import Migration0097 from "./Migrations/097_ProjectionProjectsRepositoryBinding.ts";
 import Migration0098 from "./Migrations/098_WorkspaceCreationIntents.ts";
+import Migration0099 from "./Migrations/099_ProjectionMessageAuthors.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -227,6 +228,7 @@ export const migrationEntries = [
   [96, "ProjectionThreadsGoalAchievements", Migration0096],
   [97, "ProjectionProjectsRepositoryBinding", Migration0097],
   [98, "WorkspaceCreationIntents", Migration0098],
+  [99, "ProjectionMessageAuthors", Migration0099],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

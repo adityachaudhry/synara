@@ -172,7 +172,11 @@ const configPath =
   process.env.SYNARA_PROVIDER_WORKER_CONFIG_PATH?.trim() || PROVIDER_WORKER_CONFIG_PATH;
 const config = readAndConsumeProviderWorkerConfigFile(configPath);
 const workerConfigLayer = Layer.succeed(ServerConfig, makeWorkerServerConfig(config));
-const piLayer = makePiAdapterLive().pipe(
+const piLayer = makePiAdapterLive({
+  ...(config.agentGatewayConnection === undefined
+    ? {}
+    : { agentGatewayConnection: config.agentGatewayConnection }),
+}).pipe(
   Layer.provide(workerConfigLayer),
   Layer.provide(NodeServices.layer),
 );

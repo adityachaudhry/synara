@@ -50,16 +50,24 @@
 - Modify: `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`
 - Modify: `apps/server/src/agentGateway/threadReadTools.ts`
 - Modify: `apps/server/src/agentGateway/threadSummary.ts`
+- Modify: `apps/server/src/agentGateway/Layers/AgentGatewaySessionRegistry.ts`
+- Modify: `apps/server/src/agentGateway/Layers/AgentGatewayCredentials.ts`
+- Modify: `apps/server/src/provider/Layers/PiAdapter.ts`
+- Modify: `apps/server/src/provider/Layers/RoutedPiAdapter.ts`
+- Modify: `apps/server/src/providerWorker/Layers/ProviderWorkerProvisioner.ts`
+- Modify: `apps/server/src/providerWorker/workerConfig.ts`
+- Modify: `apps/server/src/providerWorker/workerMain.ts`
 
 **Interfaces:**
-- Consumes: the authenticated session subject/email already present at the external WebSocket boundary and the caller thread ID already present in Agent Gateway context.
-- Produces: optional visible author metadata on user messages and project-filtered list/read results.
+- Consumes: the authenticated session subject/email already present at the external WebSocket boundary, the caller thread ID already present in Agent Gateway context, and the worker's consumed bootstrap config.
+- Produces: remote Pi read-only Gateway tools, optional visible author metadata on user messages, and project-filtered list/read results.
 
-- [ ] Capture the current local behavior with two external identities, two company projects, one normal thread, and one side chat.
-- [ ] Derive project authorization from `context.callerThreadId`; filter listing and validate direct reads.
-- [ ] Add the additive author fields, migration, event propagation, and summary rendering.
-- [ ] Repeat the real flow and prove one agent can quote the other's normal company thread with author attribution.
-- [ ] Call list/read through the live Agent Gateway and record that the side chat and other project are hidden or rejected.
+- [x] Capture the current local behavior: remote Pi has no Gateway tools, and unscoped handlers can see unrelated projects.
+- [x] Carry a thread-bound, read-only Gateway connection into the remote worker without adding a second tool protocol.
+- [x] Derive project authorization from `context.callerThreadId`; filter listing and validate direct reads.
+- [x] Add the additive author fields, migration, event propagation, projection persistence, and summary rendering.
+- [x] Repeat the real flow and prove one agent can quote another normal company thread with its author label.
+- [x] Call list/read through the live remote Pi Gateway and record that a real side chat and a real Starday thread are hidden and direct reads return generic not-found errors.
 
 ### Task 3: Persist attachments, responses, and complete threads
 

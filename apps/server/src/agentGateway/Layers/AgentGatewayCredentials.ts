@@ -172,6 +172,10 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
       url: endpoint.url,
       bearerToken: issueSessionToken(threadId, provider),
     }),
+    readOnlyConnectionForThread: (threadId, provider) => ({
+      url: endpoint.url,
+      bearerToken: sessionRegistry.issue(threadId, provider, new Set(["thread:read"])).token,
+    }),
     stdioProxy: {
       command: process.execPath,
       args: [stdioProxyScriptPath],
