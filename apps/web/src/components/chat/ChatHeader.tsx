@@ -22,6 +22,7 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  DownloadIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
@@ -65,6 +66,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { useSynaraHostSidebar } from "../../hostSidebar";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { toastManager } from "../ui/toast";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -565,6 +567,34 @@ export function ChatHeader({
   const changeThreadAction = changeThreadActionProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
   const hostSidebar = useSynaraHostSidebar();
+  const [savingThread, setSavingThread] = useState(false);
+  const saveThread = async () => {
+    if (!hostSidebar?.saveChatContent || savingThread) return;
+    setSavingThread(true);
+    try {
+      const result = await hostSidebar.saveChatContent({
+        kind: "thread",
+        threadId: activeThreadId,
+        displayLabel: `thread “${activeThreadTitle}”`,
+      });
+      if (!result) return;
+      toastManager.add({
+        type: "success",
+        title: "Thread saved to company files",
+        description: result.synchronized
+          ? result.paths.join(", ")
+          : `${result.paths.join(", ")} · sandbox refresh pending`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not save thread",
+        description: error instanceof Error ? error.message : "Unknown persistence error.",
+      });
+    } finally {
+      setSavingThread(false);
+    }
+  };
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
@@ -897,6 +927,24 @@ export function ChatHeader({
               }
             />
             <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
+        {hostSidebar?.saveChatContent && !minimalChrome && !isSidechat ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ChatHeaderIconButton
+                  type="button"
+                  label="Save thread"
+                  disabled={savingThread}
+                  onClick={() => void saveThread()}
+                >
+                  <DownloadIcon className="size-3.5" />
+                </ChatHeaderIconButton>
+              }
+            />
+            <TooltipPopup side="bottom">Save to analysis/threads</TooltipPopup>
           </Tooltip>
         ) : null}
 

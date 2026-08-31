@@ -34,6 +34,10 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     attachments: ReadonlyArray<ProviderWorkerAttachmentStageInput>,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly reconcileRepository: (
+    binding: ProviderWorkerRuntimeBinding,
+    commit: string,
+  ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;

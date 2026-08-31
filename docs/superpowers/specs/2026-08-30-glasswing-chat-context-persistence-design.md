@@ -65,9 +65,9 @@ No new visibility framework or search index is added. Existing title, date, prov
 
 ## Slice 3: Persist Chat-Native Material
 
-The UI offers Save on a dropped attachment, assistant response, or complete thread. Confirmation shows the deterministic destination and every included attachment. Glasswing resolves the source through its scoped Synara bridge, constructs a ChangeBundle, and commits through the existing trusted writer.
+The UI offers explicit Save actions on a dropped attachment, assistant response, or complete thread; each tooltip names its destination. Glasswing resolves the source through its scoped Synara bridge, constructs a ChangeBundle, and commits through the existing trusted writer. Stable source IDs produce collision-free paths, and a source-content hash supplies idempotency without a persistence-candidate table.
 
-The writer accepts optional per-path preconditions so a path changed since confirmation returns a conflict. After commit, Glasswing asks Synara to reconcile the current thread to the exact commit. Reconciliation waits for an idle turn, fetches the exact commit with temporary credentials, verifies ancestry, advances the Git baseline, updates only non-conflicting remote paths, and preserves unrelated local state.
+After commit, Glasswing asks Synara to reconcile the current thread to the exact commit. Reconciliation waits for an idle turn, fetches the exact commit with temporary credentials, and uses Git's native fast-forward-only merge. Git refuses non-descendant or overlapping local changes without touching the worktree; unrelated dirty files survive. The credential covers both the explicit fetch and any partial-clone lazy fetch, then is erased.
 
 ```mermaid
 sequenceDiagram
@@ -78,7 +78,7 @@ sequenceDiagram
     participant Writer as Trusted Git writer
     participant Gitea
     participant Sandbox
-    User->>UI: Choose source and confirm destination
+    User->>UI: Choose the explicit Save action
     UI->>Glasswing: Source version and destination
     Glasswing->>Synara: Read authorized source
     Synara-->>Glasswing: Bytes or Markdown plus hash
@@ -90,7 +90,7 @@ sequenceDiagram
     Sandbox-->>UI: Same runtime, new Git baseline
 ```
 
-Destinations are `inbox/uploads/` for user files, `analysis/notes/` for individual responses, and `analysis/threads/` for whole-thread Markdown. Thread exports contain only visible messages, authors, timestamps, and approved attachment references.
+Destinations are `inbox/uploads/chat/<attachment-id>/` for user files, `analysis/notes/chat/<message-id>.md` for individual responses, and `analysis/threads/<thread-id>.md` plus an ID-scoped asset folder for whole-thread exports. Thread Markdown contains only visible messages, authors, timestamps, and its explicitly saved attachments.
 
 ## Slice 4: Persist Sandbox Work
 

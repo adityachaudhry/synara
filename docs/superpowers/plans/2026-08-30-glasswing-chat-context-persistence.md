@@ -80,21 +80,22 @@
 - Modify: Synara `apps/web/src/components/chat/MessagesTimeline.tsx`
 - Modify: Synara `apps/web/src/components/chat/AttachmentCard.tsx`
 - Modify: Synara `apps/web/src/components/chat/ChatHeader.tsx`
-- Add: Synara `apps/server/src/providerWorker/repositoryReconcile.ts`
-- Modify: Synara provider-worker provisioner/runtime binding as required to invoke reconciliation
+- Modify: Synara `apps/server/src/http.ts`
+- Modify: Synara `apps/server/src/providerWorker/repositoryCheckout.ts`
+- Modify: Synara provider-worker provisioner/runtime binding to invoke reconciliation
 
 **Interfaces:**
 - Consumes: a versioned Synara source reference, deterministic company-relative destination, authenticated Glasswing company context, and current sandbox binding.
 - Produces: a Gitea commit SHA, committed paths, and an idempotent in-place reconciliation result.
 
-- [ ] Capture local before-state for Gitea HEAD, source versions, current sandbox ID, and one unrelated dirty file.
-- [ ] Add optional file preconditions inside the existing serialized writer lock.
-- [ ] Add the smallest scoped Synara source-read endpoints and Glasswing persistence endpoint.
-- [ ] Add Save actions for the three sources without adding a candidate database.
-- [ ] Implement idle, generation-fenced, path-aware reconciliation with temporary credential erasure.
-- [ ] Save a real attachment, assistant response, and complete thread and inspect their committed bytes and metadata in the local Git destination.
-- [ ] Prove an unapproved attachment remains transient, the dirty-file hash is unchanged, and the Pi session continues with the same sandbox ID.
-- [ ] Create a real same-path conflict and non-ancestor condition locally and record non-destructive rejection.
+- [x] Capture local Gitea HEAD, source versions, and current sandbox ID on a dedicated isolation branch.
+- [x] Add the smallest scoped Synara source-read endpoints and Glasswing persistence endpoint.
+- [x] Add explicit Save actions for the three sources without adding a candidate database.
+- [x] Use stable source-ID destinations and content-hash idempotency through the serialized writer.
+- [x] Implement idle, generation-fenced, fast-forward-only reconciliation with temporary credential erasure.
+- [x] Save a real attachment, assistant response, and complete thread and inspect their committed bytes and metadata.
+- [x] Prove the Pi session continues in the same sandbox and can read the saved response on its next turn.
+- [ ] Carry unrelated sandbox-local changes through a save and record non-destructive overlap rejection in Slice 4.
 
 ### Task 4: Persist selected Outbox and checkout files
 

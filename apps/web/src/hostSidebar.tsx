@@ -1,5 +1,31 @@
 import { createContext, useContext, type ReactNode } from "react";
 
+export type SynaraHostPersistenceRequest =
+  | {
+      readonly kind: "attachments";
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly attachmentIds: readonly string[];
+      readonly displayLabel: string;
+    }
+  | {
+      readonly kind: "message";
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly displayLabel: string;
+    }
+  | {
+      readonly kind: "thread";
+      readonly threadId: string;
+      readonly displayLabel: string;
+    };
+
+export interface SynaraHostPersistenceResult {
+  readonly commitSha: string;
+  readonly paths: readonly string[];
+  readonly synchronized: boolean;
+}
+
 export interface SynaraHostSidebar {
   readonly widthPx: number;
   readonly viewportHeightOffsetPx?: number;
@@ -11,6 +37,9 @@ export interface SynaraHostSidebar {
   readonly chatFontSizePx?: number;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string) => ReactNode;
+  readonly saveChatContent?: (
+    request: SynaraHostPersistenceRequest,
+  ) => Promise<SynaraHostPersistenceResult | null>;
   readonly header?: ReactNode;
   readonly footer?: ReactNode;
 }

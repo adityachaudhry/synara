@@ -52,6 +52,7 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  DownloadIcon,
   GitForkIcon,
   GoalIcon,
   LoaderIcon,
@@ -119,6 +120,8 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
+import { useSynaraHostSidebar, type SynaraHostPersistenceRequest } from "../../hostSidebar";
+import { toastManager } from "../ui/toast";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
@@ -407,6 +410,7 @@ function WorktreeSetupCard({
 }
 
 interface MessagesTimelineProps {
+  threadId?: string;
   hasMessages: boolean;
   isWorking: boolean;
   workingLabel?: "Loading" | "Thinking" | undefined;
@@ -514,6 +518,7 @@ interface MessagesTimelineProps {
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  threadId,
   hasMessages,
   isWorking,
   workingLabel: workingLabelProp,
@@ -576,6 +581,34 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetBottomPx,
   contentInsetBottomClearancePx,
 }: MessagesTimelineProps) {
+  const hostSidebar = useSynaraHostSidebar();
+  const [savingHostContentKey, setSavingHostContentKey] = useState<string | null>(null);
+  const saveHostContent = useCallback(
+    async (key: string, request: SynaraHostPersistenceRequest) => {
+      if (!hostSidebar?.saveChatContent || savingHostContentKey !== null) return;
+      setSavingHostContentKey(key);
+      try {
+        const result = await hostSidebar.saveChatContent(request);
+        if (!result) return;
+        toastManager.add({
+          type: "success",
+          title: "Saved to company files",
+          description: result.synchronized
+            ? result.paths.join(", ")
+            : `${result.paths.join(", ")} · sandbox refresh pending`,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save chat content",
+          description: error instanceof Error ? error.message : "Unknown persistence error.",
+        });
+      } finally {
+        setSavingHostContentKey(null);
+      }
+    },
+    [hostSidebar, savingHostContentKey],
+  );
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
   // entire component (silently, since `panicThreshold` is unset), which would drop
@@ -1680,6 +1713,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                           />
                         )}
+                        {hostSidebar?.saveChatContent &&
+                        threadId &&
+                        userFiles.length + userImages.length > 0 ? (
+                          <MessageActionButton
+                            label="Save attached files"
+                            tooltip="Save to inbox/uploads/chat"
+                            disabled={savingHostContentKey !== null}
+                            className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                            onClick={() =>
+                              void saveHostContent(`attachments:${row.message.id}`, {
+                                kind: "attachments",
+                                threadId,
+                                messageId: row.message.id,
+                                attachmentIds: [...userFiles, ...userImages].map(
+                                  (attachment) => attachment.id,
+                                ),
+                                displayLabel:
+                                  userFiles.length + userImages.length === 1
+                                    ? "this attachment"
+                                    : "these attachments",
+                              })
+                            }
+                          >
+                            <DownloadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          </MessageActionButton>
+                        ) : null}
                         {showEditUserMessage && (
                           <MessageActionButton
                             label="Edit message"
@@ -2376,6 +2435,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   >
                     {assistantCopyState.visible ? (
                       <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                    ) : null}
+                    {hostSidebar?.saveChatContent && threadId && assistantCopyState.visible ? (
+                      <MessageActionButton
+                        label="Save response"
+                        tooltip="Save to analysis/notes/chat"
+                        disabled={savingHostContentKey !== null}
+                        onClick={() =>
+                          void saveHostContent(`message:${row.message.id}`, {
+                            kind: "message",
+                            threadId,
+                            messageId: row.message.id,
+                            displayLabel: "this response",
+                          })
+                        }
+                      >
+                        <DownloadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
                     ) : null}
                     {showForkAction ? (
                       <MessageActionButton

@@ -431,6 +431,54 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       local.sendTurn(input),
     );
 
+  const reconcileRepository: NonNullable<PiAdapterShape["reconcileRepository"]> = (
+    threadId,
+    commit,
+  ) =>
+    Effect.gen(function* () {
+      const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
+      if (!binding?.repositoryCheckout) {
+        return yield* adapterError(
+          "repository.reconcile",
+          "The Pi session does not have a repository-bound sandbox.",
+        );
+      }
+      const sessions = yield* requestDecoded(
+        binding,
+        "session.list",
+        {},
+        Schema.Array(ProviderSession),
+      );
+      const session = sessions.find((candidate) => candidate.threadId === threadId);
+      if (session?.activeTurnId !== undefined || session?.status === "running") {
+        return yield* adapterError(
+          "repository.reconcile",
+          "Wait for the active Pi turn to finish before saving.",
+        );
+      }
+      const previousCommit = binding.repositoryCheckout.commit;
+      const reconciled = yield* provisioner.reconcileRepository(binding, commit).pipe(
+        Effect.mapError((cause) =>
+          adapterError(
+            "repository.reconcile",
+            "The saved commit could not be applied to the current sandbox without overwriting local work.",
+            cause,
+          ),
+        ),
+      );
+      remoteByThread.set(threadId, reconciled);
+      yield* persistRemoteBinding({
+        threadId,
+        lifecycleGeneration: reconciled.fence.lifecycleGeneration,
+        binding: reconciled,
+      });
+      return {
+        runtimeId: reconciled.workspace.runtimeId,
+        previousCommit,
+        commit: reconciled.repositoryCheckout?.commit ?? commit,
+      };
+    });
+
   const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
     route(
       input.threadId,
@@ -603,6 +651,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       capacity !== undefined && input.repositoryBinding !== undefined,
     startSession,
     sendTurn,
+    reconcileRepository,
     steerTurn,
     interruptTurn,
     respondToRequest,

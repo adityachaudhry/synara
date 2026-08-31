@@ -224,6 +224,7 @@ export function ChatTranscriptPane({
         ) : (
           <MessagesTimeline
             key={activeThreadId}
+            threadId={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}
             {...(workingLabel ? { workingLabel } : {})}

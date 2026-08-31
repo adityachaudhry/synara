@@ -1,4 +1,5 @@
 import nodePath from "node:path";
+import { createHash } from "node:crypto";
 
 import Mime from "@effect/platform-node/Mime";
 import {
@@ -10,6 +11,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
   ThreadId,
+  type ChatAttachment,
 } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
@@ -83,6 +85,8 @@ import {
 } from "./voiceUploadAdmission";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
+export const CHAT_PERSISTENCE_SOURCE_ROUTE_PATH = "/api/chat-persistence/source";
+export const CHAT_PERSISTENCE_RECONCILE_ROUTE_PATH = "/api/chat-persistence/reconcile";
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
@@ -214,6 +218,8 @@ export function makeEffectHttpRouteLayer(
     localImageEffectRouteLayer,
     binaryUploadEffectRouteLayer,
     attachmentsEffectRouteLayer,
+    chatPersistenceSourceEffectRouteLayer,
+    chatPersistenceReconcileEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
 }
@@ -1328,6 +1334,141 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
         Pragma: "no-cache",
       },
     });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+export const chatPersistenceSourceEffectRouteLayer = HttpRouter.add(
+  "GET",
+  CHAT_PERSISTENCE_SOURCE_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const session = yield* requireAuthenticatedRequest;
+    const threadId = url.searchParams.get("threadId")?.trim();
+    const kind = url.searchParams.get("kind")?.trim();
+    if (!threadId || !kind) {
+      return HttpServerResponse.jsonUnsafe({ error: "threadId and kind are required" }, { status: 400 });
+    }
+    yield* requireProjectScopeAccess({ session, threadId });
+    const detail = yield* (yield* ProjectionSnapshotQuery)
+      .getThreadDetailById(ThreadId.makeUnsafe(threadId));
+    if (Option.isNone(detail)) {
+      return HttpServerResponse.jsonUnsafe({ error: "thread not found" }, { status: 404 });
+    }
+
+    const attachmentSummary = (attachment: ChatAttachment) => ({
+      id: attachment.id,
+      type: attachment.type,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      ...(attachment.type === "file" || attachment.type === "image"
+        ? { sizeBytes: attachment.sizeBytes }
+        : {}),
+    });
+    let source: unknown;
+    if (kind === "message") {
+      const messageId = url.searchParams.get("messageId")?.trim();
+      const message = detail.value.messages.find(
+        (candidate) => candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
+      );
+      if (!message) {
+        return HttpServerResponse.jsonUnsafe({ error: "assistant message not found" }, { status: 404 });
+      }
+      source = {
+        kind,
+        threadId,
+        threadTitle: detail.value.title,
+        messageId: message.id,
+        text: message.text,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+      };
+    } else if (kind === "attachments") {
+      const messageId = url.searchParams.get("messageId")?.trim();
+      const requestedIds = new Set(url.searchParams.getAll("attachmentId"));
+      const message = detail.value.messages.find((candidate) => candidate.id === messageId);
+      const attachments = (message?.attachments ?? []).filter(
+        (attachment) =>
+          (attachment.type === "file" || attachment.type === "image") &&
+          requestedIds.has(attachment.id),
+      );
+      if (!message || requestedIds.size === 0 || attachments.length !== requestedIds.size) {
+        return HttpServerResponse.jsonUnsafe({ error: "attachment source not found" }, { status: 404 });
+      }
+      source = {
+        kind,
+        threadId,
+        threadTitle: detail.value.title,
+        messageId: message.id,
+        attachments: attachments.map(attachmentSummary),
+      };
+    } else if (kind === "thread") {
+      source = {
+        kind,
+        threadId,
+        threadTitle: detail.value.title,
+        updatedAt: detail.value.updatedAt,
+        messages: detail.value.messages
+          .filter((message) => message.role === "user" || message.role === "assistant")
+          .map((message) => ({
+            messageId: message.id,
+            role: message.role,
+            text: message.text,
+            ...(message.author !== undefined ? { author: message.author } : {}),
+            createdAt: message.createdAt,
+            attachments: (message.attachments ?? [])
+              .filter(
+                (attachment) => attachment.type === "file" || attachment.type === "image",
+              )
+              .map(attachmentSummary),
+          })),
+      };
+    } else {
+      return HttpServerResponse.jsonUnsafe({ error: "unsupported source kind" }, { status: 400 });
+    }
+
+    return HttpServerResponse.jsonUnsafe({
+      source,
+      sourceVersion: createHash("sha256").update(JSON.stringify(source)).digest("hex"),
+    });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+export const chatPersistenceReconcileEffectRouteLayer = HttpRouter.add(
+  "POST",
+  CHAT_PERSISTENCE_RECONCILE_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const session = yield* requireAuthenticatedRequest;
+    const payload = yield* readEffectJson(request, "Invalid reconciliation payload.");
+    const threadId =
+      typeof payload === "object" && payload !== null && "threadId" in payload
+        ? String(payload.threadId)
+        : "";
+    const commit =
+      typeof payload === "object" && payload !== null && "commit" in payload
+        ? String(payload.commit)
+        : "";
+    if (!threadId || !/^[0-9a-f]{40}$/u.test(commit)) {
+      return HttpServerResponse.jsonUnsafe({ error: "threadId and full commit SHA are required" }, { status: 400 });
+    }
+    yield* requireProjectScopeAccess({ session, threadId });
+    const adapter = yield* (yield* ProviderAdapterRegistry).getByProvider("pi");
+    if (!adapter.reconcileRepository) {
+      return HttpServerResponse.jsonUnsafe({ synchronized: false });
+    }
+    return yield* adapter.reconcileRepository(ThreadId.makeUnsafe(threadId), commit).pipe(
+      Effect.map((result) => HttpServerResponse.jsonUnsafe({ synchronized: true, ...result })),
+      Effect.catch(() =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({
+            synchronized: false,
+            message: "Saved successfully; the current sandbox still has local changes to resolve.",
+          }),
+        ),
+      ),
+    );
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 

@@ -95,6 +95,12 @@ export interface ProviderThreadSnapshot {
   readonly cwd?: string | null;
 }
 
+export interface ProviderRepositoryReconcileResult {
+  readonly runtimeId: string;
+  readonly previousCommit: string;
+  readonly commit: string;
+}
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -118,6 +124,12 @@ export interface ProviderAdapterShape<TError> {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /** Advance a repository-bound runtime to an exact descendant commit in place. */
+  readonly reconcileRepository?: (
+    threadId: ThreadId,
+    commit: string,
+  ) => Effect.Effect<ProviderRepositoryReconcileResult, TError>;
 
   /**
    * Redirect an active turn toward a new prompt when the provider supports it.

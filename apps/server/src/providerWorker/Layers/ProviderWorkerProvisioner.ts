@@ -17,7 +17,9 @@ import { attachmentRelativePath } from "../../attachmentStore";
 import {
   makeRepositoryCredentialConfig,
   makeRepositoryCheckoutPlan,
+  makeRepositoryReconcilePlan,
   parseRepositoryCheckoutResult,
+  parseRepositoryReconcileResult,
   REPOSITORY_CREDENTIAL_CONFIG_PATH,
 } from "../repositoryCheckout";
 
@@ -560,7 +562,130 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         { concurrency: 1, discard: true },
       );
 
-    return { start, restart, adopt, stageAttachments, stop } satisfies ProviderWorkerProvisionerShape;
+    const reconcileRepository: ProviderWorkerProvisionerShape["reconcileRepository"] = (
+      binding,
+      commit,
+    ) =>
+      Effect.gen(function* () {
+        const repositoryBinding = binding.repositoryCheckout?.binding;
+        if (!repositoryBinding || !options.repositoryAuthorization) {
+          return yield* provisionError(
+            "repository.reconcile",
+            "The provider sandbox does not have a repository binding.",
+            undefined,
+            binding.workspace.runtimeId,
+          );
+        }
+        const plan = yield* Effect.try({
+          try: () =>
+            makeRepositoryReconcilePlan({
+              binding: repositoryBinding,
+              commit,
+              credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+            }),
+          catch: (cause) =>
+            provisionError(
+              "repository.reconcile.plan",
+              "The requested repository commit is invalid.",
+              cause,
+              binding.workspace.runtimeId,
+            ),
+        });
+        yield* workspaceRuntime.writeFile(binding.workspace, {
+          path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+          data: makeRepositoryCredentialConfig(
+            repositoryBinding,
+            options.repositoryAuthorization,
+          ),
+          mode: 0o600,
+        });
+        const cleanupCredential = workspaceRuntime
+          .exec(binding.workspace, {
+            command: `rm -f '${REPOSITORY_CREDENTIAL_CONFIG_PATH}'`,
+            timeoutSeconds: 10,
+          })
+          .pipe(
+            Effect.flatMap((cleanup) =>
+              cleanup.exitCode === 0 && !cleanup.timedOut
+                ? Effect.void
+                : Effect.fail(
+                    provisionError(
+                      "repository.reconcile.cleanup",
+                      "Repository credential erasure could not be confirmed.",
+                      new Error(cleanup.stderr || cleanup.stdout || "cleanup failed"),
+                      binding.workspace.runtimeId,
+                    ),
+                  ),
+            ),
+          );
+        const result = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const reconcileExit = yield* Effect.exit(
+              restore(
+                workspaceRuntime.exec(binding.workspace, {
+                  command: plan.command,
+                  timeoutSeconds: 120,
+                }),
+              ),
+            );
+            const cleanupExit = yield* Effect.exit(cleanupCredential);
+            if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause);
+            if (Exit.isFailure(reconcileExit)) return yield* Effect.failCause(reconcileExit.cause);
+            return reconcileExit.value;
+          }),
+        );
+        if (result.exitCode !== 0 || result.timedOut) {
+          return yield* provisionError(
+            "repository.reconcile.exec",
+            "The sandbox checkout could not fast-forward without overwriting local work.",
+            new Error(result.stderr || result.stdout || "reconciliation failed"),
+            binding.workspace.runtimeId,
+          );
+        }
+        const reconciled = yield* Effect.try({
+          try: () => parseRepositoryReconcileResult(result.stdout),
+          catch: (cause) =>
+            provisionError(
+              "repository.reconcile.verify",
+              "The sandbox did not report its reconciled commit.",
+              cause,
+              binding.workspace.runtimeId,
+            ),
+        });
+        return {
+          ...binding,
+          repositoryCheckout: {
+            ...binding.repositoryCheckout,
+            commit: reconciled.commit,
+          },
+        };
+      }).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("provider worker repository reconciliation deferred", {
+            sandboxId: binding.workspace.runtimeId,
+            cause,
+          }),
+        ),
+        Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError
+            ? cause
+            : provisionError(
+                "repository.reconcile",
+                "Failed to reconcile the provider sandbox repository.",
+                cause,
+                binding.workspace.runtimeId,
+              ),
+        ),
+      );
+
+    return {
+      start,
+      restart,
+      adopt,
+      stageAttachments,
+      reconcileRepository,
+      stop,
+    } satisfies ProviderWorkerProvisionerShape;
   });
 
 export function makeProviderWorkerProvisionerLive(options: ProviderWorkerProvisionerOptions) {
@@ -638,6 +763,14 @@ export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerPro
     Effect.fail(
       provisionError(
         "attachment.write",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  reconcileRepository: () =>
+    Effect.fail(
+      provisionError(
+        "repository.reconcile",
         "Railway distributed Pi is selected but the sandbox runtime is not configured.",
         undefined,
       ),
