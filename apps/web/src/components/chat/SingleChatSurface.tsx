@@ -240,7 +240,7 @@ export function SingleChatSurface(props: {
   });
   const hasDeviceSupport = useDeviceSupport();
   const dockLauncherItems = resolveRightDockLauncherItems({
-    hasWorkspace: workspaceRoot !== null,
+    hasWorkspace: workspaceRoot !== null || hostSidebar?.filesPane !== undefined,
     hasGitRepository,
     hasReview: dockDiffTotals.fileCount > 0,
     hasDeviceSupport,

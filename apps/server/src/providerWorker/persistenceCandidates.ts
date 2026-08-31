@@ -189,7 +189,14 @@ const readCandidateBytes = Effect.fnUntraced(function* (input: {
     );
   }
   const bytes = yield* files.readFile(input.binding.workspace, absolutePath);
-  if (bytes.byteLength !== stat.size || bytes.byteLength > MAX_PROVIDER_PERSISTENCE_FILE_BYTES) {
+  const verifiedStat = yield* files.statFile(input.binding.workspace, absolutePath);
+  if (
+    verifiedStat.isDir ||
+    verifiedStat.size !== stat.size ||
+    verifiedStat.modTime !== stat.modTime ||
+    bytes.byteLength !== stat.size ||
+    bytes.byteLength > MAX_PROVIDER_PERSISTENCE_FILE_BYTES
+  ) {
     return yield* persistenceError(
       "persistence.file-changed",
       "The selected sandbox file changed while it was being read.",

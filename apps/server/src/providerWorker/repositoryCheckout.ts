@@ -3,7 +3,6 @@ import path from "node:path";
 import type { ProjectRepositoryBinding } from "@synara/contracts";
 import {
   isProviderPersistencePathSafe,
-  PROVIDER_PERSISTENCE_OUTBOX_ROOT,
   type ProviderPersistenceCandidateSelection,
 } from "../providerPersistence.ts";
 
@@ -82,9 +81,6 @@ export function makeRepositoryReconcilePlan(input: {
   const checkoutPathspecs = persistedFiles
     .filter((file) => file.source === "checkout")
     .map((file) => path.posix.join(input.binding.path, file.path));
-  const outboxPaths = persistedFiles
-    .filter((file) => file.source === "outbox")
-    .map((file) => path.posix.join(PROVIDER_PERSISTENCE_OUTBOX_ROOT, file.path));
   const stashSelected =
     checkoutPathspecs.length === 0
       ? "stash_created=0"
@@ -96,8 +92,6 @@ export function makeRepositoryReconcilePlan(input: {
         ].join("; ");
   const restoreSelectedOnFailure = `if [ "$stash_created" = 1 ]; then ${git} stash pop --index --quiet >/dev/null 2>&1 || true; fi`;
   const discardSelectedOnSuccess = `if [ "$stash_created" = 1 ]; then ${git} stash drop --quiet 'stash@{0}' >/dev/null 2>&1 || true; fi`;
-  const cleanupOutbox =
-    outboxPaths.length === 0 ? ":" : `rm -f -- ${outboxPaths.map(shellQuote).join(" ")}`;
   const command = [
     "set -eu",
     `previous="$(${git} rev-parse HEAD)"`,
@@ -105,7 +99,6 @@ export function makeRepositoryReconcilePlan(input: {
     stashSelected,
     `if ! ${authenticatedGit} merge --ff-only --no-edit FETCH_HEAD; then ${restoreSelectedOnFailure}; exit 1; fi`,
     discardSelectedOnSuccess,
-    cleanupOutbox,
     `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
   ].join("; ");

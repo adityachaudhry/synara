@@ -431,7 +431,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       local.sendTurn(input),
     );
 
-  const requireIdleRepositoryBinding = Effect.fnUntraced(function* (
+  const requireRepositoryBinding = Effect.fnUntraced(function* (
     threadId: ThreadId,
     operation: string,
   ) {
@@ -442,6 +442,36 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         "The Pi session does not have a repository-bound sandbox.",
       );
     }
+    return binding;
+  });
+
+  const requireIdleRepositoryBinding = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    operation: string,
+  ) {
+    const binding = yield* requireRepositoryBinding(threadId, operation);
+    const sessions = yield* requestDecoded(
+      binding,
+      "session.list",
+      {},
+      Schema.Array(ProviderSession),
+    );
+    const session = sessions.find((candidate) => candidate.threadId === threadId);
+    if (session?.activeTurnId !== undefined || session?.status === "running") {
+      return yield* adapterError(
+        operation,
+        "Wait for the active Pi turn to finish before accessing sandbox files.",
+      );
+    }
+    return binding;
+  });
+
+  const requireReadableOutboxBinding = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    operation: string,
+  ) {
+    const binding = yield* requireRepositoryBinding(threadId, operation);
+    if (!remoteByThread.has(threadId)) return binding;
     const sessions = yield* requestDecoded(
       binding,
       "session.list",
@@ -461,7 +491,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   const listPersistenceCandidates: NonNullable<PiAdapterShape["listPersistenceCandidates"]> =
     (threadId) =>
       Effect.gen(function* () {
-        const binding = yield* requireIdleRepositoryBinding(threadId, "persistence.list");
+        const binding = yield* requireReadableOutboxBinding(threadId, "persistence.list");
         return yield* provisioner.listPersistenceCandidates(binding).pipe(
           Effect.mapError((cause) =>
             adapterError(
@@ -476,7 +506,10 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   const readPersistenceCandidate: NonNullable<PiAdapterShape["readPersistenceCandidate"]> =
     (threadId, lifecycleGeneration, selection) =>
       Effect.gen(function* () {
-        const binding = yield* requireIdleRepositoryBinding(threadId, "persistence.read");
+        const binding =
+          selection.source === "outbox"
+            ? yield* requireReadableOutboxBinding(threadId, "persistence.read")
+            : yield* requireIdleRepositoryBinding(threadId, "persistence.read");
         if (binding.fence.lifecycleGeneration !== lifecycleGeneration) {
           return yield* adapterError(
             "persistence.read",
@@ -500,6 +533,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     persistedFiles = [],
   ) =>
     Effect.gen(function* () {
+      const persistedBinding = yield* requireRepositoryBinding(threadId, "repository.reconcile");
+      yield* provisioner.markOutboxPromoted(persistedBinding, persistedFiles);
       const binding = yield* requireIdleRepositoryBinding(threadId, "repository.reconcile");
       const previousCommit = binding.repositoryCheckout.commit;
       const reconciled = yield* provisioner.reconcileRepository(
@@ -719,7 +754,26 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     listCommands: local.listCommands,
     getComposerCapabilities: local.getComposerCapabilities,
     get streamEvents() {
-      const providerEvents = Stream.merge(local.streamEvents, broker.streamEvents);
+      const remoteEvents = broker.streamEvents.pipe(
+        Stream.tap((event) => {
+          if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
+            return Effect.void;
+          }
+          const binding = remoteByThread.get(event.threadId);
+          if (!binding) return Effect.void;
+          return provisioner.checkpointOutbox(binding).pipe(
+            Effect.asVoid,
+            Effect.catch((cause) =>
+              Effect.logWarning("provider Outbox terminal checkpoint deferred", {
+                threadId: event.threadId,
+                sandboxId: binding.workspace.runtimeId,
+                cause,
+              }),
+            ),
+          );
+        }),
+      );
+      const providerEvents = Stream.merge(local.streamEvents, remoteEvents);
       return capacityEvents === undefined
         ? providerEvents
         : Stream.merge(providerEvents, Stream.fromPubSub(capacityEvents));
