@@ -51,6 +51,7 @@ export interface SynaraHostSidebar {
   readonly brandIconUrl?: string;
   readonly simplifiedComposer?: boolean;
   readonly chatFontSizePx?: number;
+  readonly openFilesPaneOnMount?: boolean;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly saveChatContent?: (

@@ -10,6 +10,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -209,6 +210,11 @@ export function SingleChatSurface(props: {
   const setActivePane = useRightDockStore((store) => store.setActivePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const updatePane = useRightDockStore((store) => store.updatePane);
+  const openFilesPaneOnMount = hostSidebar?.openFilesPaneOnMount === true;
+  useLayoutEffect(() => {
+    if (!openFilesPaneOnMount) return;
+    openPane(props.threadId, { kind: "explorer" });
+  }, [openFilesPaneOnMount, openPane, props.threadId]);
   const activeProject = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
