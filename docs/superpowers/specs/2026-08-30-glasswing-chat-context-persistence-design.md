@@ -118,9 +118,8 @@ The Railway SDK's existing file read, list, and stat operations are exposed thro
 
 ## Local Gate
 
-Each slice gets focused automated tests and a local browser proof. After Slice 4, the complete journey runs against isolated Synara state and ports plus a disposable Git writer fixture. The final pass runs Synara tests, `bun fmt`, `bun lint`, `bun typecheck`, builds the provider worker and embedded package, builds Glasswing, and repeats the browser journey.
+Each slice is learned and verified through the real local Glasswing, Synara, Railway sandbox, Pi, and Git flow. No unit-test files or mocked feature tests are added. After Slice 4, the complete journey runs against isolated Synara state and ports plus a disposable local Git destination. The final pass runs `bun fmt`, `bun lint`, `bun typecheck`, production builds, provider-worker artifact smoke, package synchronization, and repeats the real browser journey.
 
 ## Dev Gate
 
 Immediately before deployment, inspect the live Railway service topology and current remote refs. Deploy additive schemas and receiving APIs before callers. Repeat every local proof against dev, including unchanged Gitea HEAD for transient files, project-scoped thread reads, durable chat and sandbox saves, stable sandbox identity, continued Pi operation, and credential redaction. Production is out of scope.
-
