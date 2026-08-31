@@ -108,6 +108,7 @@ function ChatIndexRouteView() {
     <RestoreOrCreateChatRoute
       resolveRestoreRoute={resolveRestoreRoute}
       createFreshChat={createFreshChat}
+      recoverEmptyRememberedRoute={!hostProjectId}
     />
   );
 }

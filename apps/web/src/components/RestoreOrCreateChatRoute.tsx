@@ -8,7 +8,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { SplashScreen } from "./SplashScreen";
 import {
@@ -40,20 +40,25 @@ export type RestoreRouteResolver = (input: RestoreRouteResolverInput) => LastThr
 export function RestoreOrCreateChatRoute({
   resolveRestoreRoute,
   createFreshChat,
+  recoverEmptyRememberedRoute = true,
 }: {
   // Surface-specific policy for picking the thread route to restore (e.g. the last-visited route
   // for home chats, the latest Studio thread or draft for Studio). The remembered-route recovery
   // below still keys off the total thread count, which is shared across surfaces.
   readonly resolveRestoreRoute: RestoreRouteResolver;
   readonly createFreshChat: () => Promise<StartContainerChatResult>;
+  // A hosted project already receives an authoritative project-scoped snapshot; a stale global
+  // last-thread route must not trigger projection repair before opening its empty draft.
+  readonly recoverEmptyRememberedRoute?: boolean;
 }) {
   const navigate = useNavigate();
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const splitViewsHydrated = useSplitViewStore((state) => state.hasHydrated);
   const splitViewsById = useSplitViewStore((state) => state.splitViewsById);
-  const splitViewIds = Object.keys(splitViewsById).filter(
-    (splitViewId) => splitViewsById[splitViewId],
+  const splitViewIds = useMemo(
+    () => Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
+    [splitViewsById],
   );
   const [attempt, setAttempt] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -64,6 +69,8 @@ export function RestoreOrCreateChatRoute({
   // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect,
   // and without this guard the superseded run and the new run could both mint a draft.
   const createFreshChatInFlightRef = useRef(false);
+  const resolveRestoreRouteEvent = useEffectEvent(resolveRestoreRoute);
+  const createFreshChatEvent = useEffectEvent(createFreshChat);
 
   useEffect(() => {
     return () => {
@@ -99,7 +106,9 @@ export function RestoreOrCreateChatRoute({
         return;
       }
       setErrorMessage(null);
-      const lastThreadRoute = readSidebarUiState().lastThreadRoute;
+      const lastThreadRoute = recoverEmptyRememberedRoute
+        ? readSidebarUiState().lastThreadRoute
+        : null;
       if (
         shouldStartRememberedRouteRecovery({
           lastThreadRoute,
@@ -129,7 +138,7 @@ export function RestoreOrCreateChatRoute({
         return;
       }
 
-      const restorableRoute = resolveRestoreRoute({
+      const restorableRoute = resolveRestoreRouteEvent({
         availableSplitViewIds: new Set(splitViewIds),
       });
       if (restorableRoute) {
@@ -153,7 +162,7 @@ export function RestoreOrCreateChatRoute({
       createFreshChatInFlightRef.current = true;
       // .finally instead of try/finally: React Compiler does not yet support
       // try/finally and would skip optimizing this whole component.
-      const result: StartContainerChatResult = await createFreshChat().finally(() => {
+      const result: StartContainerChatResult = await createFreshChatEvent().finally(() => {
         createFreshChatInFlightRef.current = false;
       });
       if (cancelled || result.ok) {
@@ -167,10 +176,9 @@ export function RestoreOrCreateChatRoute({
     };
   }, [
     attempt,
-    createFreshChat,
     emptyRestoreRecoveryState,
     navigate,
-    resolveRestoreRoute,
+    recoverEmptyRememberedRoute,
     splitViewIds,
     splitViewsHydrated,
     threadIds.length,
