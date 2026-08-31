@@ -845,6 +845,26 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ),
         );
 
+    const readOutboxCheckpoint: ProviderWorkerProvisionerShape["readOutboxCheckpoint"] =
+      (threadId, candidatePath) =>
+        checkpointStore
+          ? Effect.tryPromise({
+              try: () => checkpointStore.readPath(threadId, candidatePath),
+              catch: (cause) =>
+                provisionError(
+                  "persistence.checkpoint.read",
+                  "Failed to read the durable Outbox file.",
+                  cause,
+                ),
+            })
+          : Effect.fail(
+              provisionError(
+                "persistence.checkpoint.read",
+                "Durable Outbox checkpoints are not configured.",
+                undefined,
+              ),
+            );
+
     if (checkpointStore) {
       yield* Effect.forkScoped(
         Effect.suspend(() =>
@@ -876,6 +896,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       reconcileRepository,
       listPersistenceCandidates,
       readPersistenceCandidate,
+      readOutboxCheckpoint,
       stop,
     } satisfies ProviderWorkerProvisionerShape;
   });
@@ -992,6 +1013,14 @@ export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerPro
       provisionError(
         "persistence.read",
         "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  readOutboxCheckpoint: () =>
+    Effect.fail(
+      provisionError(
+        "persistence.checkpoint.read",
+        "Railway distributed Pi is selected but durable Outbox checkpoints are not configured.",
         undefined,
       ),
     ),

@@ -527,6 +527,18 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         );
       });
 
+  const readOutboxCheckpoint: NonNullable<PiAdapterShape["readOutboxCheckpoint"]> =
+    (threadId, candidatePath) =>
+      provisioner.readOutboxCheckpoint(threadId, candidatePath).pipe(
+        Effect.mapError((cause) =>
+          adapterError(
+            "persistence.checkpoint.read",
+            "The durable Outbox file could not be read.",
+            cause,
+          ),
+        ),
+      );
+
   const reconcileRepository: NonNullable<PiAdapterShape["reconcileRepository"]> = (
     threadId,
     commit,
@@ -738,6 +750,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     reconcileRepository,
     listPersistenceCandidates,
     readPersistenceCandidate,
+    readOutboxCheckpoint,
     steerTurn,
     interruptTurn,
     respondToRequest,

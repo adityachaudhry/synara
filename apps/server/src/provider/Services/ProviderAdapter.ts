@@ -149,6 +149,12 @@ export interface ProviderAdapterShape<TError> {
     selection: ProviderPersistenceCandidateSelection,
   ) => Effect.Effect<ProviderPersistenceFile, TError>;
 
+  /** Read the latest durable Outbox checkpoint by thread and safe relative path. */
+  readonly readOutboxCheckpoint?: (
+    threadId: ThreadId,
+    path: string,
+  ) => Effect.Effect<ProviderPersistenceFile, TError>;
+
   /**
    * Redirect an active turn toward a new prompt when the provider supports it.
    */

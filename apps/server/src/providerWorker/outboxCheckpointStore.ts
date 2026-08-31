@@ -40,6 +40,7 @@ export interface OutboxCheckpointStore {
     threadId: string,
     selection: ProviderPersistenceCandidateSelection,
   ) => Promise<ProviderPersistenceFile>;
+  readonly readPath: (threadId: string, path: string) => Promise<ProviderPersistenceFile>;
   readonly restore: (
     threadId: string,
   ) => Promise<ReadonlyArray<{ readonly path: string; readonly bytes: Uint8Array }>>;
@@ -260,6 +261,17 @@ export function makeOutboxCheckpointStore(root: string): OutboxCheckpointStore {
       }
       const bytes = await readBlob(entry);
       return { ...candidate(entry), bytes };
+    },
+    readPath: async (threadId, candidatePath) => {
+      if (!isProviderPersistencePathSafe(candidatePath)) {
+        throw new Error("Outbox checkpoint path is invalid.");
+      }
+      const manifest = await list(threadId);
+      const entry = manifest?.entries.find((candidate) => candidate.path === candidatePath);
+      if (!entry) {
+        throw new Error("Outbox checkpoint file was not found.");
+      }
+      return { ...candidate(entry), bytes: await readBlob(entry) };
     },
     restore: async (threadId) => {
       const manifest = await list(threadId);

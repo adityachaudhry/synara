@@ -58,6 +58,10 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     selection: ProviderPersistenceCandidateSelection,
   ) => Effect.Effect<ProviderPersistenceFile, ProviderWorkerProvisioningError>;
+  readonly readOutboxCheckpoint: (
+    threadId: string,
+    path: string,
+  ) => Effect.Effect<ProviderPersistenceFile, ProviderWorkerProvisioningError>;
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;

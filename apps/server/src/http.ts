@@ -87,6 +87,7 @@ export const CHAT_PERSISTENCE_RECONCILE_ROUTE_PATH = "/api/chat-persistence/reco
 export const CHAT_PERSISTENCE_SANDBOX_CANDIDATES_ROUTE_PATH =
   "/api/chat-persistence/sandbox-candidates";
 export const CHAT_PERSISTENCE_SANDBOX_FILE_ROUTE_PATH = "/api/chat-persistence/sandbox-file";
+export const CHAT_PERSISTENCE_OUTBOX_FILE_ROUTE_PATH = "/api/chat-persistence/outbox-file";
 
 type PersistableChatAttachment = Extract<ChatAttachment, { readonly type: "file" | "image" }>;
 
@@ -248,6 +249,7 @@ export function makeEffectHttpRouteLayer(
     chatPersistenceSourceEffectRouteLayer,
     chatPersistenceSandboxCandidatesEffectRouteLayer,
     chatPersistenceSandboxFileEffectRouteLayer,
+    chatPersistenceOutboxFileEffectRouteLayer,
     chatPersistenceReconcileEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
@@ -1562,6 +1564,57 @@ export const chatPersistenceSandboxFileEffectRouteLayer = HttpRouter.add(
             HttpServerResponse.jsonUnsafe(
               { error: "The selected sandbox file changed after review." },
               { status: 409 },
+            ),
+          ),
+        ),
+      );
+  }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
+);
+
+export const chatPersistenceOutboxFileEffectRouteLayer = HttpRouter.add(
+  "GET",
+  CHAT_PERSISTENCE_OUTBOX_FILE_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const session = yield* requireAuthenticatedRequest;
+    const threadId = url.searchParams.get("threadId")?.trim();
+    const candidatePath = url.searchParams.get("path")?.trim();
+    if (!threadId || !candidatePath) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "threadId and path are required" },
+        { status: 400 },
+      );
+    }
+    yield* requireProjectScopeAccess({ session, threadId });
+    const adapter = yield* (yield* ProviderAdapterRegistry).getByProvider("pi");
+    if (!adapter.readOutboxCheckpoint) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "durable Outbox files are unavailable" },
+        { status: 404 },
+      );
+    }
+    return yield* adapter
+      .readOutboxCheckpoint(ThreadId.makeUnsafe(threadId), candidatePath)
+      .pipe(
+        Effect.map((file) =>
+          HttpServerResponse.uint8Array(file.bytes, {
+            status: 200,
+            contentType: "application/octet-stream",
+            headers: {
+              "x-synara-file-sha256": file.sha256,
+              "x-synara-file-destination": encodeURIComponent(file.destinationPath),
+              "x-synara-file-name": encodeURIComponent(file.name),
+              "x-synara-file-size": String(file.sizeBytes),
+            },
+          }),
+        ),
+        Effect.catch(() =>
+          Effect.succeed(
+            HttpServerResponse.jsonUnsafe(
+              { error: "The durable Outbox file was not found." },
+              { status: 404 },
             ),
           ),
         ),
