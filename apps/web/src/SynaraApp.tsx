@@ -22,6 +22,9 @@ export interface SynaraHostTheme {
   readonly colorSelection?: string;
   readonly colorSelectionText?: string;
   readonly colorFocusRing?: string;
+  readonly colorCurrentUserMessage?: string;
+  readonly colorCurrentUserMessageText?: string;
+  readonly colorOtherUserMessage?: string;
   readonly controlRadiusPx?: number;
   readonly toolbarHeightPx?: number;
   readonly controlHeightPx?: number;

@@ -44,6 +44,8 @@ export interface NewThreadNavigationOptions {
    * across the route change; default navigation clears all search params.
    */
   search?: (previous: Record<string, unknown>) => Record<string, unknown>;
+  /** Prepare or reuse the draft without leaving the current route. */
+  stayOnCurrentRoute?: boolean;
 }
 
 export function useHandleNewThread() {
@@ -69,6 +71,7 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
+    const stayOnCurrentRoute = navigation?.stayOnCurrentRoute === true;
     const entryPoint = options?.entryPoint ?? "chat";
     if (entryPoint === "chat") {
       const draftStore = useComposerDraftStore.getState();
@@ -261,6 +264,19 @@ export function useHandleNewThread() {
           }
           return bootstrapPlan.threadId;
         }
+        if (stayOnCurrentRoute) {
+          if (entryPoint === "terminal") {
+            await createTerminalThread(
+              bootstrapPlan.threadId,
+              resolveCreationState(
+                bootstrapPlan.threadId,
+                resolvedStoredDraftThread,
+                creationOptions,
+              ),
+            );
+          }
+          return bootstrapPlan.threadId;
+        }
         await navigate({
           to: "/$threadId",
           params: { threadId: bootstrapPlan.threadId },
@@ -315,6 +331,20 @@ export function useHandleNewThread() {
       }
       const createdAt = new Date().toISOString();
       const draftSeed = createFreshDraftThreadSeed({ createdAt, entryPoint, options });
+      if (stayOnCurrentRoute) {
+        registerDraftThread(threadId, { projectId, ...draftSeed });
+        activateThreadEntryPoint(threadId);
+        applyStickyState(threadId);
+        applyProviderOverride(threadId);
+        setProjectDraftThreadId(projectId, threadId, draftSeed);
+        if (entryPoint === "terminal") {
+          await createTerminalThread(
+            threadId,
+            resolveCreationState(threadId, getDraftThread(threadId), options),
+          );
+        }
+        return threadId;
+      }
       const committed = await stageDraftNavigation({
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.

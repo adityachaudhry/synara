@@ -53,7 +53,6 @@ import {
   CircleCheckIcon,
   ClockIcon,
   DownloadIcon,
-  GitForkIcon,
   GoalIcon,
   LoaderIcon,
   type LucideIcon,
@@ -120,7 +119,11 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
-import { useSynaraHostSidebar, type SynaraHostPersistenceRequest } from "../../hostSidebar";
+import {
+  resolveHostMessageAuthorLabel,
+  useSynaraHostSidebar,
+  type SynaraHostPersistenceRequest,
+} from "../../hostSidebar";
 import { toastManager } from "../ui/toast";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import {
@@ -533,7 +536,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
-  onForkFromMessage,
   threadMarkers: threadMarkersProp,
   goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
@@ -686,6 +688,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => getChatTranscriptUserMessageTextStyle(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
   );
+  const currentUserMessageTypographyStyle = useMemo(
+    () => ({
+      ...userMessageTypographyStyle,
+      color: "var(--app-user-message-text, var(--color-text-foreground))",
+    }),
+    [userMessageTypographyStyle],
+  );
   const chatMessageFooterStyle = useMemo(
     () => getChatMessageFooterTextStyle(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
@@ -815,6 +824,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const userRowIdsFollowingAssistant = useMemo(() => {
+    const rowIds = new Set<string>();
+    let lastMessageRole: "user" | "assistant" | "system" | null = null;
+    for (const row of rows) {
+      if (row.kind !== "message") continue;
+      if (row.message.role === "user" && lastMessageRole === "assistant") {
+        rowIds.add(row.id);
+      }
+      lastMessageRole = row.message.role;
+    }
+    return rowIds;
+  }, [rows]);
   const canRenderForkSourceDivider = forkSource !== null && onOpenThread !== undefined;
   const forkSourceDivider = useMemo(
     () =>
@@ -946,6 +967,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       submittingEditedUserMessageId,
       threadMarkersByMessageId,
       toolGroupSummaryOverrides,
+      userRowIdsFollowingAssistant,
     }),
     [
       crossTaskOrigin,
@@ -964,6 +986,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       submittingEditedUserMessageId,
       threadMarkersByMessageId,
       toolGroupSummaryOverrides,
+      userRowIdsFollowingAssistant,
     ],
   );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
@@ -1354,6 +1377,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ? "pb-2"
             : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
+        userRowIdsFollowingAssistant.has(row.id) ? "pt-[7px]" : null,
         row.kind === "message" && row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
           : null,
@@ -1550,8 +1574,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           const isEditingThisMessage = editingUserMessageId === row.message.id;
           const isSubmittingThisEdit = submittingEditedUserMessageId === row.message.id;
+          const isOtherAuthor =
+            hostSidebar?.currentMessageAuthor !== undefined &&
+            row.message.author !== undefined &&
+            row.message.author.subject !== hostSidebar.currentMessageAuthor.subject;
+          const isOwnedByCurrentAuthor =
+            hostSidebar?.currentMessageAuthor === undefined ||
+            row.message.author?.subject === hostSidebar.currentMessageAuthor.subject;
           const showEditUserMessage =
             Boolean(onEditUserMessage) &&
+            isOwnedByCurrentAuthor &&
             row.message.id === latestEditableUserMessageId &&
             (displayedUserMessage.copyText.trim().length > 0 ||
               renderedBrowserAnnotations.length > 0);
@@ -1566,6 +1598,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const isTailContentRow = row.id === tailContentRowId;
           const showCrossTaskOrigin =
             crossTaskOrigin !== null && row.message.id === firstUserMessageId;
+          const authorLabel = resolveHostMessageAuthorLabel(hostSidebar, row.message.author);
           return (
             <div className="flex w-full flex-col gap-3">
               {showCrossTaskOrigin ? (
@@ -1574,14 +1607,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   {...(onOpenThread ? { onOpenSourceThread: onOpenThread } : {})}
                 />
               ) : null}
-              <div className="flex w-full justify-end">
+              <div className={cn("flex w-full", isOtherAuthor ? "justify-start" : "justify-end")}>
                 <div
                   className={cn(
-                    "group flex flex-col items-end gap-px",
+                    "group flex flex-col gap-px",
+                    isOtherAuthor ? "items-start" : "items-end",
                     isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
                   )}
                 >
                   {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
+                  {authorLabel ? (
+                    <div
+                      className={cn(
+                        "mb-1 flex max-w-full items-center gap-2 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)]",
+                        isOtherAuthor ? "pl-0.5" : "pr-0.5",
+                      )}
+                    >
+                      <span className="truncate font-medium text-[var(--color-text-foreground)]">
+                        {authorLabel}
+                      </span>
+                      <time
+                        className="shrink-0 font-normal text-[var(--color-text-foreground-secondary)]"
+                        dateTime={row.message.createdAt}
+                      >
+                        {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
+                      </time>
+                    </div>
+                  ) : null}
                   {/* The cross-task origin label already attributes this turn to another Synara thread,
                       so suppress the dispatch chip here to avoid a duplicate "Sent by …" marker. */}
                   {showCrossTaskOrigin ? null : (
@@ -1592,25 +1644,45 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     />
                   )}
                   {renderedAssistantSelections.length > 0 && (
-                    <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                    <div
+                      className={cn(
+                        "mb-1 flex max-w-[240px] flex-wrap gap-1.5",
+                        isOtherAuthor ? "justify-start self-start" : "justify-end self-end",
+                      )}
+                    >
                       <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
                     </div>
                   )}
                   {renderedBrowserAnnotations.length > 0 && (
-                    <div className="mb-1 flex w-full max-w-[28rem] justify-end self-end">
+                    <div
+                      className={cn(
+                        "mb-1 flex w-full max-w-[28rem]",
+                        isOtherAuthor ? "justify-start self-start" : "justify-end self-end",
+                      )}
+                    >
                       <BrowserAnnotationStrip
                         annotations={renderedBrowserAnnotations}
-                        className="justify-end"
+                        className={isOtherAuthor ? "justify-start" : "justify-end"}
                       />
                     </div>
                   )}
                   {renderedFileComments.length > 0 && (
-                    <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                    <div
+                      className={cn(
+                        "mb-1 flex max-w-[240px] flex-wrap gap-1.5",
+                        isOtherAuthor ? "justify-start self-start" : "justify-end self-end",
+                      )}
+                    >
                       <FileCommentsSummaryChip comments={renderedFileComments} />
                     </div>
                   )}
                   {renderedPastedTexts.length > 0 && (
-                    <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
+                    <div
+                      className={cn(
+                        "mb-1 flex max-w-full flex-col gap-1.5",
+                        isOtherAuthor ? "items-start self-start" : "items-end self-end",
+                      )}
+                    >
                       {renderedPastedTexts.map((pasted) => (
                         <UserMessagePastedTextCard
                           key={pasted.index}
@@ -1621,7 +1693,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   )}
                   {userFiles.length > 0 && (
-                    <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
+                    <div
+                      className={cn(
+                        "mb-1 flex max-w-[280px] flex-wrap gap-1.5",
+                        isOtherAuthor ? "justify-start self-start" : "justify-end self-end",
+                      )}
+                    >
                       {userFiles.map((file) => (
                         <FileAttachmentChip key={file.id} file={file} />
                       ))}
@@ -1630,7 +1707,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   {userImages.length > 0 && (
                     <div
                       className={cn(
-                        "flex max-w-[240px] flex-wrap justify-end gap-2 self-end",
+                        "flex max-w-[240px] flex-wrap gap-2",
+                        isOtherAuthor ? "justify-start self-start" : "justify-end self-end",
                         showUserText && "mb-1",
                       )}
                     >
@@ -1654,7 +1732,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       initialValue={displayedUserMessage.copyText}
                       disabled={isSubmittingThisEdit || isRevertingCheckpoint}
                       allowEmpty={renderedBrowserAnnotations.length > 0}
-                      chatTypographyStyle={userMessageTypographyStyle}
+                      chatTypographyStyle={
+                        isOtherAuthor
+                          ? userMessageTypographyStyle
+                          : currentUserMessageTypographyStyle
+                      }
                       borderClassName={userMessageBubbleBorderClass}
                       onCancel={cancelUserMessageEdit}
                       onSubmit={(text) =>
@@ -1668,7 +1750,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   ) : showUserText ? (
                     <div
                       className={cn(
-                        "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+                        "w-max max-w-full min-w-0",
+                        isOtherAuthor
+                          ? "self-start bg-[var(--app-other-user-message-background,var(--app-user-message-background))]"
+                          : "self-end bg-[var(--app-user-message-background)] [--app-user-message-background:var(--app-current-user-message-background)]",
                         USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
                         userMessageBubbleBorderClass,
                         bubbleIsChipOnly
@@ -1691,7 +1776,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           text={userMessageText}
                           mentionReferences={row.message.mentions ?? []}
                           terminalContexts={terminalContexts}
-                          chatTypographyStyle={userMessageTypographyStyle}
+                          chatTypographyStyle={
+                            isOtherAuthor
+                              ? userMessageTypographyStyle
+                              : currentUserMessageTypographyStyle
+                          }
                           resolvedTheme={resolvedTheme}
                           markdownCwd={markdownCwd}
                         />
@@ -1700,12 +1789,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   ) : null}
                   {!isEditingThisMessage && (
                     <div
-                      className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
+                      className={cn(
+                        "flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45",
+                        isOtherAuthor ? "justify-start pl-0.5" : "justify-end pr-0.5",
+                      )}
                       style={chatMessageFooterStyle}
                     >
-                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
-                      </p>
                       <div className="flex items-center gap-2">
                         {displayedUserMessage.copyText && (
                           <MessageCopyButton
@@ -1840,10 +1929,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             messageCanPin &&
             Boolean(onTogglePinMessage) &&
             (assistantCopyState.visible || messagePinned);
-          // Fork rides the same "settled, persisted answer" signal as copy: an
-          // ephemeral or still-streaming bubble has no turn to fork from.
-          const showForkAction =
-            messageCanPin && Boolean(onForkFromMessage) && assistantCopyState.visible;
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -1871,13 +1956,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             isTerminalAssistantMessage && row.message.turnId
               ? (goalAchievementByTurnId.get(row.message.turnId) ?? null)
               : null;
-          const assistantMeta = [
-            isTerminalAssistantMessage
-              ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
-              : null,
-          ]
-            .filter((value): value is string => Boolean(value))
-            .join(" • ");
+          const assistantTimestamp = isTerminalAssistantMessage
+            ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
+            : null;
+          const assistantLabel = hostSidebar?.assistantLabel?.trim() || "Assistant";
           const allTurnWorkEntries = [
             ...(row.leadingWorkEntries ?? []),
             ...(row.inlineWorkEntries ?? []),
@@ -2186,17 +2268,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div className="group min-w-0 py-0.5">
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
                 {messageText !== null ? (
-                  <div data-assistant-message-id={row.message.id}>
-                    <ChatMarkdown
-                      text={messageText}
-                      cwd={markdownCwd}
-                      isStreaming={Boolean(row.message.streaming)}
-                      style={chatTypographyStyle}
-                      onImageExpand={onImageExpand}
-                      markers={messageMarkers}
-                      knownAbsoluteFilePaths={knownAbsoluteFilePaths}
-                    />
-                  </div>
+                  <>
+                    <div className="mb-1 flex max-w-full items-center gap-2 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)]">
+                      <span className="truncate font-medium text-[var(--color-text-foreground)]">
+                        {assistantLabel}
+                      </span>
+                      {assistantTimestamp ? (
+                        <time
+                          className="shrink-0 font-normal text-[var(--color-text-foreground-secondary)]"
+                          dateTime={row.message.createdAt}
+                        >
+                          {assistantTimestamp}
+                        </time>
+                      ) : null}
+                    </div>
+                    <div data-assistant-message-id={row.message.id}>
+                      <ChatMarkdown
+                        text={messageText}
+                        cwd={markdownCwd}
+                        isStreaming={Boolean(row.message.streaming)}
+                        style={chatTypographyStyle}
+                        onImageExpand={onImageExpand}
+                        markers={messageMarkers}
+                        knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      />
+                    </div>
+                  </>
                 ) : null}
                 {renderWorkDisplay(inlineWorkDisplay, "inline")}
                 {inlineEditedFilesFromTurnSummary.length > 0 && (
@@ -2419,14 +2516,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
-                {(showPinToggle ||
-                  showForkAction ||
-                  assistantCopyState.visible ||
-                  assistantMeta.length > 0 ||
-                  goalAchievement !== null) && (
-                  // Turn-end actions read Copy → Fork → Pin → time and stay visible at
-                  // rest: they belong to a settled turn, so hiding them behind hover made
-                  // the whole row feel undiscoverable. The leading button pulls left by
+                {(showPinToggle || assistantCopyState.visible || goalAchievement !== null) && (
+                  // Turn-end actions read Copy → Save → Pin and reveal with the row.
+                  // The leading button pulls left by
                   // its own icon inset — (2em button − 1.125em glyph) / 2 — so the first
                   // glyph, not the invisible hit area, aligns with the message text.
                   <div
@@ -2434,13 +2526,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatMessageFooterStyle}
                   >
                     {assistantCopyState.visible ? (
-                      <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                      <MessageCopyButton
+                        text={assistantCopyState.text ?? ""}
+                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                      />
                     ) : null}
                     {hostSidebar?.saveChatContent && threadId && assistantCopyState.visible ? (
                       <MessageActionButton
                         label="Save response"
                         tooltip="Save to analysis/notes/chat"
                         disabled={savingHostContentKey !== null}
+                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                         onClick={() =>
                           void saveHostContent(`message:${row.message.id}`, {
                             kind: "message",
@@ -2453,15 +2549,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <DownloadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                       </MessageActionButton>
                     ) : null}
-                    {showForkAction ? (
-                      <MessageActionButton
-                        label="Fork thread from this turn"
-                        tooltip="Fork from here"
-                        onClick={() => onForkFromMessage?.(row.message.id)}
-                      >
-                        <GitForkIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                      </MessageActionButton>
-                    ) : null}
                     {showPinToggle ? (
                       // Same Central pin glyph in both states — the darker tint is what
                       // signals "this message is pinned".
@@ -2469,14 +2556,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         label={pinActionLabel("message", messagePinned)}
                         tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
                         aria-pressed={messagePinned}
-                        className={messagePinned ? "text-foreground" : undefined}
+                        className={cn(
+                          MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                          messagePinned ? "text-foreground" : undefined,
+                        )}
                         onClick={() => onTogglePinMessage?.(row.message.id)}
                       >
                         <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                       </MessageActionButton>
-                    ) : null}
-                    {assistantMeta.length > 0 ? (
-                      <p className="tabular-nums">{assistantMeta}</p>
                     ) : null}
                     {goalAchievement !== null ? (
                       // Divided off from the actions: the achieved goal is a durable fact
@@ -3234,7 +3321,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   return (
     <form
       className={cn(
-        "w-full bg-[var(--app-user-message-background)]",
+        "w-full bg-[var(--app-user-message-background)] [--app-user-message-background:var(--app-current-user-message-background)]",
         USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
         props.borderClassName,
         USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
@@ -3356,7 +3443,7 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
         <button
           type="button"
           data-scroll-anchor-ignore
-          className="mt-1 block text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
+          className="mt-1 block text-current/55 transition-colors duration-150 hover:text-current/72"
           style={{ fontSize: `${props.chatFontSizePx}px` }}
           aria-expanded={props.expanded}
           aria-controls={contentId}

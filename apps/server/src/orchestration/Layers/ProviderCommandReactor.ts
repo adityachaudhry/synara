@@ -183,6 +183,10 @@ export function classifyProviderAttemptOutcome(
     case "PersistenceSqlError":
     case "PersistenceDecodeError":
       return { _tag: "safe_retry", detail };
+    case "ProviderAdapterRequestError":
+      return (failure.value as ProviderAdapterRequestError).retryable === true
+        ? { _tag: "safe_retry", detail }
+        : { _tag: "uncertain", detail };
     default:
       return { _tag: "uncertain", detail };
   }

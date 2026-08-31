@@ -2964,7 +2964,7 @@ describe("MessagesTimeline", () => {
       detail: 'mcp__synara__synara_read_thread: {"threadId":"c357d8c5-b4c1-47d0"}',
       activityKind: "tool.completed",
     });
-    expect(readThreadMarkup).toContain("Synara read a thread");
+    expect(readThreadMarkup).toContain("Glasswing read a thread");
     expect(readThreadMarkup).not.toContain("mcp__synara__synara_read_thread:");
     expect(readThreadMarkup).not.toContain("threadId");
 

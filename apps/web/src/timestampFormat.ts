@@ -106,3 +106,27 @@ export function formatDayAwareTimestamp(
         }).format(date);
   return `${dayLabel} ${time}`;
 }
+
+/**
+ * Thread-feed timestamp: always includes a date label because feed items remain
+ * visible across days. The first 24 hours show only the clock, then the last
+ * seven calendar days use the weekday. Older dates use month/day, adding the
+ * year when it differs from the current year.
+ */
+export function formatThreadFeedTimestamp(
+  isoDate: string,
+  timestampFormat: TimestampFormat,
+  now: Date = new Date(),
+): string {
+  const date = new Date(isoDate);
+  const ageMs = now.getTime() - date.getTime();
+  if (ageMs >= 0 && ageMs < DAY_IN_MS) {
+    return formatShortTimestamp(isoDate, timestampFormat);
+  }
+  const daysAgo = calendarDaysBetween(date, now);
+  if (daysAgo >= 0 && daysAgo < 7) {
+    const weekday = getDayLabelFormatter({ weekday: "long" }).format(date);
+    return `${weekday} ${formatShortTimestamp(isoDate, timestampFormat)}`;
+  }
+  return formatDayAwareTimestamp(isoDate, timestampFormat, now);
+}

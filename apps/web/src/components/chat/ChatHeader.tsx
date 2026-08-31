@@ -20,6 +20,7 @@ import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
+  ArrowLeftIcon,
   ArrowRightIcon,
   CheckIcon,
   DownloadIcon,
@@ -114,6 +115,7 @@ interface ChatHeaderProps {
   diffDisabledReason?: string | null;
   rightDockOpen?: boolean;
   onToggleRightDock?: () => void;
+  onOpenThreadFeed?: () => void;
   onNewThread?: () => void;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
@@ -538,6 +540,7 @@ export function ChatHeader({
   diffDisabledReason: diffDisabledReasonProp,
   rightDockOpen: rightDockOpenProp,
   onToggleRightDock,
+  onOpenThreadFeed,
   onNewThread,
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
@@ -705,6 +708,22 @@ export function ChatHeader({
           !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
         )}
       >
+        {onOpenThreadFeed ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ChatHeaderIconButton
+                  type="button"
+                  label="All threads"
+                  onClick={onOpenThreadFeed}
+                >
+                  <ArrowLeftIcon className="size-4" />
+                </ChatHeaderIconButton>
+              }
+            />
+            <TooltipPopup side="bottom">All threads</TooltipPopup>
+          </Tooltip>
+        ) : null}
         {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
         <div
           className={cn(

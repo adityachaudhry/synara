@@ -11,6 +11,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, PubSub, Schema, St
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
+import { ProviderWorkerProvisioningError } from "../../providerWorker/Errors";
 import {
   decodeProviderWorkerRuntimeBinding,
   type ProviderWorkerRuntimeBinding,
@@ -53,11 +54,17 @@ function persistedDistributedBinding(value: unknown): ProviderWorkerRuntimeBindi
   );
 }
 
-function adapterError(method: string, detail: string, cause?: unknown) {
+function adapterError(
+  method: string,
+  detail: string,
+  cause?: unknown,
+  options?: { readonly retryable?: boolean },
+) {
   return new ProviderAdapterRequestError({
     provider: "pi",
     method,
     detail,
+    ...(options?.retryable === true ? { retryable: true } : {}),
     ...(cause === undefined ? {} : { cause }),
   });
 }
@@ -232,6 +239,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
 
   const withCapacityLaunchDeadline = <A, E, R>(
     launch: (onCapacityAdmitted: () => void) => Effect.Effect<A, E, R>,
+    providerRequestStarted: () => boolean,
   ) =>
     Effect.gen(function* () {
       const admitted = yield* Deferred.make<void>();
@@ -266,6 +274,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       return yield* adapterError(
         "session.start",
         "Remote Pi launch timed out 60 seconds after Railway capacity admission.",
+        undefined,
+        { retryable: !providerRequestStarted() },
       );
     });
 
@@ -296,6 +306,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         "pi",
       );
       const previousGatewayToken = remoteGatewayTokenByThread.get(input.threadId);
+      let providerRequestStarted = false;
       const launch = (onCapacityAdmitted?: () => void) =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -332,6 +343,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             const startExit = yield* Effect.exit(
               restore(
                 Effect.gen(function* () {
+                  providerRequestStarted = true;
                   const session = yield* requestDecoded(
                     binding,
                     "session.start",
@@ -361,7 +373,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             return yield* Effect.failCause(startExit.cause);
           }),
         );
-      return yield* (capacity === undefined ? launch() : withCapacityLaunchDeadline(launch)).pipe(
+      return yield* (
+        capacity === undefined
+          ? launch()
+          : withCapacityLaunchDeadline(launch, () => providerRequestStarted)
+      ).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (agentGatewayConnection !== undefined) {
@@ -392,7 +408,12 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         cause instanceof ProviderAdapterRequestError ||
         cause instanceof ProviderAdapterSessionNotFoundError
           ? cause
-          : adapterError("session.start", "Failed to start the selected Pi execution target.", cause),
+          : adapterError(
+              "session.start",
+              "Failed to start the selected Pi execution target.",
+              cause,
+              { retryable: cause instanceof ProviderWorkerProvisioningError },
+            ),
       ),
     );
 

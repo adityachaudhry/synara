@@ -5,6 +5,7 @@
 import {
   type OrchestrationEvent,
   type OrchestrationPendingInteraction,
+  type OrchestrationThreadFeedSummary,
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
@@ -653,6 +654,7 @@ function mergeStreamingMessage(
       ? incomingMessage.dispatchOrigin
       : existingMessage.dispatchOrigin;
   const nextSource = incomingMessage.source ?? existingMessage.source;
+  const nextAuthor = incomingMessage.author ?? existingMessage.author;
 
   if (
     existingMessage.text === nextText &&
@@ -664,7 +666,8 @@ function mergeStreamingMessage(
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
     existingMessage.dispatchOrigin === nextDispatchOrigin &&
-    existingMessage.source === nextSource
+    existingMessage.source === nextSource &&
+    existingMessage.author === nextAuthor
   ) {
     return null;
   }
@@ -680,7 +683,64 @@ function mergeStreamingMessage(
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
     ...(nextDispatchOrigin !== undefined ? { dispatchOrigin: nextDispatchOrigin } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
+    ...(nextAuthor !== undefined ? { author: nextAuthor } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
+  };
+}
+
+function isVisibleFeedMessage(message: ChatMessage): boolean {
+  return (
+    message.source === "native" &&
+    !message.streaming &&
+    (message.role === "user" || message.role === "assistant")
+  );
+}
+
+function isHumanFeedStarter(message: ChatMessage): boolean {
+  return (
+    isVisibleFeedMessage(message) &&
+    message.role === "user" &&
+    (message.dispatchOrigin === undefined || message.dispatchOrigin === "user")
+  );
+}
+
+function deriveThreadFeedSummary(
+  previous: OrchestrationThreadFeedSummary | null | undefined,
+  messages: readonly ChatMessage[],
+  incomingMessage: ChatMessage,
+  existingMessage: ChatMessage | undefined,
+): OrchestrationThreadFeedSummary | null {
+  if (previous) {
+    if (incomingMessage.id === previous.firstMessageId && isHumanFeedStarter(incomingMessage)) {
+      return {
+        ...previous,
+        firstMessageText: incomingMessage.text.slice(0, 4_000),
+        author: incomingMessage.author ?? previous.author,
+      };
+    }
+    const becameVisible =
+      isVisibleFeedMessage(incomingMessage) &&
+      (existingMessage === undefined || existingMessage.streaming);
+    return becameVisible
+      ? {
+          ...previous,
+          replyCount: previous.replyCount + 1,
+          latestReplyAt: incomingMessage.completedAt ?? incomingMessage.createdAt,
+        }
+      : previous;
+  }
+
+  const firstMessageIndex = messages.findIndex(isHumanFeedStarter);
+  if (firstMessageIndex < 0) return null;
+  const firstMessage = messages[firstMessageIndex]!;
+  const replies = messages.slice(firstMessageIndex + 1).filter(isVisibleFeedMessage);
+  return {
+    firstMessageId: firstMessage.id,
+    firstMessageText: firstMessage.text.slice(0, 4_000),
+    author: firstMessage.author ?? null,
+    firstMessageAt: firstMessage.createdAt,
+    replyCount: replies.length,
+    latestReplyAt: replies.at(-1)?.completedAt ?? replies.at(-1)?.createdAt ?? null,
   };
 }
 
@@ -702,6 +762,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       id: payload.messageId,
       role: payload.role,
       text: payload.text,
+      ...(payload.author !== undefined ? { author: payload.author } : {}),
       dispatchMode: payload.dispatchMode,
       dispatchOrigin: payload.dispatchOrigin,
       turnId: payload.turnId,
@@ -763,10 +824,17 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
 
   const updatedAt =
     thread.updatedAt && thread.updatedAt > payload.updatedAt ? thread.updatedAt : payload.updatedAt;
+  const feedSummary = deriveThreadFeedSummary(
+    thread.feedSummary,
+    messages,
+    incomingMessage,
+    existingMessage,
+  );
   if (
     messages === thread.messages &&
     turnDiffSummaries === thread.turnDiffSummaries &&
     latestTurn === thread.latestTurn &&
+    feedSummary === (thread.feedSummary ?? null) &&
     updatedAt === thread.updatedAt
   ) {
     return thread;
@@ -777,6 +845,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     messages,
     turnDiffSummaries,
     latestTurn,
+    feedSummary,
     updatedAt,
   };
 }

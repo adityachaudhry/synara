@@ -503,6 +503,16 @@ export const OrchestrationMessageAuthor = Schema.Struct({
 });
 export type OrchestrationMessageAuthor = typeof OrchestrationMessageAuthor.Type;
 
+export const OrchestrationThreadFeedSummary = Schema.Struct({
+  firstMessageId: MessageId,
+  firstMessageText: Schema.String,
+  author: Schema.NullOr(OrchestrationMessageAuthor),
+  firstMessageAt: IsoDateTime,
+  replyCount: NonNegativeInt,
+  latestReplyAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationThreadFeedSummary = typeof OrchestrationThreadFeedSummary.Type;
+
 export const OrchestrationMessageTextSegment = Schema.Struct({
   /** Causal orchestration-event order; disambiguates equal timestamps. */
   sequence: NonNegativeInt,
@@ -945,6 +955,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.optional(Schema.Boolean),
   hasPendingUserInput: Schema.optional(Schema.Boolean),
   hasActionableProposedPlan: Schema.optional(Schema.Boolean),
+  feedSummary: Schema.optional(Schema.NullOr(OrchestrationThreadFeedSummary)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(

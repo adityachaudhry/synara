@@ -5,6 +5,7 @@
 import type {
   ModelSelection,
   MessageDispatchOrigin,
+  OrchestrationMessageAuthor,
   OrchestrationMessageSource,
   OrchestrationPendingInteraction,
   TurnDispatchMode,
@@ -15,6 +16,7 @@ import type {
   ThreadMarker,
   ThreadGoalAchievement,
   OrchestrationSessionStatus,
+  OrchestrationThreadFeedSummary,
   OrchestrationThreadActivity,
   ThreadHandoff,
   ProjectScript as ContractProjectScript,
@@ -110,6 +112,7 @@ export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
+  author?: OrchestrationMessageAuthor;
   /** Slices of streamed assistant text between row-making provider events. */
   textSegments?: OrchestrationMessageTextSegment[];
   attachments?: ChatAttachment[];
@@ -270,6 +273,7 @@ export interface Thread extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  feedSummary?: OrchestrationThreadFeedSummary | null;
   pendingInteractions?: OrchestrationPendingInteraction[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
@@ -314,6 +318,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  feedSummary?: OrchestrationThreadFeedSummary | null;
   pendingInteractions?: OrchestrationPendingInteraction[];
   lastVisitedAt?: string | undefined;
 }
@@ -354,6 +359,7 @@ export interface SidebarThreadSummary {
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
+  feedSummary: OrchestrationThreadFeedSummary | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;

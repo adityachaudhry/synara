@@ -1,3 +1,4 @@
+import type { OrchestrationMessageAuthor } from "@synara/contracts";
 import { createContext, useContext, type ReactNode } from "react";
 
 export type SynaraHostPersistenceRequest =
@@ -38,7 +39,7 @@ export interface SynaraHostPersistenceResult {
 }
 
 export interface SynaraHostFilePaneContext {
-  readonly threadId: string;
+  readonly threadId: string | null;
 }
 
 export interface SynaraHostSidebar {
@@ -51,6 +52,9 @@ export interface SynaraHostSidebar {
   readonly brandIconUrl?: string;
   readonly simplifiedComposer?: boolean;
   readonly chatFontSizePx?: number;
+  readonly currentMessageAuthor?: OrchestrationMessageAuthor;
+  readonly assistantLabel?: string;
+  readonly messageAuthorNamesByLabel?: Readonly<Record<string, string>>;
   readonly openFilesPaneOnMount?: boolean;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
@@ -75,6 +79,15 @@ export function SynaraHostSidebarProvider({
 
 export function useSynaraHostSidebar(): SynaraHostSidebar | null {
   return useContext(HostSidebarContext);
+}
+
+export function resolveHostMessageAuthorLabel(
+  sidebar: Pick<SynaraHostSidebar, "messageAuthorNamesByLabel"> | null,
+  author: OrchestrationMessageAuthor | null | undefined,
+): string | null {
+  const label = author?.label?.trim();
+  if (!label) return null;
+  return sidebar?.messageAuthorNamesByLabel?.[label.toLowerCase()] ?? label;
 }
 
 export function resolveHostSidebarPresentation(

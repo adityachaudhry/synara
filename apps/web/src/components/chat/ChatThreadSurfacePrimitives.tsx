@@ -109,6 +109,10 @@ export function DeferredChatView(props: {
   panelState: SplitViewPanePanelState;
   onToggleDiff: () => void;
   onToggleRightDock?: () => void;
+  onOpenThreadFeed?: () => void;
+  emptyLandingContent?: ReactNode;
+  onThreadStarted?: (threadId: ThreadId) => void;
+  hideNewThreadAction?: boolean;
   onToggleBrowser: () => void;
   onToggleDevice?: () => void;
   onOpenBrowserUrl: (url: string) => void;
@@ -165,6 +169,12 @@ export function DeferredChatView(props: {
       panelState={props.panelState}
       onToggleDiffPanel={props.onToggleDiff}
       {...(props.onToggleRightDock ? { onToggleRightDock: props.onToggleRightDock } : {})}
+      {...(props.onOpenThreadFeed ? { onOpenThreadFeed: props.onOpenThreadFeed } : {})}
+      {...(props.emptyLandingContent !== undefined
+        ? { emptyLandingContent: props.emptyLandingContent }
+        : {})}
+      {...(props.onThreadStarted ? { onThreadStarted: props.onThreadStarted } : {})}
+      {...(props.hideNewThreadAction ? { hideNewThreadAction: true } : {})}
       onToggleBrowserPanel={props.onToggleBrowser}
       {...(props.onToggleDevice ? { onToggleDevicePanel: props.onToggleDevice } : {})}
       onOpenBrowserUrl={props.onOpenBrowserUrl}

@@ -6,16 +6,20 @@
 
 import { ProjectId, SpaceId } from "@synara/contracts";
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useEffectEvent, useRef } from "react";
 
 import {
   RestoreOrCreateChatRoute,
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
+import { ProjectThreadFeedSurface } from "../components/chat/ProjectThreadFeedSurface";
+import { SplashScreen } from "../components/SplashScreen";
+import { toastManager } from "../components/ui/toast";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
+import { projectDraftThreadMappingKey } from "../composerDraftDomain";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { startContainerChat } from "../lib/startContainerChat";
 import { VOID_SPACE_KEY } from "../lib/spaceGrouping";
 import { collectStudioProjectIds } from "../lib/studioProjects";
 import { resolveSplitViewThreadIds, useSplitViewStore } from "../splitViewStore";
@@ -34,10 +38,71 @@ export interface ChatIndexSearch {
   readonly space?: string | undefined;
 }
 
-function ChatIndexRouteView() {
+function HostedProjectThreadFeedRoute({
+  projectId,
+  projectName,
+}: {
+  projectId: string;
+  projectName: string;
+}) {
+  const { handleNewThread } = useHandleNewThread();
+  const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const brandedProjectId = ProjectId.makeUnsafe(projectId);
+  const feedDraftThreadId = useComposerDraftStore((state) => {
+    const threadId =
+      state.projectDraftThreadIdByProjectId[
+        projectDraftThreadMappingKey(brandedProjectId, "chat")
+      ];
+    const draft = threadId ? state.draftThreadsByThreadId[threadId] : undefined;
+    return draft && draft.projectId === brandedProjectId && draft.promotedTo === undefined
+      ? threadId
+      : null;
+  });
+  const draftCreationInFlightRef = useRef(false);
+  const prepareFeedDraft = useEffectEvent(() =>
+    handleNewThread(
+      brandedProjectId,
+      { envMode: "local", branch: null, worktreePath: null },
+      { stayOnCurrentRoute: true },
+    ),
+  );
+
+  useEffect(() => {
+    if (!threadsHydrated || feedDraftThreadId || draftCreationInFlightRef.current) return;
+    draftCreationInFlightRef.current = true;
+    void prepareFeedDraft()
+      .then((threadId) => {
+        if (threadId) return;
+        toastManager.add({ type: "error", title: "Could not prepare a new thread" });
+      })
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not prepare a new thread",
+          description: error instanceof Error ? error.message : "Unknown error.",
+        });
+      })
+      .finally(() => {
+        draftCreationInFlightRef.current = false;
+      });
+  }, [feedDraftThreadId, threadsHydrated]);
+
+  if (!threadsHydrated || !feedDraftThreadId) {
+    return <SplashScreen errorMessage={null} onRetry={null} />;
+  }
+
+  return (
+    <ProjectThreadFeedSurface
+      projectId={brandedProjectId}
+      projectName={projectName}
+      draftThreadId={feedDraftThreadId}
+    />
+  );
+}
+
+function RestoreChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
   const { handleNewThread } = useHandleNewThread();
-  const hostProjectId = readSynaraRuntimeConfig().project?.projectId;
   const landingSpaceKey = Route.useSearch({ select: (search) => search.space });
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
@@ -50,14 +115,6 @@ function ChatIndexRouteView() {
   // the /studio landing): a fresh draft per visit would litter the Chats container every time
   // someone clicked through their empty Spaces.
   const createFreshChat = () => {
-    if (hostProjectId) {
-      return startContainerChat({
-        ensureProjectId: async () => ProjectId.makeUnsafe(hostProjectId),
-        handleNewThread,
-        fresh: landingSpaceKey === undefined,
-        errorLabel: "Unable to prepare the hosted project chat.",
-      });
-    }
     return landingSpaceKey === undefined ? handleNewChat({ fresh: true }) : handleNewChat();
   };
 
@@ -108,8 +165,20 @@ function ChatIndexRouteView() {
     <RestoreOrCreateChatRoute
       resolveRestoreRoute={resolveRestoreRoute}
       createFreshChat={createFreshChat}
-      recoverEmptyRememberedRoute={!hostProjectId}
+      recoverEmptyRememberedRoute
     />
+  );
+}
+
+function ChatIndexRouteView() {
+  const hostProject = readSynaraRuntimeConfig().project;
+  return hostProject ? (
+    <HostedProjectThreadFeedRoute
+      projectId={hostProject.projectId}
+      projectName={hostProject.name}
+    />
+  ) : (
+    <RestoreChatIndexRouteView />
   );
 }
 

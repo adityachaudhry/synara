@@ -3,6 +3,7 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
+  OrchestrationMessageAuthor,
   OrchestrationPendingInteraction,
   OrchestrationCheckpointFile,
   OrchestrationProjectShell,
@@ -12,6 +13,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadFeedSummary,
   ThreadPinnedMessages,
   ThreadMarkers,
   ThreadGoalAchievements,
@@ -86,6 +88,7 @@ const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(OrchestrationThrea
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
 const MAX_THREAD_MESSAGES = 2_000;
+const THREAD_FEED_FIRST_MESSAGE_MAX_CHARS = 4_000;
 // Bulk read-model snapshot: stays aligned with the in-memory projector window
 // (`orchestration/projector.ts`), which trims every live thread to the same cap.
 const MAX_SNAPSHOT_THREAD_ACTIVITIES = 500;
@@ -177,6 +180,15 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
 });
+const ProjectionThreadFeedSummaryDbRowSchema = Schema.Struct({
+  threadId: ThreadId,
+  firstMessageId: MessageId,
+  firstMessageText: Schema.String,
+  author: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageAuthor)),
+  firstMessageAt: IsoDateTime,
+  replyCount: NonNegativeInt,
+  latestReplyAt: Schema.NullOr(IsoDateTime),
+});
 const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
@@ -196,6 +208,9 @@ const SpaceIdLookupInput = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
+});
+const ThreadFeedSummaryLookupInput = Schema.Struct({
+  threadId: Schema.NullOr(ThreadId),
 });
 const StaleInFlightThreadLookupInput = Schema.Struct({
   updatedBefore: IsoDateTime,
@@ -261,6 +276,9 @@ type ProjectionThreadProposedPlanDbRow = Schema.Schema.Type<
 type ProjectionThreadActivityDbRow = Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>;
 type ProjectionCheckpointDbRow = Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>;
 type ProjectionLatestTurnDbRow = Schema.Schema.Type<typeof ProjectionLatestTurnDbRowSchema>;
+type ProjectionThreadFeedSummaryDbRow = Schema.Schema.Type<
+  typeof ProjectionThreadFeedSummaryDbRowSchema
+>;
 type ProjectionThreadSessionDbRow = Schema.Schema.Type<typeof ProjectionThreadSessionDbRowSchema>;
 type ProjectionStateDbRow = Schema.Schema.Type<typeof ProjectionStateDbRowSchema>;
 
@@ -636,6 +654,24 @@ function collectProjectedSessions(rows: ReadonlyArray<ProjectionThreadSessionDbR
   return { byThread, updatedAt };
 }
 
+function collectProjectedThreadFeedSummaries(
+  rows: ReadonlyArray<ProjectionThreadFeedSummaryDbRow>,
+): Map<string, OrchestrationThreadFeedSummary> {
+  return new Map(
+    rows.map((row) => [
+      row.threadId,
+      {
+        firstMessageId: row.firstMessageId,
+        firstMessageText: row.firstMessageText,
+        author: row.author,
+        firstMessageAt: row.firstMessageAt,
+        replyCount: row.replyCount,
+        latestReplyAt: row.latestReplyAt,
+      },
+    ]),
+  );
+}
+
 function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProjectShell {
   return {
     id: row.projectId,
@@ -657,6 +693,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
   readonly threadRow: ProjectionThreadShellDbRow;
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly session: OrchestrationSession | null;
+  readonly feedSummary: OrchestrationThreadFeedSummary | null;
 }): OrchestrationThreadShell {
   const { threadRow } = input;
   return {
@@ -692,6 +729,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     hasPendingApprovals: threadRow.pendingApprovalCount > 0,
     hasPendingUserInput: threadRow.pendingUserInputCount > 0,
     hasActionableProposedPlan: threadRow.hasActionableProposedPlan > 0,
+    feedSummary: input.feedSummary,
     createdAt: threadRow.createdAt,
     updatedAt: threadRow.updatedAt,
     archivedAt: threadRow.archivedAt ?? null,
@@ -981,6 +1019,67 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listThreadFeedSummaryRows = SqlSchema.findAll({
+    Request: ThreadFeedSummaryLookupInput,
+    Result: ProjectionThreadFeedSummaryDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        WITH eligible_messages AS (
+          SELECT
+            thread_id,
+            message_id,
+            role,
+            text,
+            author_json,
+            dispatch_origin,
+            created_at,
+            updated_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                sequence ASC,
+                created_at ASC,
+                message_id ASC
+            ) AS message_rank
+          FROM projection_thread_messages
+          WHERE source = 'native'
+            AND role IN ('user', 'assistant')
+            AND is_streaming = 0
+            AND (${threadId} IS NULL OR thread_id = ${threadId})
+        ),
+        first_user_ranks AS (
+          SELECT thread_id, MIN(message_rank) AS first_user_rank
+          FROM eligible_messages
+          WHERE role = 'user'
+            AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
+          GROUP BY thread_id
+        )
+        SELECT
+          starter.thread_id AS "threadId",
+          starter.message_id AS "firstMessageId",
+          SUBSTR(starter.text, 1, ${THREAD_FEED_FIRST_MESSAGE_MAX_CHARS}) AS "firstMessageText",
+          starter.author_json AS "author",
+          starter.created_at AS "firstMessageAt",
+          COUNT(replies.message_id) AS "replyCount",
+          MAX(replies.updated_at) AS "latestReplyAt"
+        FROM first_user_ranks AS first_user
+        INNER JOIN eligible_messages AS starter
+          ON starter.thread_id = first_user.thread_id
+         AND starter.message_rank = first_user.first_user_rank
+        LEFT JOIN eligible_messages AS replies
+          ON replies.thread_id = starter.thread_id
+         AND replies.message_rank > starter.message_rank
+        GROUP BY
+          starter.thread_id,
+          starter.message_id,
+          starter.text,
+          starter.author_json,
+          starter.created_at
+        ORDER BY starter.created_at ASC, starter.thread_id ASC
       `,
   });
 
@@ -2373,8 +2472,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const [spaceRows, projectRows, threadRows, sessionRows, latestTurnRows, stateRows] =
-            yield* Effect.all([
+          const [
+            spaceRows,
+            projectRows,
+            threadRows,
+            threadFeedSummaryRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+          ] = yield* Effect.all([
               listSpaceRows(undefined).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
@@ -2411,6 +2517,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
+              listThreadFeedSummaryRows({ threadId: null }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getShellSnapshot:listThreadFeedSummaries:query",
+                    "ProjectionSnapshotQuery.getShellSnapshot:listThreadFeedSummaries:decodeRows",
+                  ),
+                ),
+              ),
               listThreadSessionRows(undefined).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
@@ -2439,6 +2553,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
           const latestTurns = collectProjectedLatestTurns(latestTurnRows);
           const sessions = collectProjectedSessions(sessionRows);
+          const threadFeedSummaries =
+            collectProjectedThreadFeedSummaries(threadFeedSummaryRows);
 
           let updatedAt = collectBaseUpdatedAt({ spaceRows, projectRows, threadRows, stateRows });
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
@@ -2473,6 +2589,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   threadRow: row,
                   latestTurn: latestTurns.byThread.get(row.threadId) ?? null,
                   session: sessions.byThread.get(row.threadId) ?? null,
+                  feedSummary: threadFeedSummaries.get(row.threadId) ?? null,
                 }),
               ),
             updatedAt: updatedAt ?? new Date(0).toISOString(),
@@ -2782,7 +2899,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             return Option.none<OrchestrationThreadShell>();
           }
 
-          const [latestTurnRow, sessionRow] = yield* Effect.all([
+          const [latestTurnRow, sessionRow, feedSummaryRows] = yield* Effect.all([
             getLatestTurnRowByThread({ threadId }).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
@@ -2799,6 +2916,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
+            listThreadFeedSummaryRows({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadShellById:getThreadFeedSummary:query",
+                  "ProjectionSnapshotQuery.getThreadShellById:getThreadFeedSummary:decodeRows",
+                ),
+              ),
+            ),
           ]);
 
           return Option.some(
@@ -2812,6 +2937,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 onNone: () => null,
                 onSome: (row) => toProjectedSession(row),
               }),
+              feedSummary: collectProjectedThreadFeedSummaries(feedSummaryRows).get(threadId) ?? null,
             }),
           );
         }),

@@ -360,6 +360,9 @@ export function SingleChatSurface(props: {
   const handleToggleRightDock = () => {
     setDockOpen(props.threadId, !dockState.open);
   };
+  const handleOpenThreadFeed = () => {
+    void navigate({ to: "/", search: () => ({}) });
+  };
   const handleOpenBrowserUrl = () => {
     requestImmediateDockHydration("browser");
     openPane(props.threadId, { kind: "browser" });
@@ -1217,6 +1220,9 @@ export function SingleChatSurface(props: {
               panelState={chatPanelState}
               onToggleDiff={handleToggleDiff}
               onToggleRightDock={handleToggleRightDock}
+              {...(hostSidebar?.projectThreadsOnly
+                ? { onOpenThreadFeed: handleOpenThreadFeed }
+                : {})}
               onToggleBrowser={handleToggleBrowser}
               {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onOpenBrowserUrl={handleOpenBrowserUrl}

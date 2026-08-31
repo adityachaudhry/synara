@@ -186,6 +186,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    deepEqualJson(left.feedSummary ?? null, right.feedSummary ?? null) &&
     left.pendingInteractions === right.pendingInteractions &&
     left.lastVisitedAt === right.lastVisitedAt
   );
@@ -519,6 +520,12 @@ export function normalizeChatMessage(
   previous: ChatMessage | undefined,
 ): ChatMessage {
   const attachments = normalizeChatAttachments(incoming.attachments, previous?.attachments);
+  const author =
+    incoming.author &&
+    previous?.author?.subject === incoming.author.subject &&
+    previous.author.label === incoming.author.label
+      ? previous.author
+      : incoming.author;
   // Partial live updates omit skills/mentions; keep the previous arrays so optimistic
   // rows don't lose plugin metadata before thread.message-sent arrives. If message edit
   // can remove @mentions, treat explicit incoming.skills/mentions === [] as a clear.
@@ -535,6 +542,7 @@ export function normalizeChatMessage(
     previous &&
     previous.role === incoming.role &&
     previous.text === incoming.text &&
+    previous.author === author &&
     previous.dispatchMode === incoming.dispatchMode &&
     previous.dispatchOrigin === incoming.dispatchOrigin &&
     previous.turnId === incoming.turnId &&
@@ -554,6 +562,7 @@ export function normalizeChatMessage(
     id: incoming.id,
     role: incoming.role,
     text: incoming.text,
+    ...(author ? { author } : {}),
     ...(incoming.textSegments !== undefined && incoming.textSegments.length > 0
       ? { textSegments: [...incoming.textSegments] }
       : {}),
@@ -1630,6 +1639,7 @@ export function normalizeThreadFromReadModel(
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
     (incoming.session?.status === "running" ? previous?.pendingSourceProposedPlan : undefined);
+  const feedSummary = previous?.feedSummary ?? null;
 
   if (
     previous &&
@@ -1668,6 +1678,7 @@ export function normalizeThreadFromReadModel(
     previous.hasPendingApprovals === resolvedHasPendingApprovals &&
     previous.hasPendingUserInput === resolvedHasPendingUserInput &&
     previous.hasActionableProposedPlan === resolvedHasActionableProposedPlan &&
+    (previous.feedSummary ?? null) === feedSummary &&
     (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
     (previous.sidechatSourceThreadId ?? null) === (incoming.sidechatSourceThreadId ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
@@ -1743,6 +1754,7 @@ export function normalizeThreadFromReadModel(
     ...(resolvedHasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: resolvedHasActionableProposedPlan }
       : {}),
+    feedSummary,
     turnDiffSummaries,
     activities,
     ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
@@ -1782,6 +1794,12 @@ export function normalizeThreadShellSnapshot(
     incoming.goalStartedAt !== undefined ? incoming.goalStartedAt : previous?.goalStartedAt;
   const goalPausedAt =
     incoming.goalPausedAt !== undefined ? incoming.goalPausedAt : previous?.goalPausedAt;
+  const feedSummary =
+    previous?.feedSummary &&
+    incoming.feedSummary &&
+    deepEqualJson(previous.feedSummary, incoming.feedSummary)
+      ? previous.feedSummary
+      : (incoming.feedSummary ?? null);
   const resolvedBranch = resolveThreadBranchRegressionGuard({
     currentBranch: previous?.branch ?? null,
     nextBranch: incoming.branch,
@@ -1855,6 +1873,7 @@ export function normalizeThreadShellSnapshot(
     ...(incoming.hasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: incoming.hasActionableProposedPlan }
       : {}),
+    feedSummary,
     ...(previous?.pendingInteractions !== undefined
       ? { pendingInteractions: previous.pendingInteractions }
       : {}),

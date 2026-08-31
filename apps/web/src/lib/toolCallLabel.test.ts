@@ -82,62 +82,78 @@ describe("deriveSynaraMcpToolTitle", () => {
 
   it("has intentional running and completed copy for every Synara gateway action", () => {
     const cases = [
-      ["synara_context", "Synara is checking its context", "Synara checked its context"],
+      ["synara_context", "Glasswing is checking its context", "Glasswing checked its context"],
       [
         "synara_capabilities",
-        "Synara is checking available agents",
-        "Synara checked available agents",
+        "Glasswing is checking available agents",
+        "Glasswing checked available agents",
       ],
-      ["synara_list_projects", "Synara is listing projects", "Synara listed projects"],
-      ["synara_list_threads", "Synara is listing threads", "Synara listed threads"],
-      ["synara_read_thread", "Synara is reading a thread", "Synara read a thread"],
+      ["synara_list_projects", "Glasswing is listing projects", "Glasswing listed projects"],
+      ["synara_list_threads", "Glasswing is listing threads", "Glasswing listed threads"],
+      ["synara_read_thread", "Glasswing is reading a thread", "Glasswing read a thread"],
       [
         "synara_read_thread_activity",
-        "Synara is reading thread activity",
-        "Synara read thread activity",
+        "Glasswing is reading thread activity",
+        "Glasswing read thread activity",
       ],
-      ["synara_read_thread_events", "Synara is reading thread events", "Synara read thread events"],
+      [
+        "synara_read_thread_events",
+        "Glasswing is reading thread events",
+        "Glasswing read thread events",
+      ],
       [
         "synara_read_thread_runtime_events",
-        "Synara is reading thread runtime events",
-        "Synara read thread runtime events",
+        "Glasswing is reading thread runtime events",
+        "Glasswing read thread runtime events",
       ],
-      ["synara_diagnose_thread", "Synara is diagnosing a thread", "Synara diagnosed a thread"],
-      ["synara_create_thread", "Synara is creating a thread", "Synara created a thread"],
-      ["synara_create_threads", "Synara is creating threads", "Synara created threads"],
+      [
+        "synara_diagnose_thread",
+        "Glasswing is diagnosing a thread",
+        "Glasswing diagnosed a thread",
+      ],
+      ["synara_create_thread", "Glasswing is creating a thread", "Glasswing created a thread"],
+      ["synara_create_threads", "Glasswing is creating threads", "Glasswing created threads"],
       [
         "synara_wait_for_threads",
-        "Synara is waiting for threads",
-        "Synara finished waiting for threads",
+        "Glasswing is waiting for threads",
+        "Glasswing finished waiting for threads",
       ],
-      ["synara_send_message", "Synara is sending a message", "Synara sent a message"],
-      ["synara_interrupt_thread", "Synara is interrupting a thread", "Synara interrupted a thread"],
-      ["synara_set_thread_title", "Synara is renaming a thread", "Synara renamed a thread"],
-      ["synara_set_thread_archived", "Synara is updating a thread", "Synara updated a thread"],
+      ["synara_send_message", "Glasswing is sending a message", "Glasswing sent a message"],
+      [
+        "synara_interrupt_thread",
+        "Glasswing is interrupting a thread",
+        "Glasswing interrupted a thread",
+      ],
+      ["synara_set_thread_title", "Glasswing is renaming a thread", "Glasswing renamed a thread"],
+      ["synara_set_thread_archived", "Glasswing is updating a thread", "Glasswing updated a thread"],
       [
         "synara_create_automation",
-        "Synara is creating an automation",
-        "Synara created an automation",
+        "Glasswing is creating an automation",
+        "Glasswing created an automation",
       ],
-      ["synara_list_automations", "Synara is listing automations", "Synara listed automations"],
+      [
+        "synara_list_automations",
+        "Glasswing is listing automations",
+        "Glasswing listed automations",
+      ],
       [
         "synara_cancel_automation",
-        "Synara is stopping an automation",
-        "Synara stopped an automation",
+        "Glasswing is stopping an automation",
+        "Glasswing stopped an automation",
       ],
-      ["synara_overview", "Synara is gathering an overview", "Synara gathered an overview"],
+      ["synara_overview", "Glasswing is gathering an overview", "Glasswing gathered an overview"],
       [
         "synara_list_allowed_projects",
-        "Synara is listing allowed projects",
-        "Synara listed allowed projects",
+        "Glasswing is listing allowed projects",
+        "Glasswing listed allowed projects",
       ],
-      ["synara_create_task", "Synara is creating a task", "Synara created a task"],
+      ["synara_create_task", "Glasswing is creating a task", "Glasswing created a task"],
       [
         "synara_wait_for_task",
-        "Synara is waiting for a task",
-        "Synara finished waiting for a task",
+        "Glasswing is waiting for a task",
+        "Glasswing finished waiting for a task",
       ],
-      ["synara_read_task", "Synara is reading a task", "Synara read a task"],
+      ["synara_read_task", "Glasswing is reading a task", "Glasswing read a task"],
     ] as const;
 
     for (const [toolName, running, completed] of cases) {
@@ -150,13 +166,13 @@ describe("deriveSynaraMcpToolTitle", () => {
         toolName: "synara_create_threads",
         status: "failed",
       }),
-    ).toBe("Synara couldn't create threads");
+    ).toBe("Glasswing couldn't create threads");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "synara_create_thread",
         status: "cancelled",
       }),
-    ).toBe("Synara stopped creating a thread");
+    ).toBe("Glasswing stopped creating a thread");
   });
 
   it("turns provider-specific create-thread identifiers into activity sentences", () => {
@@ -165,22 +181,22 @@ describe("deriveSynaraMcpToolTitle", () => {
         toolName: "Synara__synara_create_thread",
         status: "running",
       }),
-    ).toBe("Synara is creating a thread");
+    ).toBe("Glasswing is creating a thread");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "mcp__synara__synara_create_thread",
         status: "completed",
       }),
-    ).toBe("Synara created a thread");
+    ).toBe("Glasswing created a thread");
   });
 
   it("recognizes bare and already-humanized Synara tool names", () => {
     expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", status: "running" })).toBe(
-      "Synara is sending a message",
+      "Glasswing is sending a message",
     );
     expect(
       deriveSynaraMcpToolTitle({ title: "Synara: Synara List Threads", status: "completed" }),
-    ).toBe("Synara listed threads");
+    ).toBe("Glasswing listed threads");
   });
 
   it("ignores tools from other MCP servers", () => {
@@ -198,19 +214,19 @@ describe("deriveSynaraMcpToolTitle", () => {
         toolName: "mcp__synara__synara_delete_project",
         status: "running",
       }),
-    ).toBe("Synara is handling delete project");
+    ).toBe("Glasswing is handling delete project");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "Synara__synara_delete_project",
         status: "completed",
       }),
-    ).toBe("Synara handled delete project");
+    ).toBe("Glasswing handled delete project");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "synara_is_handling_delete_project",
         status: "completed",
       }),
-    ).toBe("Synara handled delete project");
+    ).toBe("Glasswing handled delete project");
   });
 
   it("does not reinterpret free text beginning with fallback status copy", () => {
@@ -253,14 +269,14 @@ describe("deriveSynaraMcpToolTitle", () => {
     expect(
       sanitizeSynaraMcpToolPreview({
         preview: "Synara__synara_create_threads",
-        heading: "Synara created threads",
+        heading: "Glasswing created threads",
         status: "completed",
       }),
     ).toBeNull();
     expect(
       sanitizeSynaraMcpToolPreview({
         preview: 'Unexpected key "reasoningEffort" for Claude Agent',
-        heading: "Synara couldn't create threads",
+        heading: "Glasswing couldn't create threads",
         status: "failed",
       }),
     ).toBe('Unexpected key "reasoningEffort" for Claude Agent');

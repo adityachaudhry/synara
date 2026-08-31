@@ -1140,6 +1140,10 @@ interface ChatViewProps {
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
   onToggleRightDock?: () => void;
+  onOpenThreadFeed?: () => void;
+  emptyLandingContent?: ReactNode;
+  onThreadStarted?: (threadId: ThreadId) => void;
+  hideNewThreadAction?: boolean;
   onToggleBrowserPanel?: () => void;
   onToggleDevicePanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
@@ -1204,6 +1208,10 @@ export default function ChatView({
   panelState,
   onToggleDiffPanel,
   onToggleRightDock,
+  onOpenThreadFeed,
+  emptyLandingContent,
+  onThreadStarted,
+  hideNewThreadAction,
   onToggleBrowserPanel,
   onToggleDevicePanel,
   onOpenBrowserUrl,
@@ -8594,6 +8602,7 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
+      onThreadStarted?.(threadIdForSend);
       if (
         shouldResumeSettledLocalThread &&
         currentActiveGitBranchForSend !== null &&
@@ -11713,7 +11722,7 @@ export default function ChatView({
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
                             : simplifiedComposer
-                              ? "Work with GlasswingAI"
+                              ? "Work with Glasswing"
                             : activeThread?.parentThreadId
                               ? "Message this subagent while it works"
                               : hasLiveTurn
@@ -12089,8 +12098,10 @@ export default function ChatView({
           diffDisabledReason={diffDisabledReason}
           rightDockOpen={rightDockOpen}
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
+          {...(onOpenThreadFeed ? { onOpenThreadFeed } : {})}
           {...(simplifiedComposer &&
           activeProjectIdForNewChat &&
+          !hideNewThreadAction &&
           !activeThread.sidechatSourceThreadId
             ? { onNewThread: onNewHostedThread }
             : {})}
@@ -12219,67 +12230,73 @@ export default function ChatView({
                     anchored to the bottom of the pane (with its workspace-tools rail
                     stacked on top of the input) so starting a chat keeps the composer
                     where it lives for the rest of the conversation. */}
-                <div className="flex min-h-0 flex-1 items-center justify-center">
-                  <div
-                    className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
-                      CHAT_COLUMN_FRAME_CLASS_NAME,
-                    )}
-                  >
-                    <SynaraLogo aria-label="Glasswing" className="size-20" />
-                    <h2
-                      data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
-                    >
-                      {isEmptyChatLanding ? (
-                        "What should we work on?"
-                      ) : (
-                        <>
-                          What should we do in{" "}
-                          {showEmptyLandingProjectPicker ? (
-                            simplifiedComposer ? (
-                              <button
-                                type="button"
-                                aria-label={`Open files for ${activeProjectDisplayName ?? "this folder"}`}
-                                onClick={openLandingExplorer}
-                                className="cursor-pointer rounded-sm text-inherit underline decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                style={{ textDecorationColor: "var(--brand)" }}
-                              >
-                                {activeProjectDisplayName ?? "this folder"}
-                              </button>
-                            ) : (
-                              <ProjectPicker
-                                align="center"
-                                side="bottom"
-                                selectionMode="project"
-                                selectedProjectId={activeProject.id}
-                                selectedWorkspaceRoot={activeProject.cwd}
-                                showResetToHome
-                                onSelectProject={handleSelectProjectForEmptyDraft}
-                                onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-                                onResetToHome={handleResetWorkspaceToHome}
-                                renderTrigger={
-                                  <button
-                                    type="button"
-                                    data-testid="empty-landing-heading-project-trigger"
-                                    className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                  >
-                                    {activeProjectDisplayName ?? "this folder"}
-                                  </button>
-                                }
-                              />
-                            )
-                          ) : (
-                            <span className="text-inherit">
-                              {activeProjectDisplayName ?? "this folder"}
-                            </span>
-                          )}
-                          ?
-                        </>
-                      )}
-                    </h2>
+                {emptyLandingContent !== undefined ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                    {emptyLandingContent}
                   </div>
-                </div>
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center">
+                    <div
+                      className={cn(
+                        "flex flex-col items-center gap-4 px-6 text-center select-none",
+                        CHAT_COLUMN_FRAME_CLASS_NAME,
+                      )}
+                    >
+                      <SynaraLogo aria-label="Glasswing" className="size-20" />
+                      <h2
+                        data-testid="empty-landing-heading"
+                        className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      >
+                        {isEmptyChatLanding ? (
+                          "What should we work on?"
+                        ) : (
+                          <>
+                            What should we do in{" "}
+                            {showEmptyLandingProjectPicker ? (
+                              simplifiedComposer ? (
+                                <button
+                                  type="button"
+                                  aria-label={`Open files for ${activeProjectDisplayName ?? "this folder"}`}
+                                  onClick={openLandingExplorer}
+                                  className="cursor-pointer rounded-sm text-inherit underline decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                  style={{ textDecorationColor: "var(--brand)" }}
+                                >
+                                  {activeProjectDisplayName ?? "this folder"}
+                                </button>
+                              ) : (
+                                <ProjectPicker
+                                  align="center"
+                                  side="bottom"
+                                  selectionMode="project"
+                                  selectedProjectId={activeProject.id}
+                                  selectedWorkspaceRoot={activeProject.cwd}
+                                  showResetToHome
+                                  onSelectProject={handleSelectProjectForEmptyDraft}
+                                  onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+                                  onResetToHome={handleResetWorkspaceToHome}
+                                  renderTrigger={
+                                    <button
+                                      type="button"
+                                      data-testid="empty-landing-heading-project-trigger"
+                                      className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                    >
+                                      {activeProjectDisplayName ?? "this folder"}
+                                    </button>
+                                  }
+                                />
+                              )
+                            ) : (
+                              <span className="text-inherit">
+                                {activeProjectDisplayName ?? "this folder"}
+                              </span>
+                            )}
+                            ?
+                          </>
+                        )}
+                      </h2>
+                    </div>
+                  </div>
+                )}
                 <div className="w-full shrink-0 pb-3 sm:pb-4">
                   {composerSection}
                   {relocateComposerLeadingControls ? (
