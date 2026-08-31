@@ -31,22 +31,6 @@ export type SynaraHostPersistenceRequest =
       readonly displayLabel: string;
     };
 
-export interface SynaraHostPersistenceCandidate {
-  readonly source: "outbox" | "checkout";
-  readonly path: string;
-  readonly destinationPath: string;
-  readonly name: string;
-  readonly sizeBytes: number;
-  readonly modifiedAt: string;
-  readonly sha256: string;
-}
-
-export interface SynaraHostPersistenceCandidateList {
-  readonly runtimeId: string;
-  readonly lifecycleGeneration: string;
-  readonly entries: ReadonlyArray<SynaraHostPersistenceCandidate>;
-}
-
 export interface SynaraHostPersistenceResult {
   readonly commitSha: string;
   readonly paths: readonly string[];
@@ -59,6 +43,7 @@ export interface SynaraHostFilePaneContext {
 
 export interface SynaraHostSidebar {
   readonly widthPx: number;
+  readonly hidden?: boolean;
   readonly viewportHeightOffsetPx?: number;
   readonly lockedOpen?: boolean;
   readonly showProjectTitle?: boolean;
@@ -71,9 +56,6 @@ export interface SynaraHostSidebar {
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,
   ) => Promise<SynaraHostPersistenceResult | null>;
-  readonly listSandboxPersistenceCandidates?: (
-    threadId: string,
-  ) => Promise<SynaraHostPersistenceCandidateList>;
   readonly header?: ReactNode;
   readonly footer?: ReactNode;
 }

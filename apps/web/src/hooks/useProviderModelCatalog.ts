@@ -49,6 +49,18 @@ export interface ProviderModelCatalog {
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 
+function applyModelAllowlist<T extends { readonly slug: string }>(
+  options: ReadonlyArray<T>,
+  allowlist: readonly string[] | undefined,
+): ReadonlyArray<T> {
+  if (!allowlist) return options;
+  const bySlug = new Map(options.map((option) => [option.slug, option]));
+  return allowlist.flatMap((slug) => {
+    const option = bySlug.get(slug);
+    return option ? [option] : [];
+  });
+}
+
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
   /**
@@ -68,6 +80,8 @@ export function useProviderModelCatalog(input: {
   prefetchProviders?: ReadonlyArray<ProviderKind>;
   /** Host-supplied models merged with the user's configured custom models. */
   customModelsByProvider?: Partial<Record<ProviderKind, readonly string[]>>;
+  /** Optional host-owned catalog and order. Models outside it stay hidden after discovery. */
+  modelAllowlistByProvider?: Partial<Record<ProviderKind, readonly string[]>>;
   /** Preserve eager Claude/Codex agent discovery on surfaces that already prefetch both. */
   agentDiscoveryPolicy?: "selected" | "eager-core";
 }): ProviderModelCatalog {
@@ -343,6 +357,10 @@ export function useProviderModelCatalog(input: {
           dynamicModels,
         });
       }
+      result[provider] = applyModelAllowlist(
+        result[provider],
+        input.modelAllowlistByProvider?.[provider],
+      );
     }
     return result;
   }, [
@@ -356,6 +374,7 @@ export function useProviderModelCatalog(input: {
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     modelHintByProvider,
+    input.modelAllowlistByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
   ]);
@@ -367,7 +386,7 @@ export function useProviderModelCatalog(input: {
       droid: droidModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
-      pi: piModelDiscoveryPending,
+      pi: piModelDiscoveryPending && modelOptionsByProvider.pi.length === 0,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -376,6 +395,7 @@ export function useProviderModelCatalog(input: {
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
+      modelOptionsByProvider.pi.length,
     ],
   );
 
@@ -391,7 +411,10 @@ export function useProviderModelCatalog(input: {
       droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
-      pi: piDynamicModelsQuery.data?.models ?? [],
+      pi: applyModelAllowlist(
+        piDynamicModelsQuery.data?.models ?? [],
+        input.modelAllowlistByProvider?.pi,
+      ),
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -403,6 +426,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      input.modelAllowlistByProvider?.pi,
     ],
   );
 

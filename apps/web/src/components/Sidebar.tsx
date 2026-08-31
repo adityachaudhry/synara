@@ -5823,34 +5823,20 @@ export default function Sidebar() {
           </SidebarGroup>
         ) : null}
         {hostSidebar?.projectThreadsOnly === true && !isOnSettings ? (
-          <>
-            <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-              <SidebarMenu className="gap-0.5">
-                <SidebarPrimaryAction
-                  icon={NewThreadIcon}
-                  iconClassName="size-3.5"
-                  label="New thread"
-                  onClick={handlePrimaryNewThread}
-                  onMouseEnter={prefetchModelsForPrimaryNewThread}
-                  onFocus={prefetchModelsForPrimaryNewThread}
-                />
-              </SidebarMenu>
-            </SidebarGroup>
-            <SidebarGroup className="px-1.5 py-1.5">
-              <SidebarMenu className="gap-1">
-                {hostedProjectSidebarData?.visibleEntries
-                  .filter((entry) => entry.thread.sidechatSourceThreadId === null)
-                  .map((entry) => {
-                    return renderThreadRow(
-                      entry.thread,
-                      hostedProjectSidebarData.orderedProjectThreadIds,
-                      entry.depth,
-                      true,
-                    );
-                  })}
-              </SidebarMenu>
-            </SidebarGroup>
-          </>
+          <SidebarGroup className="px-1.5 py-1.5">
+            <SidebarMenu className="gap-1">
+              {hostedProjectSidebarData?.visibleEntries
+                .filter((entry) => entry.thread.sidechatSourceThreadId === null)
+                .map((entry) => {
+                  return renderThreadRow(
+                    entry.thread,
+                    hostedProjectSidebarData.orderedProjectThreadIds,
+                    entry.depth,
+                    true,
+                  );
+                })}
+            </SidebarMenu>
+          </SidebarGroup>
         ) : isOnSettings ? (
           <SidebarGroup className="p-0">
             <SettingsSidebarNav

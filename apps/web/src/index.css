@@ -2749,6 +2749,33 @@ diffs-container {
   max-width: min(11.25rem, 92vw);
 }
 
+/* Glasswing's hosted Model/Effort menu mirrors the compact native picker hierarchy. */
+.hosted-model-picker {
+  width: min(17rem, 92vw) !important;
+  min-width: min(17rem, 92vw) !important;
+  border-radius: 1.25rem;
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 2.5rem;
+  --picker-option-px: 0.875rem;
+  --picker-option-py: 0.125rem;
+  --picker-option-gap: 0.75rem;
+  --picker-separator-my: 0.25rem;
+  --picker-separator-mx: 0.5rem;
+  --picker-sub-chevron-ms: 0.5rem;
+}
+
+.hosted-model-picker--submenu {
+  width: min(15.5rem, 92vw) !important;
+  min-width: min(15.5rem, 92vw) !important;
+}
+
+.hosted-model-picker [data-slot="menu-item"],
+.hosted-model-picker [data-slot="menu-sub-trigger"] {
+  width: 100%;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+}
+
 /* Size-aware option rows inside composer picker shells. */
 .composer-picker-menu--small [data-slot="menu-item"],
 .composer-picker-menu--small [data-slot="menu-radio-item"],

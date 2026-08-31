@@ -179,6 +179,8 @@ type ProviderModelMenuItemsProps = {
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  allowFavorites?: boolean;
+  stripModelNamePrefix?: string;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
   // Invoked after a model selection commits so callers can close ancestor
@@ -280,7 +282,15 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       );
     }
 
-    const providerOptions = props.modelOptionsByProvider[provider];
+    const stripModelNamePrefix = props.stripModelNamePrefix;
+    const providerOptions = stripModelNamePrefix
+      ? props.modelOptionsByProvider[provider].map((option) => ({
+          ...option,
+          name: option.name.startsWith(stripModelNamePrefix)
+            ? option.name.slice(stripModelNamePrefix.length)
+            : option.name,
+        }))
+      : props.modelOptionsByProvider[provider];
     const shouldShowSearch =
       (provider === "kilo" ||
         provider === "opencode" ||
@@ -294,7 +304,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             buildModelSearchText(option).includes(normalizedModelSearchQuery),
           )
         : providerOptions;
-    const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
+    const favoriteProvider =
+      props.allowFavorites !== false && supportsModelFavorites(provider) ? provider : null;
     const favoriteModelSlugSet =
       favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
     const groupedOptions =

@@ -27,7 +27,6 @@ import type {
 import { resolveActivePane } from "~/rightDockStore.logic";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
-import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import {
   Sidebar,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
@@ -36,14 +35,13 @@ import {
   SidebarRail,
 } from "../ui/sidebar";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
-import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
+  SurfaceChipIcon,
   SurfaceTabChip,
 } from "./chatHeaderControls";
 import {
-  getRightDockPaneMeta,
   type RightDockLauncherItem,
   resolveRightDockPaneIcon,
   resolveRightDockPaneLabel,
@@ -75,11 +73,11 @@ interface RightDockProps {
   // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane
   // swapping the generic kind icon for its live state glyph.
   paneIconOverrides?: Record<string, ReactNode | undefined>;
-  addMenuKinds: readonly RightDockPaneKind[];
   launcherItems?: readonly RightDockLauncherItem[];
   // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts
   // provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
+  onShowLauncher?: (() => void) | undefined;
   onClosePane: (paneId: string) => void;
   onCollapse: () => void;
   onOpenChange: (open: boolean) => void;
@@ -184,6 +182,23 @@ function useKeepMountedPaneIds(
 export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const onSelectPane = props.onSelectPane;
+  const activePaneId = activePane?.id ?? null;
+  const lastActivePaneIdRef = useRef<string | null>(activePaneId);
+  useEffect(() => {
+    if (activePaneId) {
+      lastActivePaneIdRef.current = activePaneId;
+    }
+  }, [activePaneId]);
+  const closeLauncher = () => {
+    const fallbackPane =
+      props.state.panes.find((pane) => pane.id === lastActivePaneIdRef.current) ??
+      props.state.panes.at(-1);
+    if (fallbackPane && onSelectPane) {
+      onSelectPane(fallbackPane.id);
+      return;
+    }
+    props.onCollapse();
+  };
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
   const browserRuntimeMode = props.browserRuntimeMode ?? "live";
   const viewportHeightOffsetPx =
@@ -307,34 +322,31 @@ export function RightDock(props: RightDockProps) {
                   onClose={() => props.onClosePane(pane.id)}
                 />
               ))}
+              {activePane === null && (props.launcherItems?.length ?? 0) > 0 ? (
+                <SurfaceTabChip
+                  icon={<SurfaceChipIcon icon={PlusIcon} />}
+                  label="New panel"
+                  title="New panel"
+                  active
+                  closeLabel="Close New panel"
+                  onClose={closeLauncher}
+                />
+              ) : null}
             </div>
-            {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
-              <Menu modal={false}>
-                <MenuTrigger
-                  render={
-                    <Button
-                      variant="chrome"
-                      size="icon-xs"
-                      aria-label="Add panel"
-                      title="Add panel"
-                      className={DOCK_HEADER_ICON_BUTTON_CLASS}
-                    />
-                  }
-                >
-                  <PlusIcon className="size-3.5" />
-                </MenuTrigger>
-                <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-                  {props.addMenuKinds.map((kind) => {
-                    const { Icon, label } = getRightDockPaneMeta(kind);
-                    return (
-                      <MenuItem key={kind} onClick={() => props.onAddPane(kind)}>
-                        <Icon className="size-3.5 shrink-0" />
-                        <span>{label}</span>
-                      </MenuItem>
-                    );
-                  })}
-                </ComposerPickerMenuPopup>
-              </Menu>
+            {props.state.panes.length > 0 &&
+            (props.launcherItems?.length ?? 0) > 0 &&
+            props.onShowLauncher ? (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label="Add panel"
+                tooltip="Add panel"
+                tooltipSide="bottom"
+                className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                onClick={props.onShowLauncher}
+              >
+                <PlusIcon className="size-3.5" />
+              </IconButton>
             ) : null}
             <IconButton
               variant="chrome"

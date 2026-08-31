@@ -645,6 +645,12 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+const HOSTED_PI_REASONING_FALLBACK = [
+  { value: "minimal", label: "Minimal", description: "Light reasoning" },
+  { value: "low", label: "Low", description: "Faster reasoning" },
+  { value: "medium", label: "Medium", description: "Balanced reasoning" },
+  { value: "high", label: "High", description: "Deeper reasoning" },
+] as const;
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -2279,9 +2285,12 @@ export default function ChatView({
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
-  const lockedProvider: ProviderKind | null = hasThreadStarted
-    ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
-    : null;
+  const lockedProvider: ProviderKind | null =
+    !hasThreadStarted && hostProjectModelSelection
+      ? hostProjectModelSelection.provider
+      : hasThreadStarted
+        ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
+        : null;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig(
     confirmedCustomBinaryPathsByProvider,
@@ -2346,6 +2355,10 @@ export default function ChatView({
   });
   const hostCustomModelsByProvider =
     readSynaraRuntimeConfig().project?.customModelsByProvider;
+  const hostModelPrefetchProviders = useMemo(
+    () => (hostProjectModelSelection ? [hostProjectModelSelection.provider] : undefined),
+    [hostProjectModelSelection],
+  );
   const {
     customModelsByProvider,
     modelOptionsByProvider,
@@ -2359,7 +2372,13 @@ export default function ChatView({
     discoveryEnabled: isModelPickerOpen,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: composerModelHintByProvider,
-    ...(hostCustomModelsByProvider ? { customModelsByProvider: hostCustomModelsByProvider } : {}),
+    ...(hostCustomModelsByProvider
+      ? {
+          customModelsByProvider: hostCustomModelsByProvider,
+          modelAllowlistByProvider: hostCustomModelsByProvider,
+        }
+      : {}),
+    ...(hostModelPrefetchProviders ? { prefetchProviders: hostModelPrefetchProviders } : {}),
     agentDiscoveryPolicy: "eager-core",
   });
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
@@ -2391,6 +2410,19 @@ export default function ChatView({
     if (discovered) {
       return discovered;
     }
+    if (
+      selectedProvider === "pi" &&
+      hostCustomModelsByProvider?.pi?.includes(selectedModel)
+    ) {
+      // Every Anthropic model exposed by the hosted Pi catalog supports this common
+      // reasoning subset. Runtime discovery replaces it with the model's exact ladder.
+      return {
+        slug: selectedModel,
+        name: selectedModel,
+        supportedReasoningEfforts: HOSTED_PI_REASONING_FALLBACK,
+        defaultReasoningEffort: "medium",
+      };
+    }
     return selectedProvider === "claudeAgent" &&
       typeof persistedClaudeSupportsAutoMode === "boolean"
       ? {
@@ -2399,7 +2431,13 @@ export default function ChatView({
           supportsAutoMode: persistedClaudeSupportsAutoMode,
         }
       : undefined;
-  }, [persistedClaudeSupportsAutoMode, runtimeModelsByProvider, selectedModel, selectedProvider]);
+  }, [
+    hostCustomModelsByProvider?.pi,
+    persistedClaudeSupportsAutoMode,
+    runtimeModelsByProvider,
+    selectedModel,
+    selectedProvider,
+  ]);
   const composerProviderState = useMemo(
     () =>
       getComposerProviderState({
@@ -9656,7 +9694,24 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
-  const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
+  const resetHostedComposerModel = useCallback(() => {
+    if (!activeThread || hostProjectModelSelection?.provider !== "pi") return;
+    const defaultSelection = buildModelSelection("pi", hostProjectModelSelection.model);
+    setComposerDraftModelSelectionAndSticky(activeThread.id, defaultSelection);
+    setComposerDraftProviderModelOptions(activeThread.id, "pi", undefined, {
+      model: defaultSelection.model,
+      persistSticky: true,
+    });
+    scheduleComposerFocus();
+  }, [
+    activeThread,
+    hostProjectModelSelection,
+    scheduleComposerFocus,
+    setComposerDraftModelSelectionAndSticky,
+    setComposerDraftProviderModelOptions,
+  ]);
+  const useSplitComposerPickerControls =
+    isLocalDraftThread && !hasThreadStarted && !simplifiedComposer;
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
@@ -9782,6 +9837,9 @@ export default function ChatView({
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
       onProviderModelChange={onProviderModelSelect}
+      {...(simplifiedComposer && hostProjectModelSelection?.provider === "pi"
+        ? { onResetToDefault: resetHostedComposerModel }
+        : {})}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}
@@ -10928,6 +10986,12 @@ export default function ChatView({
     [navigate],
   );
   const activeProjectIdForNewChat = activeProject?.id ?? null;
+  const onNewHostedThread = useCallback(() => {
+    if (!activeProjectIdForNewChat) return;
+    void handleNewThread(activeProjectIdForNewChat, {
+      envMode: settings.defaultThreadEnvMode,
+    });
+  }, [activeProjectIdForNewChat, handleNewThread, settings.defaultThreadEnvMode]);
   const onNewEditorChat = useCallback(() => {
     if (!activeProjectIdForNewChat) {
       return;
@@ -11648,6 +11712,8 @@ export default function ChatView({
                             : "Type your own answer, or leave this blank to use the selected option"
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : simplifiedComposer
+                              ? "Work with GlasswingAI"
                             : activeThread?.parentThreadId
                               ? "Message this subagent while it works"
                               : hasLiveTurn
@@ -12023,6 +12089,11 @@ export default function ChatView({
           diffDisabledReason={diffDisabledReason}
           rightDockOpen={rightDockOpen}
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
+          {...(simplifiedComposer &&
+          activeProjectIdForNewChat &&
+          !activeThread.sidechatSourceThreadId
+            ? { onNewThread: onNewHostedThread }
+            : {})}
           environment={simplifiedComposer || isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={

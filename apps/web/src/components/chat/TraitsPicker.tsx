@@ -262,6 +262,7 @@ export interface TraitsMenuContentProps {
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
+  effortLabel?: string;
   modelOptions?: ProviderOptions | null | undefined;
   onSelectionComplete?: () => void;
 }
@@ -275,6 +276,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   prompt,
   onPromptChange,
   includeFastMode: includeFastModeProp,
+  effortLabel,
   modelOptions,
   onSelectionComplete,
 }: TraitsMenuContentProps) {
@@ -406,7 +408,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorEffortSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+            label={
+              effortLabel ?? (provider === "kilo" || provider === "opencode" ? "Variant" : "Effort")
+            }
             labelTrailing={
               showsFastModeEffortToggle ? (
                 <FastModeToggle

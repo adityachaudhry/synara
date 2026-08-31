@@ -540,7 +540,6 @@ function PullRequestsRouteView() {
         minWidth={RIGHT_DOCK_MIN_WIDTH}
         defaultWidth={RIGHT_DOCK_DEFAULT_WIDTH}
         shouldAcceptWidth={() => true}
-        addMenuKinds={[]}
         {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
         {...(paneIconOverrides ? { paneIconOverrides } : {})}
         onClosePane={closeDetail}

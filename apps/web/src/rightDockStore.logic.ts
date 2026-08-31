@@ -309,8 +309,13 @@ export function closePaneInState(
 
 export function setActivePaneInState(
   state: RightDockThreadState,
-  paneId: string,
+  paneId: string | null,
 ): RightDockThreadState {
+  if (paneId === null) {
+    return state.open && state.activePaneId === null
+      ? state
+      : { ...state, open: true, activePaneId: null };
+  }
   if (!state.panes.some((pane) => pane.id === paneId)) {
     return state;
   }

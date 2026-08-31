@@ -26,6 +26,7 @@ import {
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
+  NewThreadIcon,
   PanelRightCloseIcon,
   PlusIcon,
   TerminalIcon,
@@ -113,6 +114,7 @@ interface ChatHeaderProps {
   diffDisabledReason?: string | null;
   rightDockOpen?: boolean;
   onToggleRightDock?: () => void;
+  onNewThread?: () => void;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   // When provided, the header collapses the
@@ -536,6 +538,7 @@ export function ChatHeader({
   diffDisabledReason: diffDisabledReasonProp,
   rightDockOpen: rightDockOpenProp,
   onToggleRightDock,
+  onNewThread,
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
   environment: environmentProp,
@@ -553,7 +556,8 @@ export function ChatHeader({
   onRenameThread,
   onCloseThreadPane,
 }: ChatHeaderProps) {
-  const hideSidebarControls = hideSidebarControlsProp ?? false;
+  const hostSidebar = useSynaraHostSidebar();
+  const hideSidebarControls = (hideSidebarControlsProp ?? false) || hostSidebar?.hidden === true;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
   const minimalChrome = minimalChromeProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
@@ -566,7 +570,6 @@ export function ChatHeader({
   const chatLayoutAction = chatLayoutActionProp ?? null;
   const changeThreadAction = changeThreadActionProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
-  const hostSidebar = useSynaraHostSidebar();
   const [savingThread, setSavingThread] = useState(false);
   const saveThread = async () => {
     if (!hostSidebar?.saveChatContent || savingThread) return;
@@ -945,6 +948,19 @@ export function ChatHeader({
               }
             />
             <TooltipPopup side="bottom">Save to analysis/threads</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
+        {onNewThread ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ChatHeaderIconButton type="button" label="New thread" onClick={onNewThread}>
+                  <NewThreadIcon className="size-4" />
+                </ChatHeaderIconButton>
+              }
+            />
+            <TooltipPopup side="bottom">New thread</TooltipPopup>
           </Tooltip>
         ) : null}
 

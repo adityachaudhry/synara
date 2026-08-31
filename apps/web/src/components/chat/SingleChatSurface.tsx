@@ -95,7 +95,6 @@ import {
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
-import { SandboxPersistencePanel } from "./SandboxPersistencePanel";
 import { RightDock } from "./RightDock";
 import { getRightDockPaneMeta, resolveRightDockLauncherItems } from "./rightDockPaneMeta";
 import {
@@ -249,7 +248,6 @@ export function SingleChatSurface(props: {
     ({ kind }) =>
       hostSidebar?.simplifiedComposer !== true || (kind !== "terminal" && kind !== "browser"),
   );
-  const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const { settings: appSettings } = useAppSettings();
@@ -994,7 +992,6 @@ export function SingleChatSurface(props: {
               : hostSidebar.filesPane;
           return (
             <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
-              <SandboxPersistencePanel threadId={props.threadId} />
               <div className="min-h-0 flex-1 overflow-hidden">{filesPane}</div>
             </div>
           );
@@ -1247,7 +1244,6 @@ export function SingleChatSurface(props: {
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
           shouldAcceptWidth={shouldAcceptDockWidth}
-          addMenuKinds={availableDockPaneKinds}
           launcherItems={dockLauncherItems}
           motionKey={props.threadId}
           activePaneRuntimeMode={
@@ -1259,6 +1255,7 @@ export function SingleChatSurface(props: {
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
           {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
+          onShowLauncher={() => setActivePane(props.threadId, null)}
           onClosePane={handleCloseDockPane}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => {

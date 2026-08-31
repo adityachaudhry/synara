@@ -25,6 +25,9 @@ const synaraCommit = `${execFileSync("git", ["rev-parse", "--short", "HEAD"], {
 const packageDir = process.env.SYNARA_EMBED_OUTPUT_DIR
   ? path.resolve(process.env.SYNARA_EMBED_OUTPUT_DIR)
   : path.join(webDir, "dist-embed", "package");
+const stylesheetOutput = process.env.SYNARA_EMBED_STYLESHEET_OUTPUT
+  ? path.resolve(process.env.SYNARA_EMBED_STYLESHEET_OUTPUT)
+  : null;
 const nextPackageDir = `${packageDir}-next`;
 const previousPackageDir = `${packageDir}-previous`;
 
@@ -46,6 +49,10 @@ const packageBuild = () => {
       await fs.rename(packageDir, previousPackageDir).catch(() => undefined);
       await fs.rename(nextPackageDir, packageDir);
       await fs.rm(previousPackageDir, { recursive: true, force: true });
+      if (stylesheetOutput) {
+        await fs.mkdir(path.dirname(stylesheetOutput), { recursive: true });
+        await fs.copyFile(path.join(packageDir, "style.css"), stylesheetOutput);
+      }
       process.stdout.write("Synara embed package updated\n");
     })
     .catch((error) => {

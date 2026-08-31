@@ -35,7 +35,7 @@ interface RightDockStore {
     input: Omit<OpenPaneInput, "paneId"> & { paneId?: string },
   ) => void;
   closePane: (threadId: ThreadId, paneId: string) => void;
-  setActivePane: (threadId: ThreadId, paneId: string) => void;
+  setActivePane: (threadId: ThreadId, paneId: string | null) => void;
   setDockOpen: (threadId: ThreadId, open: boolean) => void;
   updatePane: (
     threadId: ThreadId,

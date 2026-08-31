@@ -566,15 +566,16 @@ function ChatRouteLayout() {
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const hostSidebar = useSynaraHostSidebar();
+  const sidebarHidden = hostSidebar?.hidden === true;
   const sidebarPresentation = resolveHostSidebarPresentation(hostSidebar);
-  const resolvedSidebarOpen = isEditorView
+  const resolvedSidebarOpen = isEditorView || sidebarHidden
     ? false
     : hostSidebar?.lockedOpen
       ? true
       : sidebarOpen;
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
-  const sidebarElement = (
+  const sidebarElement = sidebarHidden ? null : (
     <Sidebar
       side="left"
       collapsible={sidebarPresentation.collapsible}
@@ -603,7 +604,7 @@ function ChatRouteLayout() {
         import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? "h-full" : "h-svh"
       }`}
     >
-      {isEditorView || !sidebarPresentation.showSeamRail ? null : (
+      {isEditorView || sidebarHidden || !sidebarPresentation.showSeamRail ? null : (
         <SidebarInstanceProvider
           side="left"
           resizable={THREAD_SIDEBAR_RESIZABLE}

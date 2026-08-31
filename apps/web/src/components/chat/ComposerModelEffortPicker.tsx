@@ -15,11 +15,11 @@ import {
 } from "@synara/contracts";
 import { useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronDownIcon, FastModeIcon, RotateCcwIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
-import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
@@ -60,6 +60,7 @@ type ComposerModelEffortPickerProps = {
   hideStatusLabel?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onResetToDefault?: () => void;
   onSelectionCommitted?: () => void;
 
   // Traits/effort/speed data.
@@ -103,6 +104,11 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
+  const simplifiedHostPicker = hostSidebar?.simplifiedComposer === true && activeProvider === "pi";
+  const displayModelLabel =
+    simplifiedHostPicker && modelLabel.startsWith("Claude ")
+      ? modelLabel.slice("Claude ".length)
+      : modelLabel;
 
   const traitSelection = getComposerTraitSelection(
     props.provider,
@@ -128,11 +134,47 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
   };
 
   const hiddenTriggerTitle = [
-    props.hideModelLabel ? modelLabel : null,
+    props.hideModelLabel ? displayModelLabel : null,
     props.hideStatusLabel ? triggerStatusLabel : null,
   ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join(" · ");
+
+  const traitsMenuContent = hasTraitsTopSection ? (
+    <TraitsMenuContent
+      provider={props.provider}
+      threadId={props.threadId}
+      model={props.model}
+      {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+      {...(props.runtimeModels !== undefined ? { runtimeModels: props.runtimeModels } : {})}
+      {...(props.runtimeAgents !== undefined ? { runtimeAgents: props.runtimeAgents } : {})}
+      modelOptions={props.modelOptions}
+      prompt={props.prompt}
+      onPromptChange={props.onPromptChange}
+      onSelectionComplete={handleAfterTraitsSelection}
+      {...(simplifiedHostPicker ? { effortLabel: "Effort" } : {})}
+    />
+  ) : null;
+
+  const modelMenuItems = (
+    <ProviderModelMenuItems
+      provider={props.provider}
+      model={props.model}
+      lockedProvider={props.lockedProvider}
+      {...(props.providers ? { providers: props.providers } : {})}
+      modelOptionsByProvider={props.modelOptionsByProvider}
+      {...(props.loadingModelProviders
+        ? { loadingModelProviders: props.loadingModelProviders }
+        : {})}
+      {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+      {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+      {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+      allowFavorites={!simplifiedHostPicker}
+      {...(simplifiedHostPicker ? { stripModelNamePrefix: "Claude " } : {})}
+      onProviderModelChange={props.onProviderModelChange}
+      onAfterSelection={handleAfterModelSelection}
+    />
+  );
 
   const triggerButton = (
     <Button
@@ -142,6 +184,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       className={cn(
         "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+        simplifiedHostPicker && "rounded-full bg-secondary/70 px-3 hover:bg-secondary",
       )}
       aria-label="Change model and reasoning"
       {...(hiddenTriggerTitle.length > 0 ? { title: hiddenTriggerTitle } : {})}
@@ -160,9 +203,11 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         )}
       />
       {props.hideModelLabel ? (
-        <span className="sr-only">{modelLabel}</span>
+        <span className="sr-only">{displayModelLabel}</span>
       ) : (
-        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel}</span>
+        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+          {displayModelLabel}
+        </span>
       )}
       {showsFastBadge ? (
         <FastModeIcon
@@ -220,53 +265,86 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-        {hasTraitsTopSection ? (
-          <TraitsMenuContent
-            provider={props.provider}
-            threadId={props.threadId}
-            model={props.model}
-            {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
-            {...(props.runtimeModels !== undefined ? { runtimeModels: props.runtimeModels } : {})}
-            {...(props.runtimeAgents !== undefined ? { runtimeAgents: props.runtimeAgents } : {})}
-            modelOptions={props.modelOptions}
-            prompt={props.prompt}
-            onPromptChange={props.onPromptChange}
-            onSelectionComplete={handleAfterTraitsSelection}
-          />
-        ) : null}
-
-        {hasTraitsTopSection ? <MenuSeparator /> : null}
-
-        <MenuSub>
-          <MenuSubTrigger>
-            <ProviderIcon
-              aria-hidden="true"
-              className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
-            />
-            <span className="truncate">{modelLabel}</span>
-          </MenuSubTrigger>
-          <ComposerPickerMenuSubPopup
-            fixedWidth
-            className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
-          >
-            <ProviderModelMenuItems
-              provider={props.provider}
-              model={props.model}
-              lockedProvider={props.lockedProvider}
-              {...(props.providers ? { providers: props.providers } : {})}
-              modelOptionsByProvider={props.modelOptionsByProvider}
-              {...(props.loadingModelProviders
-                ? { loadingModelProviders: props.loadingModelProviders }
-                : {})}
-              {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
-              {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-              {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-              onProviderModelChange={props.onProviderModelChange}
-              onAfterSelection={handleAfterModelSelection}
-            />
-          </ComposerPickerMenuSubPopup>
-        </MenuSub>
+      <ComposerPickerMenuPopup
+        align="end"
+        side="top"
+        fixedWidth
+        className={simplifiedHostPicker ? "hosted-model-picker" : undefined}
+      >
+        {simplifiedHostPicker ? (
+          <>
+            <MenuSub>
+              <MenuSubTrigger>
+                <span>Model</span>
+                <span className="ms-auto max-w-36 truncate text-right text-muted-foreground">
+                  {displayModelLabel}
+                </span>
+              </MenuSubTrigger>
+              <ComposerPickerMenuSubPopup
+                fixedWidth
+                className={cn(
+                  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
+                  "hosted-model-picker hosted-model-picker--submenu",
+                )}
+              >
+                {modelMenuItems}
+              </ComposerPickerMenuSubPopup>
+            </MenuSub>
+            {traitsMenuContent ? (
+              <MenuSub>
+                <MenuSubTrigger>
+                  <span>Effort</span>
+                  <span className="ms-auto truncate text-right text-muted-foreground">
+                    {triggerStatusLabel ?? "Default"}
+                  </span>
+                </MenuSubTrigger>
+                <ComposerPickerMenuSubPopup
+                  fixedWidth
+                  className="hosted-model-picker hosted-model-picker--submenu"
+                >
+                  {traitsMenuContent}
+                </ComposerPickerMenuSubPopup>
+              </MenuSub>
+            ) : null}
+            {props.onResetToDefault ? (
+              <>
+                <MenuSeparator />
+                <MenuItem
+                  className="w-full text-muted-foreground"
+                  onClick={() => {
+                    props.onResetToDefault?.();
+                    setMenuOpen(false);
+                  }}
+                >
+                  <span>Reset to default</span>
+                  <span className="ms-auto flex size-4 shrink-0 items-center justify-center">
+                    <RotateCcwIcon className="size-4" />
+                  </span>
+                </MenuItem>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {traitsMenuContent}
+            {hasTraitsTopSection ? <MenuSeparator /> : null}
+            <MenuSub>
+              <MenuSubTrigger>
+                <ProviderIcon
+                  aria-hidden="true"
+                  className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
+                />
+                <span className="truncate">{displayModelLabel}</span>
+              </MenuSubTrigger>
+              <ComposerPickerMenuSubPopup
+                fixedWidth
+                className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+              >
+                {modelMenuItems}
+              </ComposerPickerMenuSubPopup>
+            </MenuSub>
+          </>
+        )}
       </ComposerPickerMenuPopup>
     </Menu>
   );
