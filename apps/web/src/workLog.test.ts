@@ -3629,36 +3629,6 @@ describe("deriveTimelineEntries", () => {
     });
   });
 
-  it("keeps a single live message row while segments are still streaming", () => {
-    const messageId = MessageId.makeUnsafe("assistant-streaming-segmented");
-    const entries = deriveTimelineEntries(
-      [
-        {
-          id: messageId,
-          role: "assistant",
-          text: "partial",
-          textSegments: [
-            {
-              sequence: 10,
-              startedAt: "2026-02-23T00:00:01.000Z",
-              endedAt: "2026-02-23T00:00:03.000Z",
-              text: "partial",
-            },
-          ],
-          createdAt: "2026-02-23T00:00:01.000Z",
-          streaming: true,
-        },
-      ],
-      [],
-      [],
-    );
-
-    expect(entries.map((entry) => entry.kind)).toEqual(["message"]);
-    expect(entries[0]).toMatchObject({
-      kind: "message",
-      message: { id: messageId, streaming: true },
-    });
-  });
 });
 
 describe("deriveWorkLogEntries context window handling", () => {

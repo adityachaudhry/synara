@@ -8162,8 +8162,12 @@ export default function ChatView({
     // and its hook owns the slide; auto-follow stays armed for bookkeeping but
     // pauses until the in-flight flag clears.
     armTranscriptAutoFollow(threadIdForSend, true);
-    tailAnchorScrollInFlightRef.current = true;
-    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
+    tailAnchorScrollInFlightRef.current = dispatchMode !== "steer";
+    setTailAnchor(
+      dispatchMode === "steer"
+        ? null
+        : { threadId: threadIdForSend, messageId: messageIdForSend },
+    );
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -9046,8 +9050,12 @@ export default function ChatView({
       },
     ]);
     armTranscriptAutoFollow(threadIdForSend, true);
-    tailAnchorScrollInFlightRef.current = true;
-    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
+    tailAnchorScrollInFlightRef.current = dispatchMode !== "steer";
+    setTailAnchor(
+      dispatchMode === "steer"
+        ? null
+        : { threadId: threadIdForSend, messageId: messageIdForSend },
+    );
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.

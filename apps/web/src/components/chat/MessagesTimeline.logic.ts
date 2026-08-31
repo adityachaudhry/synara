@@ -785,6 +785,10 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
+      if (prev.kind === "message-segment" && prev.message.role === "assistant") {
+        foldIndices.push(scan);
+        continue;
+      }
       if (prev.kind === "proposed-plan") {
         // The plan card stays visible, but it should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
@@ -818,6 +822,18 @@ function collapseSettledTurns(
         if (folded.collapsedTurnItems) collapsedItems.push(...folded.collapsedTurnItems);
         collapsedItems.push({ kind: "narration", id: folded.message.id, message: folded.message });
         if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
+      } else if (folded.kind === "message-segment") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
+        collapsedItems.push({
+          kind: "narration",
+          id: folded.id,
+          message: {
+            ...folded.message,
+            text:
+              folded.message.textSegments?.[folded.segmentIndex]?.text ?? folded.message.text,
+            streaming: false,
+          },
+        });
       }
     }
     // The terminal's own work rows are details around the final answer; fold

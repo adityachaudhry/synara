@@ -182,6 +182,7 @@ export type TimelineEntry =
       id: string;
       kind: "message";
       createdAt: string;
+      sequence?: number;
       message: ChatMessage;
     }
   | {
@@ -2266,26 +2267,37 @@ export function deriveTimelineEntries(
     ) {
       return [];
     }
-    // Completed assistant messages whose streamed text was interleaved with
-    // tool rows render as one row per text segment, each positioned at its own
-    // start time, so the merged timeline shows reasoning next to the tool that
-    // interrupted it instead of one block above every tool. While the message
-    // is still streaming, keep the single live row (the streaming surface).
+    // Assistant messages whose streamed text was interleaved with tool rows
+    // render as one row per text segment, each positioned at its own start
+    // time, so the live and settled timelines preserve the same chronology.
     const textSegments = displayMessage.textSegments;
     if (
       displayMessage.role === "assistant" &&
-      !displayMessage.streaming &&
       textSegments !== undefined &&
       textSegments.length > 1
     ) {
-      return textSegments.map((segment, segmentIndex) => ({
-        id: `${displayMessage.id}#seg:${segmentIndex}`,
-        kind: "message-segment" as const,
-        createdAt: segment.startedAt,
-        sequence: segment.sequence,
-        message: displayMessage,
-        segmentIndex,
-      }));
+      return textSegments.map((segment, segmentIndex) =>
+        segmentIndex === textSegments.length - 1
+          ? {
+              id: displayMessage.id,
+              kind: "message" as const,
+              createdAt: segment.startedAt,
+              sequence: segment.sequence,
+              message: {
+                ...displayMessage,
+                text: segment.text,
+                createdAt: segment.startedAt,
+              },
+            }
+          : {
+              id: `${displayMessage.id}#seg:${segmentIndex}`,
+              kind: "message-segment" as const,
+              createdAt: segment.startedAt,
+              sequence: segment.sequence,
+              message: displayMessage,
+              segmentIndex,
+            },
+      );
     }
     return [
       {
