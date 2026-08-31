@@ -756,7 +756,15 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     get streamEvents() {
       const remoteEvents = broker.streamEvents.pipe(
         Stream.tap((event) => {
-          if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
+          const completedFileChange =
+            event.type === "item.completed" &&
+            event.payload.itemType === "file_change" &&
+            event.payload.status === "completed";
+          if (
+            !completedFileChange &&
+            event.type !== "turn.completed" &&
+            event.type !== "turn.aborted"
+          ) {
             return Effect.void;
           }
           const binding = remoteByThread.get(event.threadId);
