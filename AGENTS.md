@@ -1,5 +1,12 @@
 # AGENTS.md
 
+## Deployment Boundary
+
+- Dev application code must be committed and pushed to `glasswingos/dev`; deployment must run from GitHub Actions for that branch.
+- Never deploy application code to Railway from a local checkout, worktree, or `railway up` command.
+- Railway CLI may be used locally only to provision or configure Railway resources when necessary, not to ship code.
+- Verify the canonical remote branch and its GitHub Actions run before treating a dev deployment as complete.
+
 ## Task Completion Requirements
 
 - Do not run `bun fmt`, `bun lint`, or `bun typecheck` unless the user explicitly asks for them in the current conversation.
