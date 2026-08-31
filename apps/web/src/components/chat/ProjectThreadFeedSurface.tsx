@@ -7,7 +7,9 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -239,6 +241,8 @@ export function ProjectThreadFeedSurface({
   const syncServerShellSnapshot = useStore((state) => state.syncServerShellSnapshot);
   const { prewarmThreadDetail } = useThreadDetailPrewarm();
   const [dockState, setDockState] = useState<RightDockThreadState>(createProjectFeedDockState);
+  const feedContentRef = useRef<HTMLElement | null>(null);
+  const positionedProjectIdRef = useRef<ProjectId | null>(null);
 
   const threads = useMemo(
     () =>
@@ -254,6 +258,14 @@ export function ProjectThreadFeedSurface({
         .toSorted((left, right) => threadActivityAt(left).localeCompare(threadActivityAt(right))),
     [displayThreads, projectId],
   );
+
+  useLayoutEffect(() => {
+    if (threads.length === 0 || positionedProjectIdRef.current === projectId) return;
+    const viewport = feedContentRef.current?.parentElement;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+    positionedProjectIdRef.current = projectId;
+  }, [projectId, threads.length]);
 
   useEffect(() => {
     const api = readNativeApi();
@@ -382,6 +394,7 @@ export function ProjectThreadFeedSurface({
   const feedContent =
     threads.length > 0 ? (
       <section
+        ref={feedContentRef}
         aria-label={`${projectName} threads`}
         className="mx-auto flex w-full max-w-3xl flex-col gap-4 pt-4"
       >
