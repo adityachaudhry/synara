@@ -2,7 +2,6 @@ import type {
   AuthBearerBootstrapResult,
   AuthBootstrapResult,
   AuthClientMetadata,
-  AuthClientMetadata,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
   AuthPairingCredentialResult,
