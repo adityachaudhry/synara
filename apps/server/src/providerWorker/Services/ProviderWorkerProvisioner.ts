@@ -1,5 +1,5 @@
 import { ServiceMap, type Effect } from "effect";
-import type { ProjectRepositoryBinding, ThreadId } from "@synara/contracts";
+import type { ChatAttachment, ProjectRepositoryBinding, ThreadId } from "@synara/contracts";
 
 import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
@@ -12,6 +12,11 @@ export interface ProviderWorkerProvisionInput {
   readonly onCapacityAdmitted?: () => void;
 }
 
+export interface ProviderWorkerAttachmentStageInput {
+  readonly attachment: ChatAttachment;
+  readonly sourcePath: string;
+}
+
 export interface ProviderWorkerProvisionerShape {
   readonly start: (
     input: ProviderWorkerProvisionInput,
@@ -22,6 +27,10 @@ export interface ProviderWorkerProvisionerShape {
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
   readonly adopt: (
     binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly stageAttachments: (
+    binding: ProviderWorkerRuntimeBinding,
+    attachments: ReadonlyArray<ProviderWorkerAttachmentStageInput>,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,

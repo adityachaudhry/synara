@@ -23,6 +23,7 @@ import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
+import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -187,6 +188,38 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ),
       );
 
+  const stageRemoteAttachments = (
+    binding: ProviderWorkerRuntimeBinding,
+    attachments: Parameters<PiAdapterShape["sendTurn"]>[0]["attachments"],
+    operation: "turn.send" | "turn.steer",
+  ) =>
+    Effect.gen(function* () {
+      const staged = (attachments ?? []).flatMap((attachment) => {
+        if (attachment.type === "assistant-selection") return [];
+        const sourcePath = providerAttachmentStoragePath(attachment);
+        return sourcePath ? [{ attachment, sourcePath }] : [];
+      });
+      const fileCount = (attachments ?? []).filter(
+        (attachment) => attachment.type !== "assistant-selection",
+      ).length;
+      if (staged.length !== fileCount) {
+        return yield* adapterError(
+          `${operation}.attachments`,
+          "A claimed attachment lost its authorized storage path before sandbox staging.",
+        );
+      }
+      if (staged.length === 0) return;
+      yield* provisioner.stageAttachments(binding, staged).pipe(
+        Effect.mapError((cause) =>
+          adapterError(
+            `${operation}.attachments`,
+            "Failed to stage attachments in the remote Pi sandbox.",
+            cause,
+          ),
+        ),
+      );
+    });
+
   const withCapacityLaunchDeadline = <A, E, R>(
     launch: (onCapacityAdmitted: () => void) => Effect.Effect<A, E, R>,
   ) =>
@@ -322,32 +355,44 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     route(
       input.threadId,
       (binding) =>
-        requestDecoded(binding, "turn.send", input, ProviderTurnStartResult).pipe(
-          Effect.catch((cause) =>
-            provisioner.stop(binding).pipe(
-              Effect.tap(() =>
-                Effect.sync(() => {
-                  remoteByThread.delete(input.threadId);
-                }),
-              ),
-              Effect.mapError((cleanupCause) =>
-                adapterError(
-                  "turn.send.cleanup",
-                  "A remote Pi turn became uncertain and its sandbox could not be destroyed.",
-                  cleanupCause,
+        Effect.gen(function* () {
+          yield* stageRemoteAttachments(binding, input.attachments, "turn.send");
+          return yield* requestDecoded(
+            binding,
+            "turn.send",
+            input,
+            ProviderTurnStartResult,
+          ).pipe(
+            Effect.catch((cause) =>
+              provisioner.stop(binding).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    remoteByThread.delete(input.threadId);
+                  }),
                 ),
+                Effect.mapError((cleanupCause) =>
+                  adapterError(
+                    "turn.send.cleanup",
+                    "A remote Pi turn became uncertain and its sandbox could not be destroyed.",
+                    cleanupCause,
+                  ),
+                ),
+                Effect.andThen(Effect.fail(cause)),
               ),
-              Effect.andThen(Effect.fail(cause)),
             ),
-          ),
-        ),
+          );
+        }),
       local.sendTurn(input),
     );
 
   const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
     route(
       input.threadId,
-      (binding) => requestDecoded(binding, "turn.steer", input, ProviderTurnStartResult),
+      (binding) =>
+        Effect.gen(function* () {
+          yield* stageRemoteAttachments(binding, input.attachments, "turn.steer");
+          return yield* requestDecoded(binding, "turn.steer", input, ProviderTurnStartResult);
+        }),
       local.steerTurn
         ? local.steerTurn(input)
         : Effect.fail(adapterError("turn.steer", "Local Pi turn steering is unavailable.")),

@@ -26,21 +26,20 @@
 ### Task 1: Stage managed attachments into remote Pi workspaces
 
 **Files:**
-- Modify: `packages/contracts/src/providerWorker.ts`
 - Modify: `apps/server/src/provider/Layers/RoutedPiAdapter.ts`
-- Modify: `apps/server/src/providerWorker/workerDispatch.ts`
 - Modify: `apps/server/src/provider/providerAttachmentPaths.ts`
+- Modify: `apps/server/src/providerWorker/Services/ProviderWorkerProvisioner.ts`
+- Modify: `apps/server/src/providerWorker/Layers/ProviderWorkerProvisioner.ts`
 
 **Interfaces:**
 - Consumes: claimed managed attachment records and `WorkspaceRuntime.writeFile`.
-- Produces: a worker-only runtime attachment manifest containing attachment ID, sandbox path, byte size, and SHA-256.
+- Produces: authorized attachment bytes at the worker's existing canonical attachment path before `turn.send` or `turn.steer`.
 
-- [ ] Capture the current local failure by dropping a sentinel file into a real remote Pi thread and recording that Pi cannot read the bytes.
-- [ ] Add the minimal provider-worker manifest schema.
-- [ ] Stage bytes under a lifecycle-scoped workspace path using `WorkspaceRuntime.writeFile` and attach the manifest.
-- [ ] Make worker dispatch resolve only verified manifest paths and reject malformed paths, sizes, and hashes at the live boundary.
-- [ ] Repeat the real browser flow and prove Pi reads the sentinel while the company-data Git HEAD remains unchanged.
-- [ ] Exercise wrong-thread, stale-generation, and corrupted-manifest requests through the local API boundary and record the rejected outcomes.
+- [x] Capture the current local failure by dropping a sentinel file into a real remote Pi thread and recording that Pi cannot read the bytes.
+- [x] Expose the already-authorized attachment source path at the routed-adapter boundary.
+- [x] Copy bytes into the worker's existing attachment directory through `WorkspaceRuntime.writeFile` before `turn.send` or `turn.steer`.
+- [x] Keep the provider-worker protocol and Pi attachment resolver unchanged.
+- [x] Repeat the real browser flow and prove Pi reads the sentinel while the company-data Git HEAD remains unchanged.
 
 ### Task 2: Scope thread reads to the company project and retain authors
 

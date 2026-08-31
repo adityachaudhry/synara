@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { Cause, Effect, Exit, FileSystem, Layer } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
@@ -12,6 +13,7 @@ import {
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import { attachmentRelativePath } from "../../attachmentStore";
 import {
   makeRepositoryCredentialConfig,
   makeRepositoryCheckoutPlan,
@@ -52,6 +54,7 @@ function provisionError(operation: string, detail: string, cause: unknown, sandb
 export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisionerOptions) =>
   Effect.gen(function* () {
     const workspaceRuntime = yield* WorkspaceRuntime;
+    const fileSystem = yield* FileSystem.FileSystem;
     const broker = yield* ProviderWorkerBroker;
     const authority = yield* ProviderWorkerBootstrapAuthority;
     const lifecycleLock = makeKeyedLock<string>();
@@ -493,7 +496,49 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
-    return { start, restart, adopt, stop } satisfies ProviderWorkerProvisionerShape;
+    const stageAttachments: NonNullable<ProviderWorkerProvisionerShape["stageAttachments"]> = (
+      binding,
+      attachments,
+    ) =>
+      Effect.forEach(
+        attachments,
+        ({ attachment, sourcePath }) =>
+          fileSystem.readFile(sourcePath).pipe(
+            Effect.mapError((cause) =>
+              provisionError(
+                "attachment.read",
+                `Failed to read attachment '${attachment.id}' before sandbox staging.`,
+                cause,
+                binding.workspace.runtimeId,
+              ),
+            ),
+            Effect.flatMap((data) =>
+              workspaceRuntime.writeFile(binding.workspace, {
+                path: path.posix.join(
+                  binding.homeDir,
+                  "state",
+                  "attachments",
+                  attachmentRelativePath(attachment),
+                ),
+                data,
+                mode: 0o600,
+              }),
+            ),
+            Effect.mapError((cause) =>
+              cause instanceof ProviderWorkerProvisioningError
+                ? cause
+                : provisionError(
+                    "attachment.write",
+                    `Failed to stage attachment '${attachment.id}' in the provider sandbox.`,
+                    cause,
+                    binding.workspace.runtimeId,
+                  ),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+
+    return { start, restart, adopt, stageAttachments, stop } satisfies ProviderWorkerProvisionerShape;
   });
 
 export function makeProviderWorkerProvisionerLive(options: ProviderWorkerProvisionerOptions) {
@@ -567,5 +612,13 @@ export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerPro
       ),
     ),
   adopt: () => Effect.void,
+  stageAttachments: () =>
+    Effect.fail(
+      provisionError(
+        "attachment.write",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
   stop: () => Effect.void,
 } satisfies ProviderWorkerProvisionerShape);

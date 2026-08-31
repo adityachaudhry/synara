@@ -36,6 +36,11 @@ function markedStoragePath(attachment: unknown): string | null {
   return typeof storagePath === "string" && storagePath.length > 0 ? storagePath : null;
 }
 
+/** Return the server-authorized storage path without falling back to a derived legacy path. */
+export function providerAttachmentStoragePath(attachment: ChatAttachment): string | null {
+  return markedStoragePath(attachment);
+}
+
 function withStoragePath(attachment: ChatAttachment, storagePath: string): ChatAttachment {
   const resolved = { ...attachment } as ProviderResolvedAttachment;
   Object.defineProperty(resolved, PROVIDER_ATTACHMENT_STORAGE_PATH, {

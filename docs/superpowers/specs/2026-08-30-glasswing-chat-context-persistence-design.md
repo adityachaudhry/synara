@@ -15,7 +15,7 @@ Let Glasswing users discuss transient files with Pi, let Pi read other normal th
 
 ## Slice 1: Ephemeral File Chat
 
-The existing composer uploads bytes to Synara's managed attachment store and claims them to the message. Before a remote Pi turn, Synara stages claimed bytes into the bound execution workspace. A worker-only manifest carries the sandbox path, content hash, and size. The worker verifies the manifest and gives Pi the sandbox-local path.
+The existing composer uploads bytes to Synara's managed attachment store and claims them to the message. Before a remote Pi turn, Synara copies each already-authorized blob into the bound execution workspace's existing attachment directory. Local and remote Pi then use the same deterministic attachment-path resolver and the existing serialized attachment metadata; no second attachment protocol is introduced.
 
 ```mermaid
 sequenceDiagram
@@ -28,14 +28,14 @@ sequenceDiagram
     User->>UI: Drop file and send
     UI->>Control: Upload bytes and send attachment ID
     Control->>Store: Claim and read bytes
-    Control->>Workspace: Stage bytes with hash
-    Control->>Workspace: Send turn with runtime manifest
-    Workspace->>Pi: Invoke with sandbox-local path
+    Control->>Workspace: Stage bytes at the canonical attachment path
+    Control->>Workspace: Send turn with existing attachment metadata
+    Workspace->>Pi: Resolve the same sandbox-local path
     Pi-->>User: Answer from file
     Note over Control,Store: No Git write
 ```
 
-Staging is idempotent for attachment ID plus lifecycle generation. A wrong owner, stale generation, size mismatch, hash mismatch, traversal attempt, or unavailable file stops the turn.
+Attachment IDs are unique and staging is idempotent within the thread sandbox. A wrong owner, missing authorized source path, unavailable file, or failed sandbox write stops the turn before Pi starts.
 
 ## Slice 2: Company Thread Context
 
