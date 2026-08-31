@@ -29,6 +29,7 @@ import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActi
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
 import { useDeviceSupport } from "../../hooks/useDeviceSupport";
+import { useAgentFilePanelRequests } from "../../hooks/useAgentFilePanelRequests";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
   addChatFileComment,
@@ -557,6 +558,19 @@ export function SingleChatSurface(props: {
     prefetchFile: prefetchOpenerFile,
   };
 
+  useAgentFilePanelRequests({
+    threadId: props.threadId,
+    onOpenFile: (path) => {
+      if (!dockFileOpener.openFile(path)) {
+        toastManager.add({
+          type: "error",
+          title: "Could not open file",
+          description: "The requested file is outside this thread's workspace.",
+        });
+      }
+    },
+  });
+
   const handleSplitSurface = () => {
     if (!props.projectId) return;
     const splitViewId = createSplitView({
@@ -1000,7 +1014,7 @@ export function SingleChatSurface(props: {
         if (hostSidebar?.renderFilePane && pane.filePath) {
           return (
             <div className="h-full min-h-0 w-full overflow-hidden">
-              {hostSidebar.renderFilePane(pane.filePath)}
+              {hostSidebar.renderFilePane(pane.filePath, { threadId: props.threadId })}
             </div>
           );
         }

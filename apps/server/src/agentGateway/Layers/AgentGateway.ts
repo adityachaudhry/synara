@@ -64,7 +64,11 @@ import {
   readRecordArg,
   readStringArg,
 } from "../toolInput.ts";
-import { WRITE_TOOL_ANNOTATIONS, type ToolEntry } from "../toolRuntime.ts";
+import {
+  READ_ONLY_TOOL_ANNOTATIONS,
+  WRITE_TOOL_ANNOTATIONS,
+  type ToolEntry,
+} from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
@@ -540,6 +544,42 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const openFileInPanel: ToolEntry = {
+    requiredCapability: "thread:read",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_open_file",
+      description:
+        "Open a repository or Outbox file in the current thread's right-side file panel. Use only when the user explicitly asks to open, show, or preview a file. Pass the exact path; do not pass a thread id.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description:
+              "Exact repository-relative path or absolute /workspace/repository/... or /workspace/.synara/outbox/... path.",
+            maxLength: 4096,
+          },
+        },
+        required: ["path"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Open file in side panel", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const path = readStringArg(args, "path", { required: true })!;
+        if (path.length > 4096 || path.includes("\0")) {
+          return yield* Effect.fail(new ToolInputError("The file path is invalid."));
+        }
+        return mcpToolResultJson({
+          threadId: context.callerThreadId,
+          path,
+          openRequested: true,
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const setThreadTitle: ToolEntry = {
     requiredCapability: "thread:write",
     requiresActiveTurn: true,
@@ -756,6 +796,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     createThread,
     sendMessage,
     interruptThread,
+    openFileInPanel,
     setThreadTitle,
     setThreadArchived,
     setThreadGoal,

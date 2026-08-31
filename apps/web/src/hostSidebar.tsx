@@ -53,6 +53,10 @@ export interface SynaraHostPersistenceResult {
   readonly synchronized: boolean;
 }
 
+export interface SynaraHostFilePaneContext {
+  readonly threadId: string;
+}
+
 export interface SynaraHostSidebar {
   readonly widthPx: number;
   readonly viewportHeightOffsetPx?: number;
@@ -63,7 +67,7 @@ export interface SynaraHostSidebar {
   readonly simplifiedComposer?: boolean;
   readonly chatFontSizePx?: number;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
-  readonly renderFilePane?: (filePath: string) => ReactNode;
+  readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,
   ) => Promise<SynaraHostPersistenceResult | null>;
