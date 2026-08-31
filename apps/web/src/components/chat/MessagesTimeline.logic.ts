@@ -789,6 +789,16 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
+      // A steering message is an in-turn correction, not a new response
+      // boundary. Keep its bubble visible while folding the narration and
+      // tools that preceded it into the eventual terminal answer's disclosure.
+      if (
+        prev.kind === "message" &&
+        prev.message.role === "user" &&
+        prev.message.dispatchMode === "steer"
+      ) {
+        continue;
+      }
       if (prev.kind === "proposed-plan") {
         // The plan card stays visible, but it should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
