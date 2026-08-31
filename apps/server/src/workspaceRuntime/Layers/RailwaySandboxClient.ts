@@ -57,6 +57,9 @@ export interface RailwaySdkSandboxFiles {
     data: string | Uint8Array,
     options?: { readonly mode?: number },
   ) => PromiseLike<void>;
+  readonly read?: Sandbox["files"]["read"];
+  readonly list?: Sandbox["files"]["list"];
+  readonly stat?: Sandbox["files"]["stat"];
 }
 
 export interface RailwaySdkSandbox {
@@ -281,6 +284,45 @@ export function makeRailwaySandboxClient(
       ),
     );
 
+  const readFile: NonNullable<RailwaySandboxClientShape["readFile"]> = (runtimeId, path) =>
+    load(runtimeId).pipe(
+      Effect.flatMap((sandbox) =>
+        Effect.tryPromise({
+          try: () => {
+            if (!sandbox.files.read) throw new Error("Railway file reads are unavailable.");
+            return sandbox.files.read(path, { format: "bytes" });
+          },
+          catch: (cause) => clientFailure(sdk, "readFile", runtimeId, cause),
+        }),
+      ),
+    );
+
+  const listFiles: NonNullable<RailwaySandboxClientShape["listFiles"]> = (runtimeId, path) =>
+    load(runtimeId).pipe(
+      Effect.flatMap((sandbox) =>
+        Effect.tryPromise({
+          try: () => {
+            if (!sandbox.files.list) throw new Error("Railway directory listing is unavailable.");
+            return sandbox.files.list(path);
+          },
+          catch: (cause) => clientFailure(sdk, "listFiles", runtimeId, cause),
+        }),
+      ),
+    );
+
+  const statFile: NonNullable<RailwaySandboxClientShape["statFile"]> = (runtimeId, path) =>
+    load(runtimeId).pipe(
+      Effect.flatMap((sandbox) =>
+        Effect.tryPromise({
+          try: () => {
+            if (!sandbox.files.stat) throw new Error("Railway file stat is unavailable.");
+            return sandbox.files.stat(path);
+          },
+          catch: (cause) => clientFailure(sdk, "statFile", runtimeId, cause),
+        }),
+      ),
+    );
+
   const startDurableProcess: RailwaySandboxClientShape["startDurableProcess"] = (
     runtimeId,
     input,
@@ -388,6 +430,9 @@ export function makeRailwaySandboxClient(
     connect,
     exec,
     writeFile,
+    readFile,
+    listFiles,
+    statFile,
     startDurableProcess,
     stopDurableProcess,
     destroy,

@@ -94,7 +94,7 @@ Destinations are `inbox/uploads/chat/<attachment-id>/` for user files, `analysis
 
 ## Slice 4: Persist Sandbox Work
 
-At turn completion Synara lists the current thread's Outbox and Git file changes. The user selects complete files. At confirmation Synara revalidates lifecycle generation, path, type, size, and hash; Glasswing then sends those bytes through the Slice 3 writer and reconciliation path.
+When the user opens Files, Synara lists the current thread's Outbox and Git file changes from its live Railway sandbox. The user selects complete files. At confirmation Glasswing refreshes the canonical list, and Synara revalidates lifecycle generation, path, regular-file type, size, and hash before returning each selected byte stream through the Slice 3 writer and reconciliation path.
 
 ```mermaid
 sequenceDiagram
@@ -106,9 +106,10 @@ sequenceDiagram
     participant Persistence as Slice 3 persistence path
     User->>Pi: Create persistent work
     Pi->>Sandbox: Write Outbox artifact or edit checkout
-    Sandbox-->>Synara: Turn completes
-    Synara->>Sandbox: List bounded candidates
-    Synara-->>UI: Paths, sizes, and hashes
+    User->>UI: Open Files
+    UI->>Synara: List this thread's candidates
+    Synara->>Sandbox: List and hash bounded candidates
+    Synara-->>UI: Generation, paths, sizes, and hashes
     User->>UI: Select complete files
     UI->>Synara: Confirm generation and hashes
     Synara->>Sandbox: Revalidate and read selected bytes
@@ -116,7 +117,7 @@ sequenceDiagram
     Persistence-->>UI: Commit SHA and file results
 ```
 
-The Railway SDK's existing file read, list, and stat operations are exposed through WorkspaceRuntime. Existing Studio output capture is generalized; no sync daemon or candidate database is introduced. Symlinks, traversal, stale generations, oversized content, and paths outside the checkout or Outbox are rejected.
+The Railway SDK's existing file read, list, and stat operations are exposed through WorkspaceRuntime. The selector is mounted above Glasswing's existing repository explorer; no sync daemon, push channel, Studio coupling, or candidate database is introduced. Selected checkout changes are stashed by exact path before fast-forwarding and discarded only after success; selected Outbox sources are removed only after the same success. If an unrelated local path overlaps a newer remote commit, Git refuses the merge and the source bytes, HEAD, and other dirty paths remain untouched. Symlinks, traversal, stale generations, changed hashes, missing files, oversized content, and paths outside the checkout or Outbox are rejected.
 
 ## Local Gate
 

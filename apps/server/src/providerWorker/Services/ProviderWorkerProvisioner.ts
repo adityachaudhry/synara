@@ -1,6 +1,11 @@
 import { ServiceMap, type Effect } from "effect";
 import type { ChatAttachment, ProjectRepositoryBinding, ThreadId } from "@synara/contracts";
 import type { AgentGatewayMcpConnection } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import type {
+  ProviderPersistenceCandidateList,
+  ProviderPersistenceCandidateSelection,
+  ProviderPersistenceFile,
+} from "../../providerPersistence.ts";
 
 import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
@@ -37,7 +42,15 @@ export interface ProviderWorkerProvisionerShape {
   readonly reconcileRepository: (
     binding: ProviderWorkerRuntimeBinding,
     commit: string,
+    persistedFiles?: ReadonlyArray<ProviderPersistenceCandidateSelection>,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
+  readonly listPersistenceCandidates: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<ProviderPersistenceCandidateList, ProviderWorkerProvisioningError>;
+  readonly readPersistenceCandidate: (
+    binding: ProviderWorkerRuntimeBinding,
+    selection: ProviderPersistenceCandidateSelection,
+  ) => Effect.Effect<ProviderPersistenceFile, ProviderWorkerProvisioningError>;
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;

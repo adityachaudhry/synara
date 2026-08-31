@@ -18,7 +18,34 @@ export type SynaraHostPersistenceRequest =
       readonly kind: "thread";
       readonly threadId: string;
       readonly displayLabel: string;
+    }
+  | {
+      readonly kind: "sandbox-files";
+      readonly threadId: string;
+      readonly lifecycleGeneration: string;
+      readonly files: ReadonlyArray<{
+        readonly source: "outbox" | "checkout";
+        readonly path: string;
+        readonly sha256: string;
+      }>;
+      readonly displayLabel: string;
     };
+
+export interface SynaraHostPersistenceCandidate {
+  readonly source: "outbox" | "checkout";
+  readonly path: string;
+  readonly destinationPath: string;
+  readonly name: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: string;
+  readonly sha256: string;
+}
+
+export interface SynaraHostPersistenceCandidateList {
+  readonly runtimeId: string;
+  readonly lifecycleGeneration: string;
+  readonly entries: ReadonlyArray<SynaraHostPersistenceCandidate>;
+}
 
 export interface SynaraHostPersistenceResult {
   readonly commitSha: string;
@@ -40,6 +67,9 @@ export interface SynaraHostSidebar {
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,
   ) => Promise<SynaraHostPersistenceResult | null>;
+  readonly listSandboxPersistenceCandidates?: (
+    threadId: string,
+  ) => Promise<SynaraHostPersistenceCandidateList>;
   readonly header?: ReactNode;
   readonly footer?: ReactNode;
 }

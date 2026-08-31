@@ -43,6 +43,11 @@ import type {
 } from "@synara/contracts";
 import type { Effect } from "effect";
 import type { Stream } from "effect";
+import type {
+  ProviderPersistenceCandidateList,
+  ProviderPersistenceCandidateSelection,
+  ProviderPersistenceFile,
+} from "../../providerPersistence.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
 
@@ -129,7 +134,20 @@ export interface ProviderAdapterShape<TError> {
   readonly reconcileRepository?: (
     threadId: ThreadId,
     commit: string,
+    persistedFiles?: ReadonlyArray<ProviderPersistenceCandidateSelection>,
   ) => Effect.Effect<ProviderRepositoryReconcileResult, TError>;
+
+  /** List complete, user-reviewable files in a repository-bound provider sandbox. */
+  readonly listPersistenceCandidates?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderPersistenceCandidateList, TError>;
+
+  /** Revalidate and read one candidate selected by the user. */
+  readonly readPersistenceCandidate?: (
+    threadId: ThreadId,
+    lifecycleGeneration: string,
+    selection: ProviderPersistenceCandidateSelection,
+  ) => Effect.Effect<ProviderPersistenceFile, TError>;
 
   /**
    * Redirect an active turn toward a new prompt when the provider supports it.

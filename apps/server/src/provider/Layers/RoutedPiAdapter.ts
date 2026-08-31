@@ -431,33 +431,82 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       local.sendTurn(input),
     );
 
+  const requireIdleRepositoryBinding = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    operation: string,
+  ) {
+    const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
+    if (!binding?.repositoryCheckout) {
+      return yield* adapterError(
+        operation,
+        "The Pi session does not have a repository-bound sandbox.",
+      );
+    }
+    const sessions = yield* requestDecoded(
+      binding,
+      "session.list",
+      {},
+      Schema.Array(ProviderSession),
+    );
+    const session = sessions.find((candidate) => candidate.threadId === threadId);
+    if (session?.activeTurnId !== undefined || session?.status === "running") {
+      return yield* adapterError(
+        operation,
+        "Wait for the active Pi turn to finish before accessing sandbox files.",
+      );
+    }
+    return binding;
+  });
+
+  const listPersistenceCandidates: NonNullable<PiAdapterShape["listPersistenceCandidates"]> =
+    (threadId) =>
+      Effect.gen(function* () {
+        const binding = yield* requireIdleRepositoryBinding(threadId, "persistence.list");
+        return yield* provisioner.listPersistenceCandidates(binding).pipe(
+          Effect.mapError((cause) =>
+            adapterError(
+              "persistence.list",
+              "The sandbox files available to save could not be listed.",
+              cause,
+            ),
+          ),
+        );
+      });
+
+  const readPersistenceCandidate: NonNullable<PiAdapterShape["readPersistenceCandidate"]> =
+    (threadId, lifecycleGeneration, selection) =>
+      Effect.gen(function* () {
+        const binding = yield* requireIdleRepositoryBinding(threadId, "persistence.read");
+        if (binding.fence.lifecycleGeneration !== lifecycleGeneration) {
+          return yield* adapterError(
+            "persistence.read",
+            "The sandbox changed after these files were reviewed. Refresh and select them again.",
+          );
+        }
+        return yield* provisioner.readPersistenceCandidate(binding, selection).pipe(
+          Effect.mapError((cause) =>
+            adapterError(
+              "persistence.read",
+              "The selected sandbox file could not be read safely.",
+              cause,
+            ),
+          ),
+        );
+      });
+
   const reconcileRepository: NonNullable<PiAdapterShape["reconcileRepository"]> = (
     threadId,
     commit,
+    persistedFiles = [],
   ) =>
     Effect.gen(function* () {
-      const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
-      if (!binding?.repositoryCheckout) {
-        return yield* adapterError(
-          "repository.reconcile",
-          "The Pi session does not have a repository-bound sandbox.",
-        );
-      }
-      const sessions = yield* requestDecoded(
-        binding,
-        "session.list",
-        {},
-        Schema.Array(ProviderSession),
-      );
-      const session = sessions.find((candidate) => candidate.threadId === threadId);
-      if (session?.activeTurnId !== undefined || session?.status === "running") {
-        return yield* adapterError(
-          "repository.reconcile",
-          "Wait for the active Pi turn to finish before saving.",
-        );
-      }
+      const binding = yield* requireIdleRepositoryBinding(threadId, "repository.reconcile");
       const previousCommit = binding.repositoryCheckout.commit;
-      const reconciled = yield* provisioner.reconcileRepository(binding, commit).pipe(
+      const reconciled = yield* provisioner.reconcileRepository(
+        binding,
+        commit,
+        persistedFiles,
+      ).pipe(
         Effect.mapError((cause) =>
           adapterError(
             "repository.reconcile",
@@ -652,6 +701,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     startSession,
     sendTurn,
     reconcileRepository,
+    listPersistenceCandidates,
+    readPersistenceCandidate,
     steerTurn,
     interruptTurn,
     respondToRequest,

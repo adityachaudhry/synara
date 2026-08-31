@@ -494,6 +494,60 @@ export function makeWorkspaceRuntimeLive(
           Effect.mapError(toRuntimeError("writeFile", binding.runtimeId)),
         );
 
+      const readFile: NonNullable<WorkspaceRuntimeShape["readFile"]> = (binding, path) =>
+        requireEnabled(config, "readFile").pipe(
+          Effect.flatMap(() => {
+            if (!client.readFile) {
+              return Effect.fail(
+                new WorkspaceRuntimeError({
+                  operation: "readFile",
+                  detail: "Railway file reads are unavailable.",
+                  runtimeId: binding.runtimeId,
+                }),
+              );
+            }
+            return client
+              .readFile(binding.runtimeId, path)
+              .pipe(Effect.mapError(toRuntimeError("readFile", binding.runtimeId)));
+          }),
+        );
+
+      const listFiles: NonNullable<WorkspaceRuntimeShape["listFiles"]> = (binding, path) =>
+        requireEnabled(config, "listFiles").pipe(
+          Effect.flatMap(() => {
+            if (!client.listFiles) {
+              return Effect.fail(
+                new WorkspaceRuntimeError({
+                  operation: "listFiles",
+                  detail: "Railway directory listing is unavailable.",
+                  runtimeId: binding.runtimeId,
+                }),
+              );
+            }
+            return client
+              .listFiles(binding.runtimeId, path)
+              .pipe(Effect.mapError(toRuntimeError("listFiles", binding.runtimeId)));
+          }),
+        );
+
+      const statFile: NonNullable<WorkspaceRuntimeShape["statFile"]> = (binding, path) =>
+        requireEnabled(config, "statFile").pipe(
+          Effect.flatMap(() => {
+            if (!client.statFile) {
+              return Effect.fail(
+                new WorkspaceRuntimeError({
+                  operation: "statFile",
+                  detail: "Railway file stat is unavailable.",
+                  runtimeId: binding.runtimeId,
+                }),
+              );
+            }
+            return client
+              .statFile(binding.runtimeId, path)
+              .pipe(Effect.mapError(toRuntimeError("statFile", binding.runtimeId)));
+          }),
+        );
+
       const startDurableProcess: WorkspaceRuntimeShape["startDurableProcess"] = (
         binding,
         input,
@@ -562,6 +616,9 @@ export function makeWorkspaceRuntimeLive(
         adopt,
         exec,
         writeFile,
+        readFile,
+        listFiles,
+        statFile,
         startDurableProcess,
         stopDurableProcess,
         keepAlive,

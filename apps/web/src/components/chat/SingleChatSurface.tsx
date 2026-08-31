@@ -94,6 +94,7 @@ import {
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
+import { SandboxPersistencePanel } from "./SandboxPersistencePanel";
 import { RightDock } from "./RightDock";
 import { getRightDockPaneMeta, resolveRightDockLauncherItems } from "./rightDockPaneMeta";
 import {
@@ -977,7 +978,12 @@ export function SingleChatSurface(props: {
             typeof hostSidebar.filesPane === "function"
               ? hostSidebar.filesPane(handleOpenWorkspaceSearchFile)
               : hostSidebar.filesPane;
-          return <div className="h-full min-h-0 w-full overflow-hidden">{filesPane}</div>;
+          return (
+            <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+              <SandboxPersistencePanel threadId={props.threadId} />
+              <div className="min-h-0 flex-1 overflow-hidden">{filesPane}</div>
+            </div>
+          );
         }
         return (
           <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>

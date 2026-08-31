@@ -13,6 +13,10 @@ import {
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import {
+  listProviderPersistenceCandidates,
+  readProviderPersistenceCandidate,
+} from "../persistenceCandidates";
 import { attachmentRelativePath } from "../../attachmentStore";
 import {
   makeRepositoryCredentialConfig,
@@ -565,6 +569,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const reconcileRepository: ProviderWorkerProvisionerShape["reconcileRepository"] = (
       binding,
       commit,
+      persistedFiles = [],
     ) =>
       Effect.gen(function* () {
         const repositoryBinding = binding.repositoryCheckout?.binding;
@@ -576,11 +581,18 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             binding.workspace.runtimeId,
           );
         }
+        yield* Effect.forEach(
+          persistedFiles,
+          (selection) =>
+            readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
+          { concurrency: 1, discard: true },
+        );
         const plan = yield* Effect.try({
           try: () =>
             makeRepositoryReconcilePlan({
               binding: repositoryBinding,
               commit,
+              persistedFiles,
               credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH,
             }),
           catch: (cause) =>
@@ -678,12 +690,44 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const listPersistenceCandidates: ProviderWorkerProvisionerShape["listPersistenceCandidates"] =
+      (binding) =>
+        listProviderPersistenceCandidates({ workspaceRuntime, binding }).pipe(
+          Effect.mapError((cause) =>
+            cause instanceof ProviderWorkerProvisioningError
+              ? cause
+              : provisionError(
+                  "persistence.list",
+                  "Failed to list sandbox files available to save.",
+                  cause,
+                  binding.workspace.runtimeId,
+                ),
+          ),
+        );
+
+    const readPersistenceCandidate: ProviderWorkerProvisionerShape["readPersistenceCandidate"] =
+      (binding, selection) =>
+        readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }).pipe(
+          Effect.mapError((cause) =>
+            cause instanceof ProviderWorkerProvisioningError
+              ? cause
+              : provisionError(
+                  "persistence.read",
+                  "Failed to read the selected sandbox file.",
+                  cause,
+                  binding.workspace.runtimeId,
+                ),
+          ),
+        );
+
     return {
       start,
       restart,
       adopt,
       stageAttachments,
       reconcileRepository,
+      listPersistenceCandidates,
+      readPersistenceCandidate,
       stop,
     } satisfies ProviderWorkerProvisionerShape;
   });
@@ -771,6 +815,22 @@ export const ProviderWorkerProvisionerDisabled = Layer.succeed(ProviderWorkerPro
     Effect.fail(
       provisionError(
         "repository.reconcile",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  listPersistenceCandidates: () =>
+    Effect.fail(
+      provisionError(
+        "persistence.list",
+        "Railway distributed Pi is selected but the sandbox runtime is not configured.",
+        undefined,
+      ),
+    ),
+  readPersistenceCandidate: () =>
+    Effect.fail(
+      provisionError(
+        "persistence.read",
         "Railway distributed Pi is selected but the sandbox runtime is not configured.",
         undefined,
       ),

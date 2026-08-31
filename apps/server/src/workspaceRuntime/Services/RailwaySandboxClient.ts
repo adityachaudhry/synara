@@ -1,9 +1,6 @@
 import { ServiceMap, type Effect } from "effect";
 
-import type {
-  RailwaySandboxClientError,
-  RailwaySandboxNotFoundError,
-} from "../Errors";
+import type { RailwaySandboxClientError, RailwaySandboxNotFoundError } from "../Errors";
 
 export type RailwaySandboxStatus =
   | "CREATING"
@@ -47,6 +44,14 @@ export interface RailwaySandboxWriteFileInput {
   readonly mode?: number;
 }
 
+export interface RailwaySandboxFileEntry {
+  readonly name: string;
+  readonly size: number;
+  readonly mode: number;
+  readonly isDir: boolean;
+  readonly modTime: string;
+}
+
 export interface RailwaySandboxDurableProcessInput {
   readonly command: string;
   readonly cwd?: string;
@@ -57,9 +62,7 @@ export interface RailwaySandboxDurableProcess {
   readonly supervision: "durable" | "attached";
 }
 
-export type RailwaySandboxClientFailure =
-  | RailwaySandboxClientError
-  | RailwaySandboxNotFoundError;
+export type RailwaySandboxClientFailure = RailwaySandboxClientError | RailwaySandboxNotFoundError;
 
 export interface RailwaySandboxClientShape {
   readonly create: (
@@ -76,6 +79,19 @@ export interface RailwaySandboxClientShape {
     runtimeId: string,
     input: RailwaySandboxWriteFileInput,
   ) => Effect.Effect<void, RailwaySandboxClientFailure>;
+  /** Optional only so lightweight non-Railway fakes do not need filesystem plumbing. */
+  readonly readFile?: (
+    runtimeId: string,
+    path: string,
+  ) => Effect.Effect<Uint8Array, RailwaySandboxClientFailure>;
+  readonly listFiles?: (
+    runtimeId: string,
+    path: string,
+  ) => Effect.Effect<ReadonlyArray<RailwaySandboxFileEntry>, RailwaySandboxClientFailure>;
+  readonly statFile?: (
+    runtimeId: string,
+    path: string,
+  ) => Effect.Effect<RailwaySandboxFileEntry, RailwaySandboxClientFailure>;
   readonly startDurableProcess: (
     runtimeId: string,
     input: RailwaySandboxDurableProcessInput,
@@ -84,9 +100,7 @@ export interface RailwaySandboxClientShape {
     runtimeId: string,
     sessionName: string,
   ) => Effect.Effect<void, RailwaySandboxClientFailure>;
-  readonly destroy: (
-    runtimeId: string,
-  ) => Effect.Effect<void, RailwaySandboxClientFailure>;
+  readonly destroy: (runtimeId: string) => Effect.Effect<void, RailwaySandboxClientFailure>;
   readonly findByCreateOperationId: (
     operationId: string,
   ) => Effect.Effect<string | null, RailwaySandboxClientFailure>;

@@ -1,10 +1,14 @@
 import path from "node:path";
 
 import type { ProjectRepositoryBinding } from "@synara/contracts";
+import {
+  isProviderPersistencePathSafe,
+  PROVIDER_PERSISTENCE_OUTBOX_ROOT,
+  type ProviderPersistenceCandidateSelection,
+} from "../providerPersistence.ts";
 
 export const REPOSITORY_CHECKOUT_ROOT = "/workspace/repository";
-export const REPOSITORY_CREDENTIAL_CONFIG_PATH =
-  "/tmp/synara-repository-credential.gitconfig";
+export const REPOSITORY_CREDENTIAL_CONFIG_PATH = "/tmp/synara-repository-credential.gitconfig";
 
 const COMMIT_MARKER = "__SYNARA_CHECKOUT_COMMIT__=";
 const CHECKOUT_MODE_MARKER = "__SYNARA_CHECKOUT_MODE__=";
@@ -58,6 +62,7 @@ export function makeRepositoryCheckoutPlan(input: {
 export function makeRepositoryReconcilePlan(input: {
   readonly binding: ProjectRepositoryBinding;
   readonly commit: string;
+  readonly persistedFiles?: ReadonlyArray<ProviderPersistenceCandidateSelection>;
   readonly credentialConfigPath?: string;
   readonly checkoutRoot?: string;
 }) {
@@ -70,14 +75,40 @@ export function makeRepositoryReconcilePlan(input: {
   const authenticatedGit = input.credentialConfigPath
     ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
     : `GIT_TERMINAL_PROMPT=0 ${git}`;
+  const persistedFiles = input.persistedFiles ?? [];
+  if (persistedFiles.some((file) => !isProviderPersistencePathSafe(file.path))) {
+    throw new Error("Repository reconciliation received an unsafe persisted path.");
+  }
+  const checkoutPathspecs = persistedFiles
+    .filter((file) => file.source === "checkout")
+    .map((file) => path.posix.join(input.binding.path, file.path));
+  const outboxPaths = persistedFiles
+    .filter((file) => file.source === "outbox")
+    .map((file) => path.posix.join(PROVIDER_PERSISTENCE_OUTBOX_ROOT, file.path));
+  const stashSelected =
+    checkoutPathspecs.length === 0
+      ? "stash_created=0"
+      : [
+          `stash_before="$(${git} rev-parse -q --verify refs/stash || true)"`,
+          `${git} stash push --include-untracked --message ${shellQuote(`synara-persist-${input.commit.slice(0, 12)}`)} -- ${checkoutPathspecs.map(shellQuote).join(" ")} >/dev/null`,
+          `stash_after="$(${git} rev-parse -q --verify refs/stash || true)"`,
+          `if [ "$stash_after" != "$stash_before" ]; then stash_created=1; else stash_created=0; fi`,
+        ].join("; ");
+  const restoreSelectedOnFailure = `if [ "$stash_created" = 1 ]; then ${git} stash pop --index --quiet >/dev/null 2>&1 || true; fi`;
+  const discardSelectedOnSuccess = `if [ "$stash_created" = 1 ]; then ${git} stash drop --quiet 'stash@{0}' >/dev/null 2>&1 || true; fi`;
+  const cleanupOutbox =
+    outboxPaths.length === 0 ? ":" : `rm -f -- ${outboxPaths.map(shellQuote).join(" ")}`;
   const command = [
     "set -eu",
     `previous="$(${git} rev-parse HEAD)"`,
     `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.commit)}`,
-    `${authenticatedGit} merge --ff-only --no-edit FETCH_HEAD`,
+    stashSelected,
+    `if ! ${authenticatedGit} merge --ff-only --no-edit FETCH_HEAD; then ${restoreSelectedOnFailure}; exit 1; fi`,
+    discardSelectedOnSuccess,
+    cleanupOutbox,
     `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
-  ].join(" && ");
+  ].join("; ");
   return { command, cwd: path.posix.join(checkoutRoot, input.binding.path) } as const;
 }
 

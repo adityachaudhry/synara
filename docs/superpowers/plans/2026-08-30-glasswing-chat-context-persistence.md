@@ -26,12 +26,14 @@
 ### Task 1: Stage managed attachments into remote Pi workspaces
 
 **Files:**
+
 - Modify: `apps/server/src/provider/Layers/RoutedPiAdapter.ts`
 - Modify: `apps/server/src/provider/providerAttachmentPaths.ts`
 - Modify: `apps/server/src/providerWorker/Services/ProviderWorkerProvisioner.ts`
 - Modify: `apps/server/src/providerWorker/Layers/ProviderWorkerProvisioner.ts`
 
 **Interfaces:**
+
 - Consumes: claimed managed attachment records and `WorkspaceRuntime.writeFile`.
 - Produces: authorized attachment bytes at the worker's existing canonical attachment path before `turn.send` or `turn.steer`.
 
@@ -44,6 +46,7 @@
 ### Task 2: Scope thread reads to the company project and retain authors
 
 **Files:**
+
 - Modify: `packages/contracts/src/orchestration.ts`
 - Add: `apps/server/src/persistence/Migrations/099_ProjectionMessageAuthors.ts`
 - Modify: `apps/server/src/orchestration/projector.ts`
@@ -59,6 +62,7 @@
 - Modify: `apps/server/src/providerWorker/workerMain.ts`
 
 **Interfaces:**
+
 - Consumes: the authenticated session subject/email already present at the external WebSocket boundary, the caller thread ID already present in Agent Gateway context, and the worker's consumed bootstrap config.
 - Produces: remote Pi read-only Gateway tools, optional visible author metadata on user messages, and project-filtered list/read results.
 
@@ -72,6 +76,7 @@
 ### Task 3: Persist attachments, responses, and complete threads
 
 **Files:**
+
 - Modify: Glasswing `packages/git_storage/models.py`
 - Modify: Glasswing `packages/git_storage/repository.py`
 - Modify: Glasswing `packages/api/app.py`
@@ -85,6 +90,7 @@
 - Modify: Synara provider-worker provisioner/runtime binding to invoke reconciliation
 
 **Interfaces:**
+
 - Consumes: a versioned Synara source reference, deterministic company-relative destination, authenticated Glasswing company context, and current sandbox binding.
 - Produces: a Gitea commit SHA, committed paths, and an idempotent in-place reconciliation result.
 
@@ -100,30 +106,35 @@
 ### Task 4: Persist selected Outbox and checkout files
 
 **Files:**
+
 - Modify: `apps/server/src/workspaceRuntime/Services/WorkspaceRuntime.ts`
 - Modify: `apps/server/src/workspaceRuntime/Layers/WorkspaceRuntime.ts`
-- Modify: `apps/server/src/orchestration/Layers/StudioOutputReactor.ts`
-- Modify: embedded environment/output review components
+- Add: `apps/server/src/providerWorker/persistenceCandidates.ts`
+- Modify: embedded Files-pane review components
 - Modify: Glasswing persistence request handling from Task 3 only as required for sandbox sources
 
 **Interfaces:**
+
 - Consumes: Railway Sandbox SDK file `read`, `list`, and `stat`, lifecycle generation, current checkout status, and Slice 3 persistence.
 - Produces: bounded file candidates with stable hashes and selected source bytes revalidated at confirmation.
 
-- [ ] Capture a real turn that creates an Outbox artifact and checkout edit that the current UI cannot persist.
-- [ ] Expose only those existing SDK operations.
-- [ ] Generalize existing output capture and return path, size, type, and hash.
-- [ ] Route selected files through Task 3, keeping unselected files untouched.
-- [ ] Repeat the real turn and prove selected files persist, unselected files remain transient, saved paths reconcile cleanly, and unrelated dirty paths survive.
-- [ ] Exercise symlink, traversal, changed-generation, changed-hash, missing-file, and oversized-file cases through the live local boundary and record rejection.
+- [x] Capture a real turn that creates an Outbox artifact and checkout edit that the current UI cannot persist.
+- [x] Expose only Railway's existing SDK read, list, and stat operations.
+- [x] Return bounded path, size, modification time, generation, and SHA-256 metadata in the existing Files pane.
+- [x] Route selected files through Task 3, keeping unselected files untouched.
+- [x] Prove exact committed bytes, selected-source cleanup, same-session continuation, and preservation of unselected dirty paths.
+- [x] Exercise stale generation, changed hash, missing path, traversal, symlink, and oversized-file rejection with unchanged Gitea HEAD.
+- [x] Create a two-sandbox same-path overlap and prove the newer commit persists while the stale sandbox keeps its old HEAD and exact local bytes.
 
 ### Task 5: Complete the local gate and deploy dev
 
 **Files:**
+
 - Modify: generated Synara embedded package artifacts in Glasswing only after Synara verification.
 - Modify: deployment metadata only when required by the currently inspected dev topology.
 
 **Interfaces:**
+
 - Consumes: four locally green slices in clean feature branches.
 - Produces: pushed Synara `glasswingos/dev` and Glasswing `dev` revisions plus dev browser evidence for every acceptance path.
 

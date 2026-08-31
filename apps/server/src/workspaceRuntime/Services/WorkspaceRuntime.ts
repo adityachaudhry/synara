@@ -5,16 +5,10 @@ import type { WorkspaceRuntimeError } from "../Errors";
 export interface WorkspaceRuntimeBinding {
   readonly runtimeKind: "railway-sandbox";
   readonly runtimeId: string;
-  readonly creationOperationId?: string;
-  readonly capacityKey?: string;
+  readonly creationOperationId?: string | undefined;
+  readonly capacityKey?: string | undefined;
   readonly lifecycleGeneration: string;
-  readonly status:
-    | "creating"
-    | "running"
-    | "stopped"
-    | "destroying"
-    | "destroyed"
-    | "failed";
+  readonly status: "creating" | "running" | "stopped" | "destroying" | "destroyed" | "failed";
   readonly region: string;
 }
 
@@ -53,6 +47,14 @@ export interface WorkspaceRuntimeWriteFileInput {
   readonly mode?: number;
 }
 
+export interface WorkspaceRuntimeFileEntry {
+  readonly name: string;
+  readonly size: number;
+  readonly mode: number;
+  readonly isDir: boolean;
+  readonly modTime: string;
+}
+
 export interface WorkspaceRuntimeDurableProcessInput {
   readonly command: string;
   readonly cwd?: string;
@@ -70,9 +72,7 @@ export interface WorkspaceRuntimeShape {
   readonly connect: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
-  readonly adopt: (
-    binding: WorkspaceRuntimeBinding,
-  ) => Effect.Effect<void, WorkspaceRuntimeError>;
+  readonly adopt: (binding: WorkspaceRuntimeBinding) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly exec: (
     binding: WorkspaceRuntimeBinding,
     input: WorkspaceExecInput,
@@ -81,6 +81,19 @@ export interface WorkspaceRuntimeShape {
     binding: WorkspaceRuntimeBinding,
     input: WorkspaceRuntimeWriteFileInput,
   ) => Effect.Effect<void, WorkspaceRuntimeError>;
+  /** Railway-backed file access. Optional for disabled and lightweight test runtimes. */
+  readonly readFile?: (
+    binding: WorkspaceRuntimeBinding,
+    path: string,
+  ) => Effect.Effect<Uint8Array, WorkspaceRuntimeError>;
+  readonly listFiles?: (
+    binding: WorkspaceRuntimeBinding,
+    path: string,
+  ) => Effect.Effect<ReadonlyArray<WorkspaceRuntimeFileEntry>, WorkspaceRuntimeError>;
+  readonly statFile?: (
+    binding: WorkspaceRuntimeBinding,
+    path: string,
+  ) => Effect.Effect<WorkspaceRuntimeFileEntry, WorkspaceRuntimeError>;
   readonly startDurableProcess: (
     binding: WorkspaceRuntimeBinding,
     input: WorkspaceRuntimeDurableProcessInput,
@@ -95,7 +108,10 @@ export interface WorkspaceRuntimeShape {
   readonly destroy: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<void, WorkspaceRuntimeError>;
-  readonly list: Effect.Effect<ReadonlyArray<WorkspaceRuntimeInventoryRecord>, WorkspaceRuntimeError>;
+  readonly list: Effect.Effect<
+    ReadonlyArray<WorkspaceRuntimeInventoryRecord>,
+    WorkspaceRuntimeError
+  >;
 }
 
 export class WorkspaceRuntime extends ServiceMap.Service<WorkspaceRuntime, WorkspaceRuntimeShape>()(

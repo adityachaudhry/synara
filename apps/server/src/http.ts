@@ -31,11 +31,7 @@ import {
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { authorizeExternalServiceRequest } from "./auth/externalIdentity";
-import {
-  AuthError,
-  ServerAuth,
-  type AuthenticatedHttpSession,
-} from "./auth/Services/ServerAuth";
+import { AuthError, ServerAuth, type AuthenticatedHttpSession } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
@@ -83,10 +79,41 @@ import {
   VOICE_UPLOAD_CAPACITY_ERROR_MESSAGE,
   voiceUploadAdmissionGate,
 } from "./voiceUploadAdmission";
+import type { ProviderPersistenceCandidateSelection } from "./providerPersistence.ts";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 export const CHAT_PERSISTENCE_SOURCE_ROUTE_PATH = "/api/chat-persistence/source";
 export const CHAT_PERSISTENCE_RECONCILE_ROUTE_PATH = "/api/chat-persistence/reconcile";
+export const CHAT_PERSISTENCE_SANDBOX_CANDIDATES_ROUTE_PATH =
+  "/api/chat-persistence/sandbox-candidates";
+export const CHAT_PERSISTENCE_SANDBOX_FILE_ROUTE_PATH = "/api/chat-persistence/sandbox-file";
+
+type PersistableChatAttachment = Extract<ChatAttachment, { readonly type: "file" | "image" }>;
+
+function isPersistableChatAttachment(
+  attachment: ChatAttachment,
+): attachment is PersistableChatAttachment {
+  return attachment.type === "file" || attachment.type === "image";
+}
+
+function chatAttachmentSummary(attachment: PersistableChatAttachment) {
+  return {
+    id: attachment.id,
+    type: attachment.type,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+  };
+}
+
+function chatPersistenceErrorResponse(error: unknown) {
+  return error instanceof AuthError
+    ? authErrorResponse(error)
+    : HttpServerResponse.jsonUnsafe(
+        { error: "Chat persistence is temporarily unavailable." },
+        { status: 500 },
+      );
+}
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
@@ -219,6 +246,8 @@ export function makeEffectHttpRouteLayer(
     binaryUploadEffectRouteLayer,
     attachmentsEffectRouteLayer,
     chatPersistenceSourceEffectRouteLayer,
+    chatPersistenceSandboxCandidatesEffectRouteLayer,
+    chatPersistenceSandboxFileEffectRouteLayer,
     chatPersistenceReconcileEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
@@ -407,16 +436,18 @@ const requireProjectScopeAccess = Effect.fn(function* (input: {
       Effect.flatMap(
         Option.match({
           onNone: () =>
-            snapshots.getShellSnapshot().pipe(
-              Effect.map((snapshot) =>
-                snapshot.threads.some(
-                  (thread) =>
-                    allowed.has(thread.projectId) &&
-                    (thread.worktreePath === input.workspaceRoot ||
-                      thread.workingDirectory === input.workspaceRoot),
+            snapshots
+              .getShellSnapshot()
+              .pipe(
+                Effect.map((snapshot) =>
+                  snapshot.threads.some(
+                    (thread) =>
+                      allowed.has(thread.projectId) &&
+                      (thread.worktreePath === input.workspaceRoot ||
+                        thread.workingDirectory === input.workspaceRoot),
+                  ),
                 ),
               ),
-            ),
           onSome: (project) => Effect.succeed(allowed.has(project.id)),
         }),
       ),
@@ -1348,32 +1379,31 @@ export const chatPersistenceSourceEffectRouteLayer = HttpRouter.add(
     const threadId = url.searchParams.get("threadId")?.trim();
     const kind = url.searchParams.get("kind")?.trim();
     if (!threadId || !kind) {
-      return HttpServerResponse.jsonUnsafe({ error: "threadId and kind are required" }, { status: 400 });
+      return HttpServerResponse.jsonUnsafe(
+        { error: "threadId and kind are required" },
+        { status: 400 },
+      );
     }
     yield* requireProjectScopeAccess({ session, threadId });
-    const detail = yield* (yield* ProjectionSnapshotQuery)
-      .getThreadDetailById(ThreadId.makeUnsafe(threadId));
+    const detail = yield* (yield* ProjectionSnapshotQuery).getThreadDetailById(
+      ThreadId.makeUnsafe(threadId),
+    );
     if (Option.isNone(detail)) {
       return HttpServerResponse.jsonUnsafe({ error: "thread not found" }, { status: 404 });
     }
 
-    const attachmentSummary = (attachment: ChatAttachment) => ({
-      id: attachment.id,
-      type: attachment.type,
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      ...(attachment.type === "file" || attachment.type === "image"
-        ? { sizeBytes: attachment.sizeBytes }
-        : {}),
-    });
     let source: unknown;
     if (kind === "message") {
       const messageId = url.searchParams.get("messageId")?.trim();
       const message = detail.value.messages.find(
-        (candidate) => candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
+        (candidate) =>
+          candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
       );
       if (!message) {
-        return HttpServerResponse.jsonUnsafe({ error: "assistant message not found" }, { status: 404 });
+        return HttpServerResponse.jsonUnsafe(
+          { error: "assistant message not found" },
+          { status: 404 },
+        );
       }
       source = {
         kind,
@@ -1388,20 +1418,21 @@ export const chatPersistenceSourceEffectRouteLayer = HttpRouter.add(
       const messageId = url.searchParams.get("messageId")?.trim();
       const requestedIds = new Set(url.searchParams.getAll("attachmentId"));
       const message = detail.value.messages.find((candidate) => candidate.id === messageId);
-      const attachments = (message?.attachments ?? []).filter(
-        (attachment) =>
-          (attachment.type === "file" || attachment.type === "image") &&
-          requestedIds.has(attachment.id),
-      );
+      const attachments = (message?.attachments ?? [])
+        .filter(isPersistableChatAttachment)
+        .filter((attachment) => requestedIds.has(attachment.id));
       if (!message || requestedIds.size === 0 || attachments.length !== requestedIds.size) {
-        return HttpServerResponse.jsonUnsafe({ error: "attachment source not found" }, { status: 404 });
+        return HttpServerResponse.jsonUnsafe(
+          { error: "attachment source not found" },
+          { status: 404 },
+        );
       }
       source = {
         kind,
         threadId,
         threadTitle: detail.value.title,
         messageId: message.id,
-        attachments: attachments.map(attachmentSummary),
+        attachments: attachments.map(chatAttachmentSummary),
       };
     } else if (kind === "thread") {
       source = {
@@ -1418,10 +1449,8 @@ export const chatPersistenceSourceEffectRouteLayer = HttpRouter.add(
             ...(message.author !== undefined ? { author: message.author } : {}),
             createdAt: message.createdAt,
             attachments: (message.attachments ?? [])
-              .filter(
-                (attachment) => attachment.type === "file" || attachment.type === "image",
-              )
-              .map(attachmentSummary),
+              .filter(isPersistableChatAttachment)
+              .map(chatAttachmentSummary),
           })),
       };
     } else {
@@ -1432,7 +1461,112 @@ export const chatPersistenceSourceEffectRouteLayer = HttpRouter.add(
       source,
       sourceVersion: createHash("sha256").update(JSON.stringify(source)).digest("hex"),
     });
-  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+  }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
+);
+
+function persistenceSelectionFromUnknown(
+  value: unknown,
+): ProviderPersistenceCandidateSelection | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const source = candidate.source;
+  const path = candidate.path;
+  const sha256 = candidate.sha256;
+  if (
+    (source !== "outbox" && source !== "checkout") ||
+    typeof path !== "string" ||
+    !path ||
+    typeof sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(sha256)
+  ) {
+    return null;
+  }
+  return { source, path, sha256 };
+}
+
+export const chatPersistenceSandboxCandidatesEffectRouteLayer = HttpRouter.add(
+  "GET",
+  CHAT_PERSISTENCE_SANDBOX_CANDIDATES_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const session = yield* requireAuthenticatedRequest;
+    const threadId = url.searchParams.get("threadId")?.trim();
+    if (!threadId) {
+      return HttpServerResponse.jsonUnsafe({ error: "threadId is required" }, { status: 400 });
+    }
+    yield* requireProjectScopeAccess({ session, threadId });
+    const adapter = yield* (yield* ProviderAdapterRegistry).getByProvider("pi");
+    if (!adapter.listPersistenceCandidates) {
+      return HttpServerResponse.jsonUnsafe({ entries: [] });
+    }
+    return yield* adapter.listPersistenceCandidates(ThreadId.makeUnsafe(threadId)).pipe(
+      Effect.map((result) => HttpServerResponse.jsonUnsafe(result)),
+      Effect.catch(() =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: "Sandbox files are unavailable until the Pi turn finishes." },
+            { status: 409 },
+          ),
+        ),
+      ),
+    );
+  }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
+);
+
+export const chatPersistenceSandboxFileEffectRouteLayer = HttpRouter.add(
+  "POST",
+  CHAT_PERSISTENCE_SANDBOX_FILE_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const session = yield* requireAuthenticatedRequest;
+    const payload = yield* readEffectJson(request, "Invalid sandbox file payload.");
+    const record =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : {};
+    const threadId = typeof record.threadId === "string" ? record.threadId : "";
+    const lifecycleGeneration =
+      typeof record.lifecycleGeneration === "string" ? record.lifecycleGeneration : "";
+    const selection = persistenceSelectionFromUnknown(record.file);
+    if (!threadId || !lifecycleGeneration || !selection) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "threadId, lifecycleGeneration, and a reviewed file are required" },
+        { status: 400 },
+      );
+    }
+    yield* requireProjectScopeAccess({ session, threadId });
+    const adapter = yield* (yield* ProviderAdapterRegistry).getByProvider("pi");
+    if (!adapter.readPersistenceCandidate) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "sandbox files are unavailable" },
+        { status: 404 },
+      );
+    }
+    return yield* adapter
+      .readPersistenceCandidate(ThreadId.makeUnsafe(threadId), lifecycleGeneration, selection)
+      .pipe(
+        Effect.map((file) =>
+          HttpServerResponse.uint8Array(file.bytes, {
+            status: 200,
+            contentType: "application/octet-stream",
+            headers: {
+              "x-synara-file-sha256": file.sha256,
+              "x-synara-file-destination": encodeURIComponent(file.destinationPath),
+            },
+          }),
+        ),
+        Effect.catch(() =>
+          Effect.succeed(
+            HttpServerResponse.jsonUnsafe(
+              { error: "The selected sandbox file changed after review." },
+              { status: 409 },
+            ),
+          ),
+        ),
+      );
+  }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
 );
 
 export const chatPersistenceReconcileEffectRouteLayer = HttpRouter.add(
@@ -1450,26 +1584,49 @@ export const chatPersistenceReconcileEffectRouteLayer = HttpRouter.add(
       typeof payload === "object" && payload !== null && "commit" in payload
         ? String(payload.commit)
         : "";
+    const persistedFiles =
+      typeof payload === "object" &&
+      payload !== null &&
+      "persistedFiles" in payload &&
+      Array.isArray(payload.persistedFiles)
+        ? payload.persistedFiles.map(persistenceSelectionFromUnknown)
+        : [];
     if (!threadId || !/^[0-9a-f]{40}$/u.test(commit)) {
-      return HttpServerResponse.jsonUnsafe({ error: "threadId and full commit SHA are required" }, { status: 400 });
+      return HttpServerResponse.jsonUnsafe(
+        { error: "threadId and full commit SHA are required" },
+        { status: 400 },
+      );
+    }
+    if (persistedFiles.some((file) => file === null)) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "invalid persisted file selection" },
+        { status: 400 },
+      );
     }
     yield* requireProjectScopeAccess({ session, threadId });
     const adapter = yield* (yield* ProviderAdapterRegistry).getByProvider("pi");
     if (!adapter.reconcileRepository) {
       return HttpServerResponse.jsonUnsafe({ synchronized: false });
     }
-    return yield* adapter.reconcileRepository(ThreadId.makeUnsafe(threadId), commit).pipe(
-      Effect.map((result) => HttpServerResponse.jsonUnsafe({ synchronized: true, ...result })),
-      Effect.catch(() =>
-        Effect.succeed(
-          HttpServerResponse.jsonUnsafe({
-            synchronized: false,
-            message: "Saved successfully; the current sandbox still has local changes to resolve.",
-          }),
+    return yield* adapter
+      .reconcileRepository(
+        ThreadId.makeUnsafe(threadId),
+        commit,
+        persistedFiles as ProviderPersistenceCandidateSelection[],
+      )
+      .pipe(
+        Effect.map((result) => HttpServerResponse.jsonUnsafe({ synchronized: true, ...result })),
+        Effect.catch(() =>
+          Effect.succeed(
+            HttpServerResponse.jsonUnsafe({
+              synchronized: false,
+              message:
+                "Saved successfully; the current sandbox still has local changes to resolve.",
+            }),
+          ),
         ),
-      ),
-    );
-  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+      );
+  }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
 );
 
 export const staticAndDevEffectRouteLayer = HttpRouter.add(
