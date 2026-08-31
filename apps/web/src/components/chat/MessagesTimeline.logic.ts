@@ -539,7 +539,8 @@ export function deriveMessagesTimelineRows(input: {
 
   const flushPendingWorkGroup = (options?: { attachToPreviousAssistant?: boolean }) => {
     if (!pendingWorkGroup) return;
-    const shouldAttachToPreviousAssistant = options?.attachToPreviousAssistant ?? true;
+    const shouldAttachToPreviousAssistant =
+      options?.attachToPreviousAssistant ?? !input.activeTurnInProgress;
     if (
       !shouldAttachToPreviousAssistant ||
       !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries, pendingWorkGroup.id)
@@ -604,6 +605,9 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     const message = timelineEntry.message;
+    if (message.role === "assistant" && input.activeTurnInProgress) {
+      flushPendingWorkGroup({ attachToPreviousAssistant: false });
+    }
     const leadingWorkEntries =
       message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
     const leadingWorkGroupId = message.role === "assistant" ? pendingWorkGroup?.id : undefined;
