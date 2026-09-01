@@ -12057,6 +12057,7 @@ export default function ChatView({
           // them here just leaves redundant empty space on the sides.
           !isEditorRail && desktopTopBarTrafficLightGutterClassName,
           !isEditorRail && desktopTopBarWindowControlsGutterClassName,
+          activeThread.sidechatSourceThreadId && "hidden",
         )}
       >
         <ChatHeader
@@ -12224,22 +12225,32 @@ export default function ChatView({
             )}
           >
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
-              <div
-                className={cn(
-                  "chat-pane-enter flex min-h-0 flex-1 flex-col",
-                  CHAT_COLUMN_GUTTER_CLASS_NAME,
-                )}
-              >
+              <div className="chat-pane-enter flex min-h-0 flex-1 flex-col">
                 {/* The heading floats centered in the space above the composer, which is
                     anchored to the bottom of the pane (with its workspace-tools rail
                     stacked on top of the input) so starting a chat keeps the composer
                     where it lives for the rest of the conversation. */}
                 {emptyLandingContent !== undefined ? (
-                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                  <div
+                    className={cn(
+                      "min-h-0 flex-1 overflow-y-auto overscroll-contain [-ms-overflow-style:none] [scrollbar-gutter:stable] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                      CHAT_COLUMN_GUTTER_CLASS_NAME,
+                    )}
+                    style={{
+                      paddingBottom: composerTranscriptBottomInsetPx(
+                        secondaryChromePlaceholderHeight,
+                      ),
+                    }}
+                  >
                     {emptyLandingContent}
                   </div>
                 ) : (
-                  <div className="flex min-h-0 flex-1 items-center justify-center">
+                  <div
+                    className={cn(
+                      "flex min-h-0 flex-1 items-center justify-center",
+                      CHAT_COLUMN_GUTTER_CLASS_NAME,
+                    )}
+                  >
                     <div
                       className={cn(
                         "flex flex-col items-center gap-4 px-6 text-center select-none",
@@ -12311,7 +12322,12 @@ export default function ChatView({
                     </div>
                   </div>
                 )}
-                <div className="w-full shrink-0 pb-3 sm:pb-4">
+                <div
+                  className={cn(
+                    "w-full shrink-0 pb-3 sm:pb-4",
+                    CHAT_COLUMN_GUTTER_CLASS_NAME,
+                  )}
+                >
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>

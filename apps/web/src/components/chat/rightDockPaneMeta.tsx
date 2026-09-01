@@ -89,7 +89,7 @@ const RIGHT_DOCK_LAUNCHER_ORDER: readonly RightDockPaneKind[] = [
 
 const RIGHT_DOCK_LAUNCHER_LABELS: Partial<Record<RightDockPaneKind, string>> = {
   diff: "Review",
-  explorer: "Files",
+  explorer: "Explorer",
   sidechat: "Side chats",
   git: "Source control",
 };

@@ -15,6 +15,7 @@ import {
 
 import { resolveHostMessageAuthorLabel, useSynaraHostSidebar } from "../../hostSidebar";
 import { useAppSettings, type TimestampFormat } from "../../appSettings";
+import { basenameOfPath } from "../../file-icons";
 import { cn, randomUUID } from "../../lib/utils";
 import { readNativeApi } from "../../nativeApi";
 import {
@@ -392,6 +393,13 @@ export function ProjectThreadFeedSurface({
     );
   }, []);
 
+  const paneLabelOverrides: Record<string, string> = {};
+  for (const pane of dockState.panes) {
+    if (pane.kind === "file" && pane.filePath) {
+      paneLabelOverrides[pane.id] = basenameOfPath(pane.filePath);
+    }
+  }
+
   const feedContent =
     threads.length > 0 ? (
       <section
@@ -452,6 +460,7 @@ export function ProjectThreadFeedSurface({
         onOpenChange={toggleDock}
         onAddPane={addDockPane}
         renderPane={renderDockPane}
+        paneLabelOverrides={paneLabelOverrides}
       />
       {renameDialog}
     </div>
