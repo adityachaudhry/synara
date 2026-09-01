@@ -111,6 +111,8 @@ export function DeferredChatView(props: {
   onToggleRightDock?: () => void;
   onOpenThreadFeed?: () => void;
   emptyLandingContent?: ReactNode;
+  emptyLandingProjectName?: string;
+  onOpenEmptyLandingProject?: () => void;
   onThreadStarted?: (threadId: ThreadId) => void;
   hideNewThreadAction?: boolean;
   onToggleBrowser: () => void;
@@ -172,6 +174,12 @@ export function DeferredChatView(props: {
       {...(props.onOpenThreadFeed ? { onOpenThreadFeed: props.onOpenThreadFeed } : {})}
       {...(props.emptyLandingContent !== undefined
         ? { emptyLandingContent: props.emptyLandingContent }
+        : {})}
+      {...(props.emptyLandingProjectName
+        ? { emptyLandingProjectName: props.emptyLandingProjectName }
+        : {})}
+      {...(props.onOpenEmptyLandingProject
+        ? { onOpenEmptyLandingProject: props.onOpenEmptyLandingProject }
         : {})}
       {...(props.onThreadStarted ? { onThreadStarted: props.onThreadStarted } : {})}
       {...(props.hideNewThreadAction ? { hideNewThreadAction: true } : {})}

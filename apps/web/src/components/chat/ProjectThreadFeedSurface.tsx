@@ -376,6 +376,7 @@ export function ProjectThreadFeedSurface({
           });
     });
   }, []);
+  const openFeedExplorer = useCallback(() => toggleDock(true), [toggleDock]);
 
   const closeDockPane = useCallback((paneId: string) => {
     setDockState((state) => {
@@ -428,6 +429,8 @@ export function ProjectThreadFeedSurface({
           onOpenBrowserUrl={noopChatSurfaceAction}
           onOpenTurnDiff={noopChatSurfaceAction}
           emptyLandingContent={feedContent}
+          emptyLandingProjectName={projectName}
+          onOpenEmptyLandingProject={openFeedExplorer}
           onThreadStarted={openStartedThread}
           hideNewThreadAction
         />

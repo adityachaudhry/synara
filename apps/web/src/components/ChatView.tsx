@@ -1142,6 +1142,8 @@ interface ChatViewProps {
   onToggleRightDock?: () => void;
   onOpenThreadFeed?: () => void;
   emptyLandingContent?: ReactNode;
+  emptyLandingProjectName?: string;
+  onOpenEmptyLandingProject?: () => void;
   onThreadStarted?: (threadId: ThreadId) => void;
   hideNewThreadAction?: boolean;
   onToggleBrowserPanel?: () => void;
@@ -1210,6 +1212,8 @@ export default function ChatView({
   onToggleRightDock,
   onOpenThreadFeed,
   emptyLandingContent,
+  emptyLandingProjectName,
+  onOpenEmptyLandingProject,
   onThreadStarted,
   hideNewThreadAction,
   onToggleBrowserPanel,
@@ -12252,7 +12256,17 @@ export default function ChatView({
                         ) : (
                           <>
                             What should we do in{" "}
-                            {showEmptyLandingProjectPicker ? (
+                            {emptyLandingProjectName && onOpenEmptyLandingProject ? (
+                              <button
+                                type="button"
+                                aria-label={`Open files for ${emptyLandingProjectName}`}
+                                onClick={onOpenEmptyLandingProject}
+                                className="cursor-pointer rounded-sm text-inherit underline decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                style={{ textDecorationColor: "var(--brand)" }}
+                              >
+                                {emptyLandingProjectName}
+                              </button>
+                            ) : showEmptyLandingProjectPicker ? (
                               simplifiedComposer ? (
                                 <button
                                   type="button"
