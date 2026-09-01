@@ -517,7 +517,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
-    const detail = stripTrailingExitCode(payload.detail).output;
+    const rawDetail = stripTrailingExitCode(payload.detail).output;
+    const detail =
+      activity.kind === "provider.turn.start.failed" && rawDetail
+        ? rawDetail
+            .split(/\n\s*at\s+/u, 1)[0]
+            ?.replace(/^Error:\s*/u, "")
+            .trim()
+        : rawDetail;
     if (detail) {
       entry.detail = detail;
     }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
@@ -34,6 +35,7 @@ import {
 } from "../repositoryCheckout";
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
+const WORKER_ARTIFACT_ARCHIVE_PATH = `${WORKER_ARTIFACT_PATH}.gz`;
 const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
 const DEFAULT_CWD = "/workspace";
 const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
@@ -43,7 +45,15 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 function workerLaunchCommand(homeDir: string) {
   const logsDir = `${homeDir}/state/logs`;
   const workerLogPath = `${logsDir}/worker.log`;
-  return `mkdir -p ${shellQuote(logsDir)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
+  const extractArtifact = [
+    'const fs=require("node:fs")',
+    'const zlib=require("node:zlib")',
+    `const source=${JSON.stringify(WORKER_ARTIFACT_ARCHIVE_PATH)}`,
+    `const target=${JSON.stringify(WORKER_ARTIFACT_PATH)}`,
+    'fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})',
+    'fs.rmSync(source,{force:true})',
+  ].join(";");
+  return `mkdir -p ${shellQuote(logsDir)} && node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
 }
 
 function agentGatewayUrl(controlUrl: string): string {
@@ -82,6 +92,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const checkpointStore = options.checkpointRoot
       ? makeOutboxCheckpointStore(options.checkpointRoot)
       : undefined;
+    const artifactArchive = gzipSync(options.artifact, { level: 6 });
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
 
@@ -337,11 +348,12 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         yield* Effect.logInfo("provider worker artifact upload starting", {
           sandboxId: fence.sandboxId,
           bytes: options.artifact.byteLength,
+          uploadBytes: artifactArchive.byteLength,
         });
         yield* workspaceRuntime.writeFile(input.workspace, {
-          path: WORKER_ARTIFACT_PATH,
-          data: options.artifact,
-          mode: 0o500,
+          path: WORKER_ARTIFACT_ARCHIVE_PATH,
+          data: artifactArchive,
+          mode: 0o400,
         });
         yield* Effect.logInfo("provider worker artifact upload completed", {
           sandboxId: fence.sandboxId,

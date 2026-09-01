@@ -192,6 +192,17 @@ export function classifyProviderAttemptOutcome(
   }
 }
 
+function userFacingProviderFailureDetail(cause: Cause.Cause<unknown>): string {
+  return Option.match(Cause.findErrorOption(cause), {
+    onNone: () => "The provider could not start this turn.",
+    onSome: (error) => {
+      if (Schema.is(ProviderAdapterRequestError)(error)) return error.detail;
+      if (error instanceof Error && error.message.trim()) return error.message.trim();
+      return "The provider could not start this turn.";
+    },
+  });
+}
+
 type BoundedProviderCallResult<E> =
   | { readonly _tag: "ok" }
   | { readonly _tag: "timeout"; readonly detail: string }
@@ -2452,7 +2463,12 @@ const make = Effect.gen(function* () {
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
             : Effect.gen(function* () {
-                const detail = Cause.pretty(cause);
+                const diagnostic = Cause.pretty(cause);
+                const detail = userFacingProviderFailureDetail(cause);
+                yield* Effect.logError("provider turn start failed", {
+                  threadId: event.payload.threadId,
+                  cause: diagnostic,
+                });
                 yield* appendProviderFailureActivity({
                   threadId: event.payload.threadId,
                   kind: "provider.turn.start.failed",

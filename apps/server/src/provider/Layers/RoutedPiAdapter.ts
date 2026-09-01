@@ -7,7 +7,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderWorkerMethod,
 } from "@synara/contracts";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, PubSub, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Option, PubSub, Schema, Stream } from "effect";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -29,7 +29,6 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
-const REMOTE_PI_LAUNCH_TIMEOUT = "60 seconds";
 
 const ProviderThreadSnapshotSchema = Schema.Struct({
   threadId: ThreadId,
@@ -237,48 +236,6 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       );
     });
 
-  const withCapacityLaunchDeadline = <A, E, R>(
-    launch: (onCapacityAdmitted: () => void) => Effect.Effect<A, E, R>,
-    providerRequestStarted: () => boolean,
-  ) =>
-    Effect.gen(function* () {
-      const admitted = yield* Deferred.make<void>();
-      const launchFiber = yield* launch(() => {
-        Effect.runSync(Deferred.succeed(admitted, undefined));
-      }).pipe(Effect.forkChild({ startImmediately: true }));
-      const initial = yield* Effect.raceFirst(
-        Fiber.await(launchFiber).pipe(
-          Effect.map((exit) => ({ _tag: "Completed" as const, exit })),
-        ),
-        Deferred.await(admitted).pipe(Effect.as({ _tag: "Admitted" as const })),
-      );
-      if (initial._tag === "Completed") {
-        return Exit.isSuccess(initial.exit)
-          ? initial.exit.value
-          : yield* Effect.failCause(initial.exit.cause);
-      }
-      const completed = yield* Fiber.await(launchFiber).pipe(
-        Effect.timeoutOption(REMOTE_PI_LAUNCH_TIMEOUT),
-      );
-      if (Option.isSome(completed)) {
-        return Exit.isSuccess(completed.value)
-          ? completed.value.value
-          : yield* Effect.failCause(completed.value.cause);
-      }
-      yield* Fiber.interrupt(launchFiber);
-      const interrupted = yield* Fiber.await(launchFiber);
-      if (Exit.isSuccess(interrupted)) return interrupted.value;
-      if (Exit.isFailure(interrupted) && !Cause.hasInterruptsOnly(interrupted.cause)) {
-        return yield* Effect.failCause(interrupted.cause);
-      }
-      return yield* adapterError(
-        "session.start",
-        "Remote Pi launch timed out 60 seconds after Railway capacity admission.",
-        undefined,
-        { retryable: !providerRequestStarted() },
-      );
-    });
-
   const startSession: PiAdapterShape["startSession"] = (input) =>
     Effect.gen(function* () {
       const persisted = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
@@ -306,8 +263,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         "pi",
       );
       const previousGatewayToken = remoteGatewayTokenByThread.get(input.threadId);
-      let providerRequestStarted = false;
-      const launch = (onCapacityAdmitted?: () => void) =>
+      const launch = () =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const provisionExit = yield* Effect.exit(
@@ -321,7 +277,6 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       ...(agentGatewayConnection === undefined
                         ? {}
                         : { agentGatewayConnection }),
-                      ...(onCapacityAdmitted === undefined ? {} : { onCapacityAdmitted }),
                     })
                   : provisioner.start({
                       threadId: input.threadId,
@@ -331,7 +286,6 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       ...(agentGatewayConnection === undefined
                         ? {}
                         : { agentGatewayConnection }),
-                      ...(onCapacityAdmitted === undefined ? {} : { onCapacityAdmitted }),
                     }),
               ),
             );
@@ -343,7 +297,6 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             const startExit = yield* Effect.exit(
               restore(
                 Effect.gen(function* () {
-                  providerRequestStarted = true;
                   const session = yield* requestDecoded(
                     binding,
                     "session.start",
@@ -373,11 +326,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             return yield* Effect.failCause(startExit.cause);
           }),
         );
-      return yield* (
-        capacity === undefined
-          ? launch()
-          : withCapacityLaunchDeadline(launch, () => providerRequestStarted)
-      ).pipe(
+      return yield* launch().pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (agentGatewayConnection !== undefined) {

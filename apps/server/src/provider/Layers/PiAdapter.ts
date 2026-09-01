@@ -76,6 +76,7 @@ import {
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { createGlasswingCrunchbaseMcpExtension } from "../piMcpExtension.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -365,7 +366,10 @@ async function createPiAgentSessionServices(
   options: Parameters<PiCodingAgentModule["createAgentSessionServices"]>[0],
 ) {
   await configurePiWebAccess(options.agentDir ?? sdk.getAgentDir());
-  const { default: piWebAccess } = await loadPiWebAccessModule();
+  const [{ default: piWebAccess }, crunchbaseMcp] = await Promise.all([
+    loadPiWebAccessModule(),
+    createGlasswingCrunchbaseMcpExtension(),
+  ]);
   const resourceLoaderOptions = options.resourceLoaderOptions;
   return sdk.createAgentSessionServices({
     ...options,
@@ -374,6 +378,7 @@ async function createPiAgentSessionServices(
       extensionFactories: [
         ...(resourceLoaderOptions?.extensionFactories ?? []),
         { name: "pi-web-access", factory: piWebAccess },
+        ...(crunchbaseMcp ? [crunchbaseMcp] : []),
       ],
     },
   });
