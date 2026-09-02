@@ -108,7 +108,7 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
   thread: SidebarThreadSummary;
   onOpen: (threadId: ThreadId) => void;
   onIntent: (threadId: ThreadId) => void;
-  onContextMenu: (thread: SidebarThreadSummary, event: MouseEvent<HTMLElement>) => void;
+  onContextMenu?: (thread: SidebarThreadSummary, event: MouseEvent<HTMLElement>) => void;
   chatFontSizePx: number | undefined;
   timestampFormat: TimestampFormat;
 }) {
@@ -149,7 +149,7 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
         }`}
         onClick={() => onOpen(thread.id)}
         onKeyDown={openFromKeyboard}
-        onContextMenu={(event) => onContextMenu(thread, event)}
+        onContextMenu={onContextMenu ? (event) => onContextMenu(thread, event) : undefined}
         onMouseEnter={() => onIntent(thread.id)}
         onFocus={() => onIntent(thread.id)}
         className={cn(
@@ -413,7 +413,7 @@ export function ProjectThreadFeedSurface({
             thread={thread}
             onOpen={openThread}
             onIntent={prewarmThreadDetail}
-            onContextMenu={showThreadContextMenu}
+            {...(hostSidebar?.simplifiedComposer ? {} : { onContextMenu: showThreadContextMenu })}
             chatFontSizePx={hostSidebar?.chatFontSizePx}
             timestampFormat={settings.timestampFormat}
           />

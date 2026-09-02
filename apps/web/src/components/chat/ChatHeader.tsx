@@ -952,7 +952,10 @@ export function ChatHeader({
           </Tooltip>
         ) : null}
 
-        {hostSidebar?.saveChatContent && !minimalChrome && !isSidechat ? (
+        {hostSidebar?.saveChatContent &&
+        hostSidebar.simplifiedComposer !== true &&
+        !minimalChrome &&
+        !isSidechat ? (
           <Tooltip>
             <TooltipTrigger
               render={

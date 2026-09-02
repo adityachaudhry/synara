@@ -2531,7 +2531,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                       />
                     ) : null}
-                    {hostSidebar?.saveChatContent && threadId && assistantCopyState.visible ? (
+                    {hostSidebar?.saveChatContent &&
+                    hostSidebar.simplifiedComposer !== true &&
+                    threadId &&
+                    assistantCopyState.visible ? (
                       <MessageActionButton
                         label="Save response"
                         tooltip="Save to analysis/notes/chat"

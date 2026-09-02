@@ -12367,9 +12367,13 @@ export default function ChatView({
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
-                    pinnedMessageIds={pinnedMessageIds}
-                    canPinMessage={canPinMessage}
-                    onTogglePinMessage={handleTogglePinMessageGuarded}
+                    {...(!simplifiedComposer
+                      ? {
+                          pinnedMessageIds,
+                          canPinMessage,
+                          onTogglePinMessage: handleTogglePinMessageGuarded,
+                        }
+                      : {})}
                     onForkFromMessage={handleForkFromMessage}
                     threadMarkers={threadMarkers}
                     goalAchievements={goalAchievements}
