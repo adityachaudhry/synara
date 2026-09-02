@@ -3722,8 +3722,9 @@ export default function ChatView({
           worktreePath: resolvedThreadWorktreePath,
         })
       : null;
-  const composerTriggerKind = composerTrigger?.kind ?? null;
-  const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
+  const composerTriggerKind = simplifiedComposer ? null : (composerTrigger?.kind ?? null);
+  const mentionTriggerQuery =
+    !simplifiedComposer && composerTrigger?.kind === "mention" ? composerTrigger.query : "";
   const isMentionTrigger = composerTriggerKind === "mention";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
   const gitStatusQuery = useQuery(gitStatusQueryOptions(gitBranchSourceCwd));
@@ -3860,6 +3861,9 @@ export default function ChatView({
     [providerNativeCommands],
   );
   const effectiveComposerTrigger = useMemo(() => {
+    if (simplifiedComposer) {
+      return null;
+    }
     if (
       composerTrigger?.kind === "slash-model" &&
       hasProviderNativeSlashCommand(selectedProvider, providerNativeCommandNames, "model")
@@ -3871,7 +3875,7 @@ export default function ChatView({
       };
     }
     return composerTrigger;
-  }, [composerTrigger, providerNativeCommandNames, selectedProvider]);
+  }, [composerTrigger, providerNativeCommandNames, selectedProvider, simplifiedComposer]);
   const effectiveComposerTriggerKind = effectiveComposerTrigger?.kind ?? null;
   const supportsTextNativeReviewCommand = useMemo(
     () => providerSupportsTextNativeReviewCommand(selectedProvider, providerNativeCommands),
@@ -4003,7 +4007,8 @@ export default function ChatView({
     composerCommandPicker,
     normalComposerMenuItems,
   ]);
-  const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
+  const composerMenuOpen =
+    !simplifiedComposer && Boolean(effectiveComposerTrigger || composerCommandPicker);
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
@@ -7439,8 +7444,9 @@ export default function ChatView({
     const composerPastedTextsForSend = queuedChatTurn?.pastedTexts ?? composerPastedTexts;
     const selectedComposerSkillsForSend =
       queuedChatTurn?.skills ?? selectedComposerSkillsRef.current;
-    const selectedComposerMentionsForSend =
-      queuedChatTurn?.mentions ?? selectedComposerMentionsRef.current;
+    const selectedComposerMentionsForSend = simplifiedComposer
+      ? []
+      : (queuedChatTurn?.mentions ?? selectedComposerMentionsRef.current);
     const selectedProviderForSend = queuedChatTurn?.selectedProvider ?? selectedProvider;
     const selectedModelForSend = queuedChatTurn?.selectedModel ?? selectedModel;
     const selectedPromptEffortForSend =
@@ -7541,7 +7547,7 @@ export default function ChatView({
       // Provider mentions are structured turn metadata, and automation definitions persist text only.
       selectedComposerMentionsForSend.length === 0;
     const hasPromptOnlySendableContent = hasNoStructuredComposerContext;
-    if (hasPromptOnlySendableContent) {
+    if (hasPromptOnlySendableContent && !simplifiedComposer) {
       const handledSlashCommand =
         await lateSendHandlers.handleStandaloneSlashCommand(trimmedPromptForSend);
       if (handledSlashCommand) {
@@ -10260,9 +10266,11 @@ export default function ChatView({
     const snapshot = readComposerSnapshot();
     return {
       snapshot,
-      trigger: detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
+      trigger: simplifiedComposer
+        ? null
+        : detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
     };
-  }, [readComposerSnapshot]);
+  }, [readComposerSnapshot, simplifiedComposer]);
 
   // Shared insertion path for picker selections (mentions, plugins, skills,
   // agents, provider-native commands, local folders). Guarantees the replacement
@@ -11708,7 +11716,7 @@ export default function ChatView({
                         ? composerTerminalContexts
                         : []
                     }
-                    mentionReferences={selectedComposerMentions}
+                    mentionReferences={simplifiedComposer ? [] : selectedComposerMentions}
                     onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                     onChange={onPromptChange}
                     onCommandKeyDown={onComposerCommandKey}
