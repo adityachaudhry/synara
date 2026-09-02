@@ -41,7 +41,10 @@ import {
 } from "@synara/contracts";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
-import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  renderSynaraHarnessPolicy,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   callAgentGatewayMcpTool,
   listAgentGatewayMcpTools,
@@ -77,6 +80,11 @@ import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { createGlasswingCrunchbaseMcpExtension } from "../piMcpExtension.ts";
+import {
+  GLASSWING_AGENT_SYSTEM_PROMPT,
+  isGlasswingAgentProfileEnabled,
+  renderGlasswingMessageAuthorContext,
+} from "../glasswingAgentProfile.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -364,6 +372,8 @@ async function configurePiWebAccess(agentDir: string) {
 async function createPiAgentSessionServices(
   sdk: PiCodingAgentModule,
   options: Parameters<PiCodingAgentModule["createAgentSessionServices"]>[0],
+  gatewayControlAvailable: boolean,
+  glasswingProfileEnabled: boolean,
 ) {
   await configurePiWebAccess(options.agentDir ?? sdk.getAgentDir());
   const [{ default: piWebAccess }, crunchbaseMcp] = await Promise.all([
@@ -375,6 +385,16 @@ async function createPiAgentSessionServices(
     ...options,
     resourceLoaderOptions: {
       ...resourceLoaderOptions,
+      ...(glasswingProfileEnabled
+        ? {
+            systemPrompt: GLASSWING_AGENT_SYSTEM_PROMPT,
+            noContextFiles: true,
+            appendSystemPrompt: [
+              ...(resourceLoaderOptions?.appendSystemPrompt ?? []),
+              renderSynaraHarnessPolicy({ gatewayControlAvailable }),
+            ],
+          }
+        : {}),
       extensionFactories: [
         ...(resourceLoaderOptions?.extensionFactories ?? []),
         { name: "pi-web-access", factory: piWebAccess },
@@ -386,6 +406,7 @@ async function createPiAgentSessionServices(
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
+  readonly glasswingProfileEnabled: boolean;
   readonly gatewayControlAvailable: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
   gatewayConnection?: AgentGatewayMcpConnection;
@@ -2144,17 +2165,23 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       gatewayTools?: ReadonlyArray<ToolDefinition>;
     }) => {
       const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk);
+      const glasswingProfileEnabled = isGlasswingAgentProfileEnabled();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
         sessionManager,
         sessionStartEvent,
       }) => {
-        const services = await createPiAgentSessionServices(input.sdk, {
-          cwd,
-          agentDir,
-          modelRuntime,
-        });
+        const services = await createPiAgentSessionServices(
+          input.sdk,
+          {
+            cwd,
+            agentDir,
+            modelRuntime,
+          },
+          input.gatewayTools !== undefined && input.gatewayTools.length > 0,
+          glasswingProfileEnabled,
+        );
         const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
         const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
@@ -2185,6 +2212,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           })),
           services,
           diagnostics: services.diagnostics,
+          glasswingProfileEnabled,
         };
       };
       const runtime = await input.sdk.createAgentSessionRuntime(createRuntime, {
@@ -2195,6 +2223,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return {
         runtime,
         modelRegistry: modelRegistryFacade(runtime.services.modelRuntime, input.sdk),
+        glasswingProfileEnabled,
       };
     };
 
@@ -2270,35 +2299,36 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         if (!gatewayControlAvailable) {
           agentGatewaySessionLease?.release();
         }
-        const { runtime, modelRegistry } = yield* releaseAgentGatewaySessionLeaseOnInterrupt(
-          agentGatewaySessionLease,
-          Effect.tryPromise({
-            try: () =>
-              createSdkRuntime({
-                sdk: piSdk,
-                cwd,
-                agentDir,
-                sessionManager,
-                ...(modelId ? { modelId } : {}),
-                ...(thinkingLevel ? { thinkingLevel } : {}),
-                processSupervisor,
-                ...(gatewayControlAvailable ? { gatewayTools } : {}),
-              }),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/start",
-                detail: toMessage(cause, "Failed to start Pi session."),
-                cause,
-              }),
-          }),
-        ).pipe(
-          Effect.tapError(() =>
-            Effect.sync(() => {
-              agentGatewaySessionLease?.release();
+        const { runtime, modelRegistry, glasswingProfileEnabled } =
+          yield* releaseAgentGatewaySessionLeaseOnInterrupt(
+            agentGatewaySessionLease,
+            Effect.tryPromise({
+              try: () =>
+                createSdkRuntime({
+                  sdk: piSdk,
+                  cwd,
+                  agentDir,
+                  sessionManager,
+                  ...(modelId ? { modelId } : {}),
+                  ...(thinkingLevel ? { thinkingLevel } : {}),
+                  processSupervisor,
+                  ...(gatewayControlAvailable ? { gatewayTools } : {}),
+                }),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "session/start",
+                  detail: toMessage(cause, "Failed to start Pi session."),
+                  cause,
+                }),
             }),
-          ),
-        );
+          ).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                agentGatewaySessionLease?.release();
+              }),
+            ),
+          );
         const now = new Date().toISOString();
         const model = runtime.session.model
           ? `${runtime.session.model.provider}/${runtime.session.model.id}`
@@ -2320,6 +2350,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
           runtime,
+          glasswingProfileEnabled,
+          ...(glasswingProfileEnabled ? { harnessPolicyDelivered: true } : {}),
           gatewayControlAvailable,
           ...(gatewayControlAvailable && agentGatewaySessionLease
             ? {
@@ -2578,7 +2610,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           provider: PROVIDER,
           scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
         });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
+        const providerText = [
+          harnessPolicy,
+          context.glasswingProfileEnabled
+            ? renderGlasswingMessageAuthorContext(input.author)
+            : null,
+          payload.text,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
         void context.runtime.session
           .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
           .catch((cause) => {
@@ -2599,7 +2639,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           provider: PROVIDER,
           scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
         });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
+        const providerText = [
+          harnessPolicy,
+          context.glasswingProfileEnabled
+            ? renderGlasswingMessageAuthorContext(input.author)
+            : null,
+          payload.text,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
