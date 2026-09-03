@@ -20,7 +20,8 @@ export default defineConfig({
   external: [/^bun:/u],
   sourcemap: buildSourcemap,
   clean: true,
-  noExternal: (id) => id.startsWith("@synara/"),
+  noExternal: (id) =>
+    id.startsWith("@synara/") || id === "pi-web-access" || id.startsWith("pi-web-access/"),
   inlineOnly: false,
   banner: {
     js: "#!/usr/bin/env node\n",
