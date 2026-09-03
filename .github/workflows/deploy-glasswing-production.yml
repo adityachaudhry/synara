@@ -1,0 +1,20 @@
+name: deploy Glasswing production
+
+on:
+  push:
+    branches: [glasswingos/main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-glasswing-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install --global @railway/cli
+      - run: railway up --service synara-gitea-production --project 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0 --environment production --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PRODUCTION }}
