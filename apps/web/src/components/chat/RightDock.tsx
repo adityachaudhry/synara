@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
+import { useSynaraHostSidebar } from "~/hostSidebar";
 import {
   type DockPaneRuntimeMode,
   EMPTY_PANE_ID_SET,
@@ -123,9 +124,10 @@ function RightDockTab(props: {
   pane: RightDockPane;
   label: string;
   icon?: ReactNode;
+  className?: string;
   active: boolean;
   onSelect?: (() => void) | undefined;
-  onClose: () => void;
+  onClose?: (() => void) | undefined;
 }) {
   return (
     <SurfaceTabChip
@@ -133,8 +135,9 @@ function RightDockTab(props: {
       title={props.label}
       label={props.label}
       labelClassName="max-w-[10rem]"
+      className={props.className}
       icon={props.icon ?? resolveRightDockPaneIcon(props.pane)}
-      closeLabel={`Close ${props.label}`}
+      closeLabel={props.onClose ? `Close ${props.label}` : undefined}
       onSelect={props.onSelect}
       onClose={props.onClose}
     />
@@ -180,6 +183,7 @@ function useKeepMountedPaneIds(
 }
 
 export function RightDock(props: RightDockProps) {
+  const hostSidebar = useSynaraHostSidebar();
   const activePane = resolveActivePane(props.state);
   const onSelectPane = props.onSelectPane;
   const activePaneId = activePane?.id ?? null;
@@ -317,9 +321,16 @@ export function RightDock(props: RightDockProps) {
                   pane={pane}
                   label={resolveRightDockPaneLabel(pane, props.paneLabelOverrides)}
                   icon={props.paneIconOverrides?.[pane.id]}
+                  className={
+                    hostSidebar?.simplifiedComposer === true
+                      ? "!bg-[var(--background)]"
+                      : undefined
+                  }
                   active={pane.id === props.state.activePaneId}
                   onSelect={onSelectPane ? () => onSelectPane(pane.id) : undefined}
-                  onClose={() => props.onClosePane(pane.id)}
+                  {...(hostSidebar?.simplifiedComposer === true && pane.kind === "explorer"
+                    ? {}
+                    : { onClose: () => props.onClosePane(pane.id) })}
                 />
               ))}
               {activePane === null && (props.launcherItems?.length ?? 0) > 0 ? (
@@ -333,7 +344,8 @@ export function RightDock(props: RightDockProps) {
                 />
               ) : null}
             </div>
-            {props.state.panes.length > 0 &&
+            {hostSidebar?.simplifiedComposer !== true &&
+            props.state.panes.length > 0 &&
             (props.launcherItems?.length ?? 0) > 0 &&
             props.onShowLauncher ? (
               <IconButton
@@ -342,7 +354,11 @@ export function RightDock(props: RightDockProps) {
                 label="Add panel"
                 tooltip="Add panel"
                 tooltipSide="bottom"
-                className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                className={cn(
+                  DOCK_HEADER_ICON_BUTTON_CLASS,
+                  hostSidebar?.simplifiedComposer === true &&
+                    "text-[var(--brand)] [&_svg]:!opacity-100",
+                )}
                 onClick={props.onShowLauncher}
               >
                 <PlusIcon className="size-3.5" />
@@ -354,7 +370,11 @@ export function RightDock(props: RightDockProps) {
               label="Collapse panel"
               tooltip="Collapse panel"
               tooltipSide="bottom"
-              className={DOCK_HEADER_ICON_BUTTON_CLASS}
+              className={cn(
+                DOCK_HEADER_ICON_BUTTON_CLASS,
+                hostSidebar?.simplifiedComposer === true &&
+                  "text-[var(--brand)] [&_svg]:!opacity-100",
+              )}
               onClick={props.onCollapse}
             >
               <PanelRightCloseIcon />

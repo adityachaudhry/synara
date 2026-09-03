@@ -40,6 +40,7 @@ export interface SynaraHostPersistenceResult {
 
 export interface SynaraHostFilePaneContext {
   readonly threadId: string | null;
+  readonly closePane: () => void;
 }
 
 export interface SynaraHostSidebar {
@@ -55,9 +56,13 @@ export interface SynaraHostSidebar {
   readonly currentMessageAuthor?: OrchestrationMessageAuthor;
   readonly assistantLabel?: string;
   readonly messageAuthorNamesByLabel?: Readonly<Record<string, string>>;
+  /** Suppress successful thread/terminal completion notifications; attention alerts remain enabled. */
+  readonly suppressCompletionNotifications?: boolean;
   readonly openFilesPaneOnMount?: boolean;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
+  readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;
+  readonly threadFeedHeader?: ReactNode;
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,
   ) => Promise<SynaraHostPersistenceResult | null>;

@@ -122,7 +122,11 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
-const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+const PI_ANTHROPIC_ENSURED_MODEL_IDS = [
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-4-8",
+] as const;
 type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 
 /**
@@ -143,6 +147,17 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
     readonly maxTokens: number;
   }
 > = {
+  "claude-fable-5-1": {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
   "claude-fable-5": {
     id: "claude-fable-5",
     name: "Claude Fable 5",
@@ -167,7 +182,18 @@ const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
   },
 };
 
-type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
+const PI_GLASSWING_ANTHROPIC_FALLBACK_MODEL_IDS = new Set([
+  "claude-fable-5-1",
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-fable-5",
+  "claude-opus-4-8",
+]);
+
+type PiModelRegistry = Pick<
+  ModelRegistry,
+  "find" | "getAll" | "getAvailable" | "getApiKeyAndHeaders"
+>;
 type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
 type PiWebAccessModule = typeof import("pi-web-access/index.ts");
 type PiAgentRuntime = Awaited<ReturnType<PiCodingAgentModule["createAgentSessionRuntime"]>>;
@@ -671,6 +697,152 @@ export function getPiDiscoverableModels(
   return ensurePiAnthropicCatalogModels(registry.getAvailable(), registry.getAll());
 }
 
+interface AnthropicModelInfo {
+  readonly id: string;
+  readonly displayName: string;
+  readonly contextWindow?: number;
+  readonly maxTokens?: number;
+  readonly capabilities?: Record<string, unknown>;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function supportedCapability(value: unknown): boolean {
+  return objectValue(value)?.supported === true;
+}
+
+function parseAnthropicModelsResponse(value: unknown): AnthropicModelInfo[] | null {
+  const data = objectValue(value)?.data;
+  if (!Array.isArray(data)) return null;
+  const models = data.flatMap((entry) => {
+    const model = objectValue(entry);
+    const id = typeof model?.id === "string" ? model.id.trim() : "";
+    const displayName =
+      typeof model?.display_name === "string" ? model.display_name.trim() : "";
+    if (!id || !displayName || model?.type !== "model") return [];
+    return [{
+      id,
+      displayName,
+      ...(typeof model.max_input_tokens === "number" && model.max_input_tokens > 0
+        ? { contextWindow: model.max_input_tokens }
+        : {}),
+      ...(typeof model.max_tokens === "number" && model.max_tokens > 0
+        ? { maxTokens: model.max_tokens }
+        : {}),
+      ...(objectValue(model.capabilities) ? { capabilities: objectValue(model.capabilities) } : {}),
+    } satisfies AnthropicModelInfo];
+  });
+  const cutoff = models.findIndex((model) => model.id === "claude-opus-4-8");
+  return cutoff < 0 ? null : models.slice(0, cutoff + 1);
+}
+
+function anthropicModelFromInfo(
+  info: AnthropicModelInfo,
+  registry: PiModelRegistry,
+): Model<Api> | null {
+  const all = registry.getAll();
+  const family = /^claude-([a-z]+)-/u.exec(info.id)?.[1];
+  const peer =
+    registry.find("anthropic", info.id) ??
+    (family
+      ? all.find(
+          (model) =>
+            model.provider === "anthropic" && model.id.startsWith(`claude-${family}-`),
+        )
+      : undefined) ??
+    all.find((model) => model.provider === "anthropic");
+  if (!peer) return null;
+
+  const effort = objectValue(info.capabilities?.effort);
+  const supportedEfforts = PI_THINKING_OPTIONS.filter((option) =>
+    supportedCapability(effort?.[option.value]),
+  );
+  const thinkingLevelMap = supportedEfforts.length > 0
+    ? Object.fromEntries(
+        PI_THINKING_OPTIONS.map((option) => [
+          option.value,
+          supportedEfforts.some((supported) => supported.value === option.value)
+            ? option.value
+            : null,
+        ]),
+      ) as NonNullable<Model<Api>["thinkingLevelMap"]>
+    : peer.thinkingLevelMap;
+  const adaptiveThinking = supportedCapability(
+    objectValue(objectValue(info.capabilities?.thinking)?.types)?.adaptive,
+  );
+
+  return {
+    ...peer,
+    id: info.id,
+    name: isPiAnthropicEnsuredModelId(info.id)
+      ? PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[info.id].name
+      : info.displayName,
+    reasoning: supportedCapability(info.capabilities?.thinking) || supportedEfforts.length > 0,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    input: supportedCapability(info.capabilities?.image_input) ? ["text", "image"] : ["text"],
+    contextWindow: info.contextWindow ?? peer.contextWindow,
+    maxTokens: info.maxTokens ?? peer.maxTokens,
+    ...(adaptiveThinking
+      ? { compat: { ...peer.compat, forceAdaptiveThinking: true } }
+      : {}),
+  };
+}
+
+async function fetchGlasswingAnthropicModels(
+  registry: PiModelRegistry,
+): Promise<Model<Api>[] | null> {
+  const peer = registry.getAll().find((model) => model.provider === "anthropic");
+  if (!peer) return null;
+  try {
+    const auth = await registry.getApiKeyAndHeaders(peer);
+    if (!auth.ok) return null;
+    const headers = new Headers({ "anthropic-version": "2023-06-01" });
+    if (auth.apiKey) headers.set("x-api-key", auth.apiKey);
+    for (const [name, value] of Object.entries(auth.headers ?? {})) {
+      if (value !== null) headers.set(name, value);
+    }
+    const baseUrl = (auth.baseUrl ?? peer.baseUrl).replace(/\/+$/u, "");
+    const response = await fetch(
+      `${baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}/models?limit=1000`,
+      { headers, signal: AbortSignal.timeout(10_000) },
+    );
+    if (!response.ok) return null;
+    return parseAnthropicModelsResponse(await response.json())?.flatMap((info) => {
+      const model = anthropicModelFromInfo(info, registry);
+      return model ? [model] : [];
+    }) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getGlasswingPiDiscoverableModels(registry: PiModelRegistry): Promise<{
+  readonly models: ReadonlyArray<Model<Api>>;
+  readonly remoteAnthropic: boolean;
+}> {
+  const available = getPiDiscoverableModels(registry);
+  if (!isGlasswingAgentProfileEnabled()) {
+    return { models: available, remoteAnthropic: false };
+  }
+  const remote = await fetchGlasswingAnthropicModels(registry);
+  const otherProviders = available.filter((model) => model.provider !== "anthropic");
+  if (remote?.length) {
+    return { models: [...remote, ...otherProviders], remoteAnthropic: true };
+  }
+  return {
+    models: available.filter(
+      (model) =>
+        model.provider !== "anthropic" ||
+        PI_GLASSWING_ANTHROPIC_FALLBACK_MODEL_IDS.has(model.id),
+    ),
+    remoteAnthropic: false,
+  };
+}
+
 /**
  * Pi extensions own their provider catalogs, so normalize their display metadata
  * before it crosses Synara's trimmed-string RPC contract. A single malformed
@@ -744,13 +916,24 @@ function createProviderModelFallback(
   if (!providerDefault) {
     return undefined;
   }
-  if (parsed.provider === "anthropic" && isPiAnthropicEnsuredModelId(parsed.id)) {
-    const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id];
+  if (parsed.provider === "anthropic" && parsed.id.startsWith("claude-")) {
+    const family = /^claude-([a-z]+)-/u.exec(parsed.id)?.[1];
+    const familyDefault = family
+      ? registry
+          .getAll()
+          .find(
+            (model) =>
+              model.provider === "anthropic" && model.id.startsWith(`claude-${family}-`),
+          )
+      : undefined;
+    const template = isPiAnthropicEnsuredModelId(parsed.id)
+      ? PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id]
+      : familyDefault ?? providerDefault;
     return {
       ...providerDefault,
       ...template,
-      id: template.id,
-      name: template.name,
+      id: parsed.id,
+      name: isPiAnthropicEnsuredModelId(parsed.id) ? template.name : parsed.id,
       provider: "anthropic",
       api: providerDefault.api,
       baseUrl: providerDefault.baseUrl,
@@ -2849,7 +3032,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           });
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = getPiDiscoverableModels(registry).flatMap((model) => {
+          const discovered = await getGlasswingPiDiscoverableModels(registry);
+          const models = discovered.models.flatMap((model) => {
             const descriptor = toPiProviderModelDescriptor(
               model,
               registry.getProviderDisplayName.bind(registry),
@@ -2858,7 +3042,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           });
           return {
             models,
-            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+            source: `${extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk"}${
+              discovered.remoteAnthropic ? "+anthropic.models" : ""
+            }`,
             cached: false,
           } satisfies ProviderListModelsResult;
         },

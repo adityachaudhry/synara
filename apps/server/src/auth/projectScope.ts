@@ -190,6 +190,15 @@ export function authorizeProjectScopedRpc(input: {
 }): Effect.Effect<boolean> {
   if (input.scope === undefined) return Effect.succeed(true);
   if (SCOPE_DENIED_METHODS.has(input.method)) return Effect.succeed(false);
+  if (input.method === "provider.listModels") {
+    if (!input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) {
+      return Effect.succeed(false);
+    }
+    const payload = input.payload as Record<string, unknown>;
+    return Effect.succeed(
+      payload.provider === "pi" && Object.keys(payload).every((key) => key === "provider"),
+    );
+  }
   if (
     (input.method.startsWith("provider.") &&
       input.method !== "provider.getComposerCapabilities") ||

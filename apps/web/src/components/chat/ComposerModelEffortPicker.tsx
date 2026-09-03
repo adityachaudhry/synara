@@ -15,11 +15,11 @@ import {
 } from "@synara/contracts";
 import { useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon, RotateCcwIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
+import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
@@ -42,6 +42,39 @@ import {
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
 import { TraitsMenuContent } from "./TraitsPicker";
+
+const MODEL_NAME_COLLATOR = new Intl.Collator(undefined, { sensitivity: "base" });
+const MODEL_NAME_NUMBER_PATTERN = /(\d+(?:\.\d+)*)/u;
+
+function compareModelNames(left: string, right: string): number {
+  const leftParts = left.split(MODEL_NAME_NUMBER_PATTERN);
+  const rightParts = right.split(MODEL_NAME_NUMBER_PATTERN);
+  const partCount = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < partCount; index += 1) {
+    const leftPart = leftParts[index] ?? "";
+    const rightPart = rightParts[index] ?? "";
+    const leftVersion = /^\d/u.test(leftPart);
+    const rightVersion = /^\d/u.test(rightPart);
+
+    if (leftVersion && rightVersion) {
+      const leftSegments = leftPart.split(".").map(Number);
+      const rightSegments = rightPart.split(".").map(Number);
+      const segmentCount = Math.max(leftSegments.length, rightSegments.length);
+      for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+        const difference =
+          (rightSegments[segmentIndex] ?? 0) - (leftSegments[segmentIndex] ?? 0);
+        if (difference !== 0) return difference;
+      }
+      continue;
+    }
+
+    const difference = MODEL_NAME_COLLATOR.compare(leftPart, rightPart);
+    if (difference !== 0) return difference;
+  }
+
+  return MODEL_NAME_COLLATOR.compare(left, right);
+}
 
 type ComposerModelEffortPickerProps = {
   // Model picker data.
@@ -105,6 +138,15 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
   const simplifiedHostPicker = hostSidebar?.simplifiedComposer === true && activeProvider === "pi";
+  const pickerModelOptionsByProvider = simplifiedHostPicker
+    ? {
+        ...props.modelOptionsByProvider,
+        [activeProvider]: props.modelOptionsByProvider[activeProvider].toSorted(
+          (left, right) =>
+            compareModelNames(left.name, right.name) || compareModelNames(left.slug, right.slug),
+        ),
+      }
+    : props.modelOptionsByProvider;
   const displayModelLabel =
     simplifiedHostPicker && modelLabel.startsWith("Claude ")
       ? modelLabel.slice("Claude ".length)
@@ -162,7 +204,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       model={props.model}
       lockedProvider={props.lockedProvider}
       {...(props.providers ? { providers: props.providers } : {})}
-      modelOptionsByProvider={props.modelOptionsByProvider}
+      modelOptionsByProvider={pickerModelOptionsByProvider}
       {...(props.loadingModelProviders
         ? { loadingModelProviders: props.loadingModelProviders }
         : {})}
@@ -184,7 +226,8 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       className={cn(
         "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-        simplifiedHostPicker && "rounded-full bg-secondary/70 px-3 hover:bg-secondary",
+        simplifiedHostPicker &&
+          "rounded-full !border-0 !bg-[var(--background)] px-3 data-popup-open:!bg-[var(--background)] hover:!bg-[var(--background)]",
       )}
       aria-label="Change model and reasoning"
       {...(hiddenTriggerTitle.length > 0 ? { title: hiddenTriggerTitle } : {})}
@@ -199,7 +242,13 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
           // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
           useLargerBrandIcon ? "size-4" : "size-3.5",
           "shrink-0 opacity-100",
-          getProviderIconClassName(activeProvider, "text-[var(--color-text-foreground)]"),
+          getProviderIconClassName(
+            activeProvider,
+            simplifiedHostPicker
+              ? "text-[var(--brand)]"
+              : "text-[var(--color-text-foreground)]",
+          ),
+          simplifiedHostPicker && "!text-[var(--brand)]",
         )}
       />
       {props.hideModelLabel ? (
@@ -225,12 +274,25 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
             <span className="sr-only">{triggerStatusLabel}</span>
           </>
         ) : (
-          <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
+          <span
+            className={cn(
+              "shrink-0",
+              simplifiedHostPicker
+                ? "font-light text-[var(--color-text-foreground)]"
+                : COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+            )}
+          >
             {triggerStatusLabel}
           </span>
         )
       ) : null}
-      <ChevronDownIcon aria-hidden="true" className="ms-0.5 size-3 shrink-0 opacity-60" />
+      <ChevronDownIcon
+        aria-hidden="true"
+        className={cn(
+          "ms-0.5 size-3 shrink-0",
+          simplifiedHostPicker ? "text-[var(--brand)] opacity-100" : "opacity-60",
+        )}
+      />
     </span>
   );
 
@@ -305,23 +367,6 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
                   {traitsMenuContent}
                 </ComposerPickerMenuSubPopup>
               </MenuSub>
-            ) : null}
-            {props.onResetToDefault ? (
-              <>
-                <MenuSeparator />
-                <MenuItem
-                  className="w-full text-muted-foreground"
-                  onClick={() => {
-                    props.onResetToDefault?.();
-                    setMenuOpen(false);
-                  }}
-                >
-                  <span>Reset to default</span>
-                  <span className="ms-auto flex size-4 shrink-0 items-center justify-center">
-                    <RotateCcwIcon className="size-4" />
-                  </span>
-                </MenuItem>
-              </>
             ) : null}
           </>
         ) : (

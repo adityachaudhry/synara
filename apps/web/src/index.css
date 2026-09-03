@@ -2754,6 +2754,9 @@ diffs-container {
   width: min(17rem, 92vw) !important;
   min-width: min(17rem, 92vw) !important;
   border-radius: 1.25rem;
+  background: var(--background);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   --picker-menu-body-p: 0.25rem;
   --picker-option-min-h: 2.5rem;
   --picker-option-px: 0.875rem;
@@ -2770,10 +2773,30 @@ diffs-container {
 }
 
 .hosted-model-picker [data-slot="menu-item"],
+.hosted-model-picker [data-slot="menu-radio-item"],
+.hosted-model-picker [data-slot="menu-checkbox-item"],
 .hosted-model-picker [data-slot="menu-sub-trigger"] {
   width: 100%;
   border-radius: 0.75rem;
-  font-size: 0.875rem;
+  cursor: pointer;
+  font-size: var(--app-font-size-chat, 1rem);
+}
+
+.hosted-model-picker [data-disabled] {
+  cursor: default;
+}
+
+.hosted-model-picker [data-slot="menu-radio-item"][data-checked] {
+  color: var(--brand);
+}
+
+.hosted-model-picker [data-slot="menu-radio-item"] > span > [data-checked] {
+  display: none;
+}
+
+.hosted-model-picker [data-highlighted] {
+  background: var(--background);
+  color: var(--brand);
 }
 
 /* Size-aware option rows inside composer picker shells. */

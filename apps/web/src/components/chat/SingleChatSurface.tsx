@@ -826,10 +826,16 @@ export function SingleChatSurface(props: {
   const pullRequestPaneStateIcon = usePullRequestPaneStateIcon(
     pullRequestPane ? pullRequestDetailInputFromPane(pullRequestPane) : null,
   );
-  const paneIconOverrides =
-    pullRequestPane && pullRequestPaneStateIcon
-      ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
-      : undefined;
+  const paneIconOverrides: Record<string, ReactNode | undefined> = {};
+  if (pullRequestPane && pullRequestPaneStateIcon) {
+    paneIconOverrides[pullRequestPane.id] = pullRequestPaneStateIcon;
+  }
+  for (const pane of dockState.panes) {
+    if (pane.kind === "file" && pane.filePath) {
+      paneIconOverrides[pane.id] = hostSidebar?.renderFilePaneTabIcon?.(pane.filePath);
+    }
+  }
+  const hasPaneIconOverrides = Object.values(paneIconOverrides).some(Boolean);
 
   const handleAddDockPane = (kind: RightDockPaneKind) => {
     requestImmediateDockHydration(kind);
@@ -1020,7 +1026,10 @@ export function SingleChatSurface(props: {
         if (hostSidebar?.renderFilePane && pane.filePath) {
           return (
             <div className="h-full min-h-0 w-full overflow-hidden">
-              {hostSidebar.renderFilePane(pane.filePath, { threadId: props.threadId })}
+              {hostSidebar.renderFilePane(pane.filePath, {
+                threadId: props.threadId,
+                closePane: () => handleCloseDockPane(pane.id),
+              })}
             </div>
           );
         }
@@ -1265,7 +1274,7 @@ export function SingleChatSurface(props: {
           }
           browserRuntimeMode={floatingBrowserVisible ? "preview" : "live"}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
-          {...(paneIconOverrides ? { paneIconOverrides } : {})}
+          {...(hasPaneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
           onShowLauncher={() => setActivePane(props.threadId, null)}
           onClosePane={handleCloseDockPane}

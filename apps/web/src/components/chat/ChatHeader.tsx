@@ -662,6 +662,8 @@ export function ChatHeader({
               togglesRightDock || !showDiffTotals
                 ? "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0"
                 : null,
+              hostSidebar?.simplifiedComposer === true &&
+                "!bg-[var(--background)] hover:!bg-[var(--background)]",
             )}
             pressed={togglesRightDock ? rightDockOpen : diffOpen}
             onPressedChange={togglesRightDock ? onToggleRightDock : onToggleDiff}
@@ -679,7 +681,14 @@ export function ChatHeader({
                 deletions={diffDeletions}
               />
             ) : null}
-            <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
+            <SurfaceChipIcon
+              icon={PanelRightCloseIcon}
+              className={cn(
+                "size-4",
+                hostSidebar?.simplifiedComposer === true &&
+                  "text-[var(--brand)] !opacity-100",
+              )}
+            />
           </Toggle>
         }
       />
@@ -725,6 +734,14 @@ export function ChatHeader({
           </Tooltip>
         ) : null}
         {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
+        {minimalChrome && hostSidebar?.threadFeedHeader ? (
+          <div
+            data-synara-thread-feed-header
+            className="flex min-w-0 flex-1 items-center overflow-hidden"
+          >
+            {hostSidebar.threadFeedHeader}
+          </div>
+        ) : null}
         <div
           className={cn(
             "flex min-w-0 flex-1 items-center gap-2",

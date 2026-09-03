@@ -144,7 +144,11 @@ export function mergeDynamicModelOptions(input: {
     upstreamProviderName?: string | null | undefined;
   }>;
 }): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
+  const staticNameBySlug = new Map(
+    input.staticOptions
+      .filter((model) => model.isCustom !== true)
+      .map((model) => [model.slug, model.name]),
+  );
   const dynamicNormalizedSlugs = new Set<string>();
   const normalizedDynamicOptions: ProviderModelOption[] = [];
 

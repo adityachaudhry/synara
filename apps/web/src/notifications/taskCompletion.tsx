@@ -11,6 +11,7 @@ import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibil
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useSynaraHostSidebar } from "../hostSidebar";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
@@ -151,6 +152,9 @@ function showThreadToast(
 
 export function TaskCompletionNotifications() {
   const { settings } = useAppSettings();
+  const hostSidebar = useSynaraHostSidebar();
+  const suppressCompletionNotifications =
+    hostSidebar?.suppressCompletionNotifications === true;
   const navigate = useNavigate();
   const activeThreadId = useParams({
     strict: false,
@@ -260,6 +264,7 @@ export function TaskCompletionNotifications() {
       notifiedCompletionKeysRef.current.add(completedThreadNotificationKey(completion));
       const copy = buildTaskCompletionCopy(completion);
       if (
+        !suppressCompletionNotifications &&
         settings.enableTaskCompletionToasts &&
         shouldShowThreadNotificationToast({
           threadId: completion.threadId,
@@ -269,7 +274,7 @@ export function TaskCompletionNotifications() {
         showThreadToast(copy, completion.threadId, "success", navigate);
       }
 
-      if (shouldAttemptSystemNotification) {
+      if (!suppressCompletionNotifications && shouldAttemptSystemNotification) {
         void showSystemThreadNotification(copy, completion.threadId, navigate);
       }
     }
@@ -294,6 +299,7 @@ export function TaskCompletionNotifications() {
     for (const completion of terminalCompletions) {
       const copy = buildTerminalCompletionCopy(completion);
       if (
+        !suppressCompletionNotifications &&
         settings.enableTaskCompletionToasts &&
         shouldShowThreadNotificationToast({
           threadId: completion.threadId,
@@ -303,7 +309,7 @@ export function TaskCompletionNotifications() {
         showThreadToast(copy, completion.threadId, "success", navigate);
       }
 
-      if (shouldAttemptSystemNotification) {
+      if (!suppressCompletionNotifications && shouldAttemptSystemNotification) {
         void showSystemThreadNotification(copy, completion.threadId, navigate);
       }
     }
@@ -328,6 +334,7 @@ export function TaskCompletionNotifications() {
     navigate,
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
+    suppressCompletionNotifications,
     terminalStateByThreadId,
     threads,
     threadsHydrated,

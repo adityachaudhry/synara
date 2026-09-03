@@ -72,6 +72,8 @@ export function createHostThemeStyle(
   assignString(style, theme.colorCurrentUserMessage, ["--app-current-user-message-background"]);
   assignString(style, theme.colorCurrentUserMessageText, ["--app-user-message-text"]);
   assignString(style, theme.colorOtherUserMessage, ["--app-other-user-message-background"]);
+  assignString(style, theme.colorComposerBorder, ["--app-composer-border"]);
+  assignPixels(style, theme.composerBorderWidthPx, ["--app-composer-border-width"]);
   assignPixels(style, theme.controlRadiusPx, ["--radius", "--app-header-control-radius"]);
   assignPixels(style, theme.toolbarHeightPx, ["--app-chat-header-height"]);
   assignPixels(style, theme.controlHeightPx, ["--app-header-control-height"]);

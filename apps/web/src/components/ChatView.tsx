@@ -333,6 +333,7 @@ import {
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
   LoaderCircleIcon,
+  PanelRightCloseIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
 } from "~/lib/icons";
@@ -2360,11 +2361,13 @@ export default function ChatView({
     composerDraft.modelSelectionByProvider,
     projectModelSelection,
   ]);
-  const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
-    activeThreadWorktreePath: resolvedThreadWorktreePath,
-    activeProjectCwd: activeProject?.cwd ?? null,
-    serverCwd: serverConfigQuery.data?.cwd ?? null,
-  });
+  const providerModelDiscoveryCwd = hostSidebar?.projectThreadsOnly
+    ? null
+    : resolveProviderDiscoveryCwd({
+        activeThreadWorktreePath: resolvedThreadWorktreePath,
+        activeProjectCwd: activeProject?.cwd ?? null,
+        serverCwd: serverConfigQuery.data?.cwd ?? null,
+      });
   const hostCustomModelsByProvider =
     readSynaraRuntimeConfig().project?.customModelsByProvider;
   const hostModelPrefetchProviders = useMemo(
@@ -2391,7 +2394,7 @@ export default function ChatView({
         }
       : {}),
     ...(hostModelPrefetchProviders ? { prefetchProviders: hostModelPrefetchProviders } : {}),
-    agentDiscoveryPolicy: "eager-core",
+    agentDiscoveryPolicy: hostSidebar?.projectThreadsOnly ? "selected" : "eager-core",
   });
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
@@ -11007,12 +11010,6 @@ export default function ChatView({
     [navigate],
   );
   const activeProjectIdForNewChat = activeProject?.id ?? null;
-  const onNewHostedThread = useCallback(() => {
-    if (!activeProjectIdForNewChat) return;
-    void handleNewThread(activeProjectIdForNewChat, {
-      envMode: settings.defaultThreadEnvMode,
-    });
-  }, [activeProjectIdForNewChat, handleNewThread, settings.defaultThreadEnvMode]);
   const onNewEditorChat = useCallback(() => {
     if (!activeProjectIdForNewChat) {
       return;
@@ -11958,7 +11955,11 @@ export default function ChatView({
                               type="submit"
                               variant="prominent"
                               size="icon-xs"
-                              className="size-7 rounded-full sm:size-7"
+                              className={cn(
+                                "size-7 rounded-full sm:size-7",
+                                simplifiedComposer &&
+                                  "border-[1.5px] border-[var(--brand)] !bg-[var(--background)] !text-[var(--brand)] hover:!bg-[var(--sidebar-accent)]",
+                              )}
                               disabled={
                                 isSendBusy ||
                                 isConnecting ||
@@ -12030,11 +12031,14 @@ export default function ChatView({
       </div>
     );
 
+  const hostedThreadFeed = simplifiedComposer && hideNewThreadAction;
+
   return (
     <div
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
         CHAT_BACKGROUND_CLASS_NAME,
+        simplifiedComposer && "pipeline-mark-texture [--composer-glass-opacity:100%]",
       )}
       onDragEnter={onComposerDragEnter}
       onDragOver={onComposerDragOver}
@@ -12051,24 +12055,38 @@ export default function ChatView({
           isDragOverComposer ? "opacity-100" : "opacity-0",
         )}
       />
-      {/* Top bar */}
-      <header
-        className={cn(
-          CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-          !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-          "flex items-center",
-          isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-          isElectron && "drag-region",
-          // The editor-rail chat header sits in the editor's second row (inside the
-          // right-side chat pane), not flush against the window edges — the editor's
-          // own top bar already reserves both desktop window-control gutters. Applying
-          // them here just leaves redundant empty space on the sides.
-          !isEditorRail && desktopTopBarTrafficLightGutterClassName,
-          !isEditorRail && desktopTopBarWindowControlsGutterClassName,
-          activeThread.sidechatSourceThreadId && "hidden",
-        )}
-      >
-        <ChatHeader
+      {hostedThreadFeed && onToggleRightDock ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Toggle Explorer"
+          title="Toggle Explorer"
+          onClick={onToggleRightDock}
+          className="absolute right-3 top-3 z-20 !size-7 rounded-lg !bg-[var(--background)] text-[var(--brand)] shadow-sm hover:!bg-[var(--background)] [&_svg,&_[data-slot=central-icon]]:!opacity-100"
+        >
+          <PanelRightCloseIcon className="size-4" />
+        </Button>
+      ) : null}
+      {hostedThreadFeed ? null : (
+        <header
+          className={cn(
+            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+            !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+            "flex items-center",
+            isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+            simplifiedComposer && "bg-[var(--background)]",
+            isElectron && "drag-region",
+            // The editor-rail chat header sits in the editor's second row (inside the
+            // right-side chat pane), not flush against the window edges — the editor's
+            // own top bar already reserves both desktop window-control gutters. Applying
+            // them here just leaves redundant empty space on the sides.
+            !isEditorRail && desktopTopBarTrafficLightGutterClassName,
+            !isEditorRail && desktopTopBarWindowControlsGutterClassName,
+            activeThread.sidechatSourceThreadId && "hidden",
+          )}
+        >
+          <ChatHeader
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
@@ -12112,12 +12130,6 @@ export default function ChatView({
           rightDockOpen={rightDockOpen}
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
           {...(onOpenThreadFeed ? { onOpenThreadFeed } : {})}
-          {...(simplifiedComposer &&
-          activeProjectIdForNewChat &&
-          !hideNewThreadAction &&
-          !activeThread.sidechatSourceThreadId
-            ? { onNewThread: onNewHostedThread }
-            : {})}
           environment={simplifiedComposer || isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
@@ -12172,8 +12184,9 @@ export default function ChatView({
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
-        />
-      </header>
+          />
+        </header>
+      )}
 
       <RenameThreadDialog
         open={renameDialogOpen}

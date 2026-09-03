@@ -584,6 +584,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetBottomClearancePx,
 }: MessagesTimelineProps) {
   const hostSidebar = useSynaraHostSidebar();
+  const messageTimestampClassName = cn(
+    "shrink-0",
+    hostSidebar?.simplifiedComposer === true
+      ? "font-normal text-[var(--color-text-foreground)]"
+      : "font-normal text-[var(--color-text-foreground-secondary)]",
+  );
+  const workSummaryLabelClassName =
+    hostSidebar?.simplifiedComposer === true
+      ? "text-[var(--color-text-foreground)]"
+      : MUTED_LABEL_TEXT_CLASS_NAME;
+  const workSummaryDividerClassName =
+    hostSidebar?.simplifiedComposer === true
+      ? "bg-[var(--color-text-foreground)]"
+      : "bg-border";
   const [savingHostContentKey, setSavingHostContentKey] = useState<string | null>(null);
   const saveHostContent = useCallback(
     async (key: string, request: SynaraHostPersistenceRequest) => {
@@ -624,7 +638,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
-  const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
+  const userMessageBubbleBorderClass = cn(
+    userMessageBubbleBorderClassName(isTemporaryThread),
+    hostSidebar?.simplifiedComposer === true &&
+      !isTemporaryThread &&
+      "border-[color:var(--app-surface-divider)]",
+  );
   // The timeline remounts per thread (and when the agent-activity detail view
   // closes), but the anchor lives above it and survives those remounts. An
   // anchor that is already set at mount time therefore describes a slide that
@@ -1627,7 +1646,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         {authorLabel}
                       </span>
                       <time
-                        className="shrink-0 font-normal text-[var(--color-text-foreground-secondary)]"
+                        className={messageTimestampClassName}
                         dateTime={row.message.createdAt}
                       >
                         {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
@@ -2234,10 +2253,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.
                       className={cn(
-                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
-                        MUTED_LABEL_TEXT_CLASS_NAME,
+                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-[length:var(--app-font-size-ui-sm,11px)] transition-colors duration-200 hover:text-foreground",
+                        workSummaryLabelClassName,
                       )}
-                      style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
                       <span>
                         {row.collapsedWorkElapsed
@@ -2262,7 +2280,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </div>
                     </CollapsiblePanel>
                   </Collapsible>
-                  <div className="h-px w-full bg-border" />
+                  <div className={cn("h-px w-full", workSummaryDividerClassName)} />
                 </div>
               )}
               <div className="group min-w-0 py-0.5">
@@ -2275,7 +2293,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </span>
                       {assistantTimestamp ? (
                         <time
-                          className="shrink-0 font-normal text-[var(--color-text-foreground-secondary)]"
+                          className={messageTimestampClassName}
                           dateTime={row.message.createdAt}
                         >
                           {assistantTimestamp}
@@ -2610,8 +2628,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               tone, size, and full-width divider, but counting up live. -ml-0.5
               optically aligns the leading "W" with the reply text below. */}
           <div
-            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
-            style={{ fontSize: chatTypographyStyle.fontSize }}
+            className={cn(
+              "-ml-0.5 pb-2 text-[length:var(--app-font-size-ui-sm,11px)]",
+              workSummaryLabelClassName,
+            )}
           >
             Working for{" "}
             {nowIso ? (
@@ -2620,7 +2640,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <WorkingTimer createdAt={row.createdAt} />
             )}
           </div>
-          <div className="h-px w-full bg-border" />
+          <div className={cn("h-px w-full", workSummaryDividerClassName)} />
         </div>
       )}
 

@@ -159,7 +159,7 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
       >
         <div
           className={cn(
-            "mb-1 flex max-w-full items-center gap-2 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground-secondary)]",
+            "mb-1 flex max-w-full items-center gap-2 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground)]",
             isOtherAuthor ? "pl-0.5" : "pr-0.5",
           )}
         >
@@ -181,6 +181,8 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
               : "self-end bg-[var(--app-user-message-background)] [--app-user-message-background:var(--app-current-user-message-background)]",
             USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
             userMessageBubbleBorderClassName(false),
+            hostSidebar?.simplifiedComposer === true &&
+              "border-[color:var(--app-surface-divider)] transition-colors group-hover:border-[color:var(--brand)] group-focus-visible:border-[color:var(--brand)]",
             USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
           )}
         >
@@ -198,7 +200,7 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
         </div>
         <footer
           className={cn(
-            "flex items-center gap-2 font-system-ui font-normal text-[var(--color-text-foreground-secondary)]",
+            "flex items-center gap-2 font-system-ui font-normal text-[var(--color-text-foreground)]",
             isOtherAuthor ? "justify-start pl-0.5" : "justify-end pr-0.5",
           )}
           style={getChatMessageFooterTextStyle(chatFontSizePx)}
@@ -346,6 +348,13 @@ export function ProjectThreadFeedSurface({
     );
   }, []);
 
+  const closeDockPane = useCallback((paneId: string) => {
+    setDockState((state) => {
+      const next = closePaneInState(state, paneId);
+      return next.panes.length === 0 ? setDockOpenInState(next, false) : next;
+    });
+  }, []);
+
   const renderDockPane = useCallback(
     (pane: RightDockPane): ReactNode => {
       if (pane.kind === "explorer") {
@@ -359,11 +368,14 @@ export function ProjectThreadFeedSurface({
         return <div className="h-full min-h-0 w-full overflow-hidden">{filesPane}</div>;
       }
       if (pane.kind === "file" && pane.filePath && hostSidebar?.renderFilePane) {
-        return hostSidebar.renderFilePane(pane.filePath, { threadId: null });
+        return hostSidebar.renderFilePane(pane.filePath, {
+          threadId: null,
+          closePane: () => closeDockPane(pane.id),
+        });
       }
       return <PanelStateMessage>This panel is unavailable from the thread feed.</PanelStateMessage>;
     },
-    [hostSidebar, openFeedFile],
+    [closeDockPane, hostSidebar, openFeedFile],
   );
 
   const toggleDock = useCallback((open: boolean) => {
@@ -379,13 +391,6 @@ export function ProjectThreadFeedSurface({
   }, []);
   const openFeedExplorer = useCallback(() => toggleDock(true), [toggleDock]);
 
-  const closeDockPane = useCallback((paneId: string) => {
-    setDockState((state) => {
-      const next = closePaneInState(state, paneId);
-      return next.panes.length === 0 ? setDockOpenInState(next, false) : next;
-    });
-  }, []);
-
   const addDockPane = useCallback((kind: RightDockPaneKind) => {
     if (kind !== "explorer") return;
     setDockState((state) =>
@@ -394,9 +399,11 @@ export function ProjectThreadFeedSurface({
   }, []);
 
   const paneLabelOverrides: Record<string, string> = {};
+  const paneIconOverrides: Record<string, ReactNode | undefined> = {};
   for (const pane of dockState.panes) {
     if (pane.kind === "file" && pane.filePath) {
       paneLabelOverrides[pane.id] = basenameOfPath(pane.filePath);
+      paneIconOverrides[pane.id] = hostSidebar?.renderFilePaneTabIcon?.(pane.filePath);
     }
   }
 
@@ -461,6 +468,7 @@ export function ProjectThreadFeedSurface({
         onAddPane={addDockPane}
         renderPane={renderDockPane}
         paneLabelOverrides={paneLabelOverrides}
+        paneIconOverrides={paneIconOverrides}
       />
       {renameDialog}
     </div>
