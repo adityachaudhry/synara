@@ -124,7 +124,7 @@ function RightDockTab(props: {
   pane: RightDockPane;
   label: string;
   icon?: ReactNode;
-  className?: string;
+  className?: string | undefined;
   active: boolean;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
@@ -354,11 +354,7 @@ export function RightDock(props: RightDockProps) {
                 label="Add panel"
                 tooltip="Add panel"
                 tooltipSide="bottom"
-                className={cn(
-                  DOCK_HEADER_ICON_BUTTON_CLASS,
-                  hostSidebar?.simplifiedComposer === true &&
-                    "text-[var(--brand)] [&_svg]:!opacity-100",
-                )}
+                className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={props.onShowLauncher}
               >
                 <PlusIcon className="size-3.5" />
