@@ -142,6 +142,30 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("replaces the browser transport when the embedded project changes", async () => {
+    const { configureSynaraRuntime } = await import("./synaraRuntimeConfig");
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const resolveWebSocketUrl = vi.fn().mockResolvedValue("ws://localhost:3773/ws");
+
+    configureSynaraRuntime({
+      project: { projectId: ProjectId.makeUnsafe("project-one"), name: "One" },
+      resolveWebSocketUrl,
+    });
+    const first = createWsNativeApi();
+
+    expect(createWsNativeApi()).toBe(first);
+    expect(disposeMock).not.toHaveBeenCalled();
+
+    configureSynaraRuntime({
+      project: { projectId: ProjectId.makeUnsafe("project-two"), name: "Two" },
+      resolveWebSocketUrl,
+    });
+    const second = createWsNativeApi();
+
+    expect(second).not.toBe(first);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("delivers and caches valid server.welcome payloads", async () => {
     const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
 

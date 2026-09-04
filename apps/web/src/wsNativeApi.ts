@@ -61,7 +61,7 @@ import { readSynaraRuntimeConfig } from "./synaraRuntimeConfig";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
 
-let instance: { api: NativeApi; transport: WsTransport } | null = null;
+let instance: { api: NativeApi; transport: WsTransport; projectId?: string } | null = null;
 
 export function readWsServerCapabilities(): ReadonlyArray<string> | null {
   return instance?.transport.getCompatibility()?.capabilities ?? null;
@@ -424,14 +424,18 @@ export function onThreadStreamFailure(
 }
 
 export function createWsNativeApi(): NativeApi {
+  const runtimeConfig = readSynaraRuntimeConfig();
+  const projectId = runtimeConfig.project?.projectId;
   if (instance) {
-    if (instance.transport.getState() !== "disposed") {
+    if (instance.transport.getState() !== "disposed" && instance.projectId === projectId) {
       return instance.api;
     }
+    void instance.transport.dispose();
     instance = null;
+    clearWsNativeApiListeners();
   }
 
-  const transport = new WsTransport(readSynaraRuntimeConfig().resolveWebSocketUrl);
+  const transport = new WsTransport(runtimeConfig.resolveWebSocketUrl);
   let unsubscribeDomainEventTransport: (() => void) | null = null;
   transport.onStateChange((state) => emitWsTransportState(state));
   transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
@@ -1044,7 +1048,7 @@ export function createWsNativeApi(): NativeApi {
     },
   };
 
-  instance = { api, transport };
+  instance = { api, transport, ...(projectId ? { projectId } : {}) };
   return api;
 }
 
