@@ -41,12 +41,8 @@ jobs:
           path: apps/web/dist-embed/package
           # Workflow/README changes don't change the compiled browser code.
           key: embed-package-v1-protocol-${{ env.SYNARA_PROTOCOL_VERSION }}-${{ hashFiles('apps/web/src/**', 'apps/web/public/**', 'apps/web/scripts/**', 'apps/web/*.ts', 'apps/web/*.json', 'packages/*/src/**', 'packages/*/package.json', 'packages/*/tsconfig*.json', 'package.json', 'apps/*/package.json', 'scripts/package.json', 'bun.lock', 'bunfig.toml', 'patches/**', 'tsconfig*.json') }}
-      - uses: actions/cache@v4
-        if: steps.package.outputs.cache-hit != 'true'
-        with:
-          path: ~/.bun/install/cache
-          key: embed-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: embed-bun-${{ runner.os }}-
+      # Restoring the ~483 MB download cache took as long as a fresh Bun install.
+      # Keep the expensive compiler outputs cached instead.
       - name: Restore incremental declarations
         if: steps.package.outputs.cache-hit != 'true'
         uses: actions/cache@v4
