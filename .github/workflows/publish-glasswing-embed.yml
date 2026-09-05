@@ -23,8 +23,6 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    outputs:
-      branch: ${{ steps.channel.outputs.branch }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -72,16 +70,11 @@ jobs:
             gh release upload "$tag" "$RUNNER_TEMP/synara-react.tgz" --clobber
             gh release edit "$tag" --draft=false
           fi
-
-  rebuild-glasswing:
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
+      # Dispatch immediately after publication, without waiting for cache upload.
       - name: Trigger Glasswing web build
         env:
           GH_TOKEN: ${{ secrets.GLASSWING_ACTIONS_TOKEN }}
-          TARGET_BRANCH: ${{ needs.publish.outputs.branch }}
+          TARGET_BRANCH: ${{ steps.channel.outputs.branch }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo 'GLASSWING_ACTIONS_TOKEN must have Actions write permission on glasswing-ai-2.' >&2
