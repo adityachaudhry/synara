@@ -70,7 +70,11 @@ export default defineConfig(({ mode }) => ({
       cssFileName: "style",
     },
     rolldownOptions: {
-      external: /^react(?:-dom)?(?:\/.*)?$/,
+      // Next optimizes Tabler's named imports. Traversing its 6,000+ module
+      // barrel here only to bundle it again in the host doubles that work.
+      external: mode === "development"
+        ? /^react(?:-dom)?(?:\/.*)?$/
+        : [/^react(?:-dom)?(?:\/.*)?$/, /^@tabler\/icons-react(?:\/.*)?$/],
       output: {
         assetFileNames: (assetInfo) => {
           if (assetInfo.names?.includes("style.css")) return "style.css";

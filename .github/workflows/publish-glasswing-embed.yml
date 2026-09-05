@@ -8,6 +8,7 @@ on:
       - 'packages/**'
       - '**/package.json'
       - 'bun.lock'
+      - 'bunfig.toml'
       - 'patches/**'
       - 'tsconfig*.json'
       - '.github/workflows/publish-glasswing-embed.yml'
@@ -22,7 +23,10 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # Browser JS/declarations are platform independent; no native modules ship.
+    runs-on: macos-15
+    env:
+      SYNARA_PROTOCOL_VERSION: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -31,19 +35,49 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Restore checked package
+        id: package
+        uses: actions/cache@v4
+        with:
+          path: apps/web/dist-embed/package
+          # Workflow/README changes don't change the compiled browser code.
+          key: embed-package-v1-protocol-${{ env.SYNARA_PROTOCOL_VERSION }}-${{ hashFiles('apps/web/src/**', 'apps/web/public/**', 'apps/web/scripts/**', 'apps/web/*.ts', 'apps/web/*.json', 'packages/*/src/**', 'packages/*/package.json', 'packages/*/tsconfig*.json', 'package.json', 'apps/*/package.json', 'scripts/package.json', 'bun.lock', 'bunfig.toml', 'patches/**', 'tsconfig*.json') }}
       - uses: actions/cache@v4
+        if: steps.package.outputs.cache-hit != 'true'
         with:
           path: ~/.bun/install/cache
           key: embed-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: embed-bun-${{ runner.os }}-
+      - name: Restore incremental declarations
+        if: steps.package.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: apps/web/dist-embed/types
+          key: embed-types-v1-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/web/tsconfig*.json', 'tsconfig*.json') }}-${{ github.sha }}
+          restore-keys: embed-types-v1-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/web/tsconfig*.json', 'tsconfig*.json') }}-
       # Declaration generation resolves shared workspace types as well as web.
       - run: bun install --frozen-lockfile
+        if: steps.package.outputs.cache-hit != 'true'
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: bun run --cwd apps/web build:embed
+        if: steps.package.outputs.cache-hit != 'true'
         env:
           SYNARA_COMMIT: ${{ github.sha }}
-          SYNARA_PROTOCOL_VERSION: '1'
+      - name: Stamp reused package provenance
+        if: steps.package.outputs.cache-hit == 'true'
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs/promises';
+          const root = 'apps/web/dist-embed/package';
+          const file = `${root}/synara-provenance.json`;
+          const provenance = JSON.parse(await fs.readFile(file, 'utf8'));
+          provenance.synaraCommit = process.env.GITHUB_SHA;
+          provenance.commit = process.env.GITHUB_SHA;
+          await fs.writeFile(file, `${JSON.stringify(provenance, null, 2)}\n`);
+          await fs.copyFile('apps/web/README.embed.md', `${root}/README.md`);
+          console.log(`Reused checked build inputs for ${provenance.commit}`);
+          NODE
       - name: Publish immutable channel package
         id: channel
         env:
@@ -64,7 +98,7 @@ jobs:
             gh release create "$tag" --draft \
               --target "$GITHUB_SHA" --prerelease --latest=false \
               --title "Synara React $channel build $GITHUB_RUN_NUMBER" \
-              --notes "Built from $GITHUB_SHA. Protocol version 1."
+              --notes "Built from $GITHUB_SHA. Protocol version $SYNARA_PROTOCOL_VERSION."
           fi
           if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ]; then
             gh release upload "$tag" "$RUNNER_TEMP/synara-react.tgz" --clobber

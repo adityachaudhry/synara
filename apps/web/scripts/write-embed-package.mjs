@@ -100,6 +100,7 @@ export async function writeEmbedPackage(input) {
     version,
     type: "module",
     sideEffects: ["./style.css"],
+    ...(input.dependencies ? { dependencies: input.dependencies } : {}),
     exports: {
       ".": { types: "./index.d.ts", import: "./index.js" },
       "./style.css": "./style.css",
@@ -144,5 +145,11 @@ if (invokedPath === import.meta.url) {
     synaraCommit: process.env.SYNARA_COMMIT,
     protocolVersion: Number(process.env.SYNARA_PROTOCOL_VERSION),
     routerVersion: packageManifest.dependencies["@tanstack/react-router"],
+    dependencies: {
+      // Pin the exact dependency checked by this build, not a floating range.
+      "@tabler/icons-react": JSON.parse(
+        await fs.readFile(path.join(webDir, "node_modules/@tabler/icons-react/package.json"), "utf8"),
+      ).version,
+    },
   });
 }

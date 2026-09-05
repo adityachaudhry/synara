@@ -5,9 +5,10 @@
     "declaration": true,
     "declarationMap": false,
     "emitDeclarationOnly": true,
-    "incremental": false,
+    "incremental": true,
+    "tsBuildInfoFile": "./dist-embed/types/embed.tsbuildinfo",
     "noEmit": false,
-    "outDir": "./dist-embed/build",
+    "outDir": "./dist-embed/types",
     "rootDir": "./src",
     "types": ["vite/client", "node"]
   },

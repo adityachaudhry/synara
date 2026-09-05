@@ -59,6 +59,7 @@ describe("writeEmbedPackage", () => {
       synaraCommit: "synara-sha",
       protocolVersion: 1,
       routerVersion: "^1.160.2",
+      dependencies: { "@tabler/icons-react": "3.44.0" },
     };
 
     await writeEmbedPackage({ ...first, ...input });
@@ -92,6 +93,7 @@ describe("writeEmbedPackage", () => {
       version: "0.7.3",
       type: "module",
       sideEffects: ["./style.css"],
+      dependencies: { "@tabler/icons-react": "3.44.0" },
       exports: {
         ".": { types: "./index.d.ts", import: "./index.js" },
         "./style.css": "./style.css",
