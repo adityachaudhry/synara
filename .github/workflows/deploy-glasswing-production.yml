@@ -12,7 +12,7 @@ on:
       - 'bunfig.toml'
       - 'patches/**'
       - 'tsconfig*.json'
-      - 'Dockerfile.glasswing'
+      - 'Dockerfile'
       - '.dockerignore'
       - 'docker-entrypoint.sh'
       - 'railway.json'
