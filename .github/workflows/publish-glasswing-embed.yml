@@ -23,8 +23,7 @@ permissions:
 
 jobs:
   publish:
-    # Browser JS/declarations are platform independent; no native modules ship.
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     env:
       SYNARA_PROTOCOL_VERSION: '1'
     steps:
@@ -55,8 +54,14 @@ jobs:
           path: apps/web/dist-embed/types
           key: embed-types-v1-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/web/tsconfig*.json', 'tsconfig*.json') }}-${{ github.sha }}
           restore-keys: embed-types-v1-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/web/tsconfig*.json', 'tsconfig*.json') }}-
-      # Declaration generation resolves shared workspace types as well as web.
-      - run: bun install --frozen-lockfile
+      - name: Restore per-file React compiler results
+        if: steps.package.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: apps/web/dist-embed/react-compiler-cache
+          key: embed-react-v1-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/web/scripts/cached-react-compiler.mjs', 'apps/web/vite.embed.config.ts') }}-${{ github.sha }}
+          restore-keys: embed-react-v1-${{ runner.os }}-${{ hashFiles('bun.lock', 'apps/web/scripts/cached-react-compiler.mjs', 'apps/web/vite.embed.config.ts') }}-
+      - run: bun install --frozen-lockfile --filter @synara/web
         if: steps.package.outputs.cache-hit != 'true'
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'

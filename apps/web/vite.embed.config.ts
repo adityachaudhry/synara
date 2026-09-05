@@ -1,13 +1,13 @@
 import path from "node:path";
 
 import tailwindcss from "@tailwindcss/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import babel from "@rolldown/plugin-babel";
+import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
 
 import pkg from "./package.json" with { type: "json" };
 import { centralIconPrunePlugin } from "./vite.config";
+import { cachedReactCompilerPlugin } from "./scripts/cached-react-compiler.mjs";
 
 const useSyncExternalStoreWithSelectorAdapter = path.resolve(
   import.meta.dirname,
@@ -20,12 +20,7 @@ export default defineConfig(({ mode }) => ({
     react(),
     ...(mode === "development"
       ? []
-      : [
-          babel({
-            parserOpts: { plugins: ["typescript", "jsx"] },
-            presets: [reactCompilerPreset()],
-          }),
-        ]),
+      : [cachedReactCompilerPlugin()]),
     tailwindcss(),
     centralIconPrunePlugin(),
   ],
