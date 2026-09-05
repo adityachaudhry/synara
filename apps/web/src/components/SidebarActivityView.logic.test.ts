@@ -56,6 +56,7 @@ function makeThread(input: {
     id: ThreadId.makeUnsafe(input.id),
     projectId: input.projectId ?? PROJECT_ID,
     title: `Thread ${input.id}`,
+    feedSummary: null,
     modelSelection: { provider: "codex", model: "gpt-5" },
     interactionMode: "default",
     branch: null,

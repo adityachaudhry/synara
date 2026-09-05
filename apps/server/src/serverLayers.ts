@@ -66,6 +66,7 @@ import {
 import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedRuntimeConfig";
 import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
 import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
+import { makeDockerWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/DockerWorkspaceRuntime";
 import { SandboxCapacity } from "./workspaceRuntime/SandboxCapacity";
 import { makeExternalProjectResolverLive } from "./externalProjectResolver";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects";
@@ -280,11 +281,12 @@ export function makeServerApplicationLayers() {
     ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
   );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
-  const sandboxCapacity = distributedPiConfig.enabled
-    ? new SandboxCapacity(distributedPiConfig.railway.maxActiveSandboxes, {
-        reconcileBeforeAdmission: true,
-      })
-    : undefined;
+  const sandboxCapacity =
+    distributedPiConfig.enabled && distributedPiConfig.railway.enabled
+      ? new SandboxCapacity(distributedPiConfig.railway.maxActiveSandboxes, {
+          reconcileBeforeAdmission: true,
+        })
+      : undefined;
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled
     ? makeProviderWorkerProvisionerFromArtifactLive({
         controlUrl: distributedPiConfig.controlUrl,
@@ -295,11 +297,22 @@ export function makeServerApplicationLayers() {
           : { repositoryAuthorization: distributedPiConfig.repositoryAuthorization }),
       }).pipe(
         Layer.provide(
-          makeWorkspaceRuntimeLive(distributedPiConfig.railway, { capacity: sandboxCapacity }).pipe(
-            Layer.provide(makeRailwaySandboxClientLive(distributedPiConfig.railway)),
-            Layer.provide(WorkspaceCreationIntentRepositoryLive),
-            Layer.provide(ProviderSessionRuntimeRepositoryLive),
-          ),
+          distributedPiConfig.docker
+            ? makeDockerWorkspaceRuntimeLive(distributedPiConfig.docker).pipe(
+                Layer.provide(WorkspaceCreationIntentRepositoryLive),
+                Layer.provide(ProviderSessionRuntimeRepositoryLive),
+              )
+            : distributedPiConfig.railway.enabled
+              ? makeWorkspaceRuntimeLive(distributedPiConfig.railway, {
+                  ...(sandboxCapacity ? { capacity: sandboxCapacity } : {}),
+                }).pipe(
+                  Layer.provide(makeRailwaySandboxClientLive(distributedPiConfig.railway)),
+                  Layer.provide(WorkspaceCreationIntentRepositoryLive),
+                  Layer.provide(ProviderSessionRuntimeRepositoryLive),
+                )
+              : (() => {
+                  throw new Error("Distributed runtime has no backend");
+                })(),
         ),
         Layer.provide(providerWorkerTransportLayer),
       )
@@ -316,8 +329,6 @@ export function makeServerApplicationLayers() {
     providerLayer: makeServerProviderLayer({
       agentGatewayCredentialsLayer,
       ...(sandboxCapacity === undefined ? {} : { sandboxCapacity }),
-    }).pipe(
-      Layer.provide(providerWorkerInfrastructureLayer),
-    ),
+    }).pipe(Layer.provide(providerWorkerInfrastructureLayer)),
   } as const;
 }

@@ -1,7 +1,15 @@
 import { Deferred, Effect, Fiber, Layer } from "effect";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "vitest";
 
-import { WorkspaceRuntime, type WorkspaceRuntimeBinding } from "../../workspaceRuntime/Services/WorkspaceRuntime";
+import {
+  WorkspaceRuntime,
+  type WorkspaceRuntimeBinding,
+  type WorkspaceExecInput,
+  type WorkspaceExecResult,
+  type WorkspaceRuntimeCreateInput,
+  type WorkspaceRuntimeWriteFileInput,
+} from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
@@ -25,15 +33,27 @@ function makeHarness(options?: {
   const calls: string[] = [];
   const files = new Map<string, string>();
   const workspace = {
-    create: vi.fn(() => Effect.succeed(workspaceBinding)),
-    connect: vi.fn(() => Effect.succeed(workspaceBinding)),
+    create: vi.fn<
+      (input: WorkspaceRuntimeCreateInput) => Effect.Effect<WorkspaceRuntimeBinding, Error>
+    >(() => Effect.succeed(workspaceBinding)),
+    connect: vi.fn<
+      (binding: WorkspaceRuntimeBinding) => Effect.Effect<WorkspaceRuntimeBinding, Error>
+    >(() => Effect.succeed(workspaceBinding)),
     adopt: vi.fn(() => Effect.void),
-    exec: vi.fn(),
-    writeFile: vi.fn((_binding, input: { readonly path: string; readonly data: string | Uint8Array }) =>
+    exec: vi.fn<
+      (
+        binding: WorkspaceRuntimeBinding,
+        input: WorkspaceExecInput,
+      ) => Effect.Effect<WorkspaceExecResult, Error>
+    >(() =>
+      Effect.succeed({ exitCode: 1, stdout: "", stderr: "", timedOut: false, truncated: false }),
+    ),
+    writeFile: vi.fn((_binding: WorkspaceRuntimeBinding, input: WorkspaceRuntimeWriteFileInput) =>
       Effect.sync(() => {
         calls.push(`write:${input.path}`);
         files.set(input.path, String(input.data));
-      })),
+      }),
+    ),
     startDurableProcess: vi.fn(() =>
       Effect.sync(() => {
         calls.push("start");
@@ -42,7 +62,17 @@ function makeHarness(options?: {
     ),
     stopDurableProcess: vi.fn(() => Effect.sync(() => calls.push("stop-process"))),
     keepAlive: vi.fn(() => Effect.void),
-    destroy: vi.fn(() =>
+    readFile: () => Effect.succeed(new Uint8Array()),
+    listFiles: () => Effect.succeed([]),
+    statFile: () =>
+      Effect.succeed({
+        name: "outbox",
+        size: 0,
+        mode: 0o700,
+        isDir: true,
+        modTime: "2026-01-01T00:00:00.000Z",
+      }),
+    destroy: vi.fn<(binding: WorkspaceRuntimeBinding) => Effect.Effect<void, Error>>(() =>
       Effect.sync(() => calls.push("destroy")).pipe(
         Effect.andThen(
           options?.failDestroy ? Effect.fail(new Error("destroy failed")) : Effect.void,
@@ -71,6 +101,7 @@ function makeHarness(options?: {
     revoke: vi.fn(() => Effect.sync(() => calls.push("revoke"))),
   };
   const layer = Layer.mergeAll(
+    NodeServices.layer,
     Layer.succeed(WorkspaceRuntime, workspace as never),
     Layer.succeed(ProviderWorkerBroker, broker as never),
     Layer.succeed(ProviderWorkerBootstrapAuthority, authority as never),
@@ -98,12 +129,10 @@ describe("ProviderWorkerProvisioner", () => {
         artifact: new TextEncoder().encode("worker"),
         controlUrl: config.controlUrl,
         environment: config.workerEnvironment,
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
-    await Effect.runPromise(
-      provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-    );
+    await Effect.runPromise(provisioner.start({ threadId, lifecycleGeneration: "generation-1" }));
 
     expect(harness.workspace.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -153,7 +182,7 @@ describe("ProviderWorkerProvisioner", () => {
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
         repositoryAuthorization: "token repository-secret",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     const binding = await Effect.runPromise(
@@ -198,7 +227,7 @@ describe("ProviderWorkerProvisioner", () => {
       "write:/tmp/synara-repository-credential.gitconfig",
       "checkout",
       "checkout-cleanup",
-      "write:/opt/synara/provider-worker.mjs",
+      "write:/opt/synara/provider-worker.mjs.gz",
       "write:/opt/synara/provider-worker.json",
       "start",
       "connected",
@@ -227,7 +256,7 @@ describe("ProviderWorkerProvisioner", () => {
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
         repositoryAuthorization: "token repository-secret",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     await expect(
@@ -268,16 +297,14 @@ describe("ProviderWorkerProvisioner", () => {
           };
         });
       }
-      return Deferred.succeed(checkoutStarted, undefined).pipe(
-        Effect.andThen(Effect.never),
-      );
+      return Deferred.succeed(checkoutStarted, undefined).pipe(Effect.andThen(Effect.never));
     });
     const provisioner = await Effect.runPromise(
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
         repositoryAuthorization: "token repository-secret",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     await Effect.runPromise(
@@ -326,7 +353,7 @@ describe("ProviderWorkerProvisioner", () => {
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
         repositoryAuthorization: "token repository-secret",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     const result = await Effect.runPromise(
@@ -363,7 +390,7 @@ describe("ProviderWorkerProvisioner", () => {
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     const binding = await Effect.runPromise(
@@ -381,7 +408,7 @@ describe("ProviderWorkerProvisioner", () => {
     expect(binding.fence.sandboxId).toBe(workspaceBinding.runtimeId);
     expect(harness.calls).toEqual([
       "expect",
-      "write:/opt/synara/provider-worker.mjs",
+      "write:/opt/synara/provider-worker.mjs.gz",
       "write:/opt/synara/provider-worker.json",
       "start",
       "connected",
@@ -390,8 +417,7 @@ describe("ProviderWorkerProvisioner", () => {
     expect(configWrite?.mode).toBe(0o600);
     expect(String(configWrite?.data)).toContain("bootstrap-secret");
     expect(harness.workspace.startDurableProcess).toHaveBeenCalledWith(workspaceBinding, {
-      command:
-        "mkdir -p '/workspace/.synara-provider-worker/state/logs' && exec node '/opt/synara/provider-worker.mjs' >> '/workspace/.synara-provider-worker/state/logs/worker.log' 2>&1",
+      command: expect.stringContaining("gunzipSync"),
     });
   });
 
@@ -401,7 +427,7 @@ describe("ProviderWorkerProvisioner", () => {
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     await expect(
@@ -409,7 +435,7 @@ describe("ProviderWorkerProvisioner", () => {
     ).rejects.toBeDefined();
     expect(harness.calls).toEqual([
       "expect",
-      "write:/opt/synara/provider-worker.mjs",
+      "write:/opt/synara/provider-worker.mjs.gz",
       "write:/opt/synara/provider-worker.json",
       "start",
       "retire",
@@ -443,7 +469,7 @@ describe("ProviderWorkerProvisioner", () => {
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
     const previous: ProviderWorkerRuntimeBinding = {
       schemaVersion: 1,
@@ -485,7 +511,7 @@ describe("ProviderWorkerProvisioner", () => {
       "destroy",
       "create-replacement",
       "expect",
-      "write:/opt/synara/provider-worker.mjs",
+      "write:/opt/synara/provider-worker.mjs.gz",
       "write:/opt/synara/provider-worker.json",
       "start",
       "connected",
@@ -525,7 +551,7 @@ describe("ProviderWorkerProvisioner", () => {
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
     const first = await Effect.runPromise(
       provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
@@ -554,16 +580,12 @@ describe("ProviderWorkerProvisioner", () => {
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
     const [first, repeated] = await Promise.all([
-      Effect.runPromise(
-        provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-      ),
-      Effect.runPromise(
-        provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-      ),
+      Effect.runPromise(provisioner.start({ threadId, lifecycleGeneration: "generation-1" })),
+      Effect.runPromise(provisioner.start({ threadId, lifecycleGeneration: "generation-1" })),
     ]);
 
     expect(repeated).toBe(first);
@@ -585,20 +607,14 @@ describe("ProviderWorkerProvisioner", () => {
       makeProviderWorkerProvisioner({
         artifact: new TextEncoder().encode("worker"),
         controlUrl: "ws://synara.railway.internal:3000/internal/provider-worker",
-      }).pipe(Effect.provide(harness.layer)),
+      }).pipe(Effect.provide(harness.layer), Effect.scoped),
     );
 
-    await Effect.runPromise(
-      provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-    );
-    await Effect.runPromise(
-      provisioner.start({ threadId, lifecycleGeneration: "generation-2" }),
-    );
+    await Effect.runPromise(provisioner.start({ threadId, lifecycleGeneration: "generation-1" }));
+    await Effect.runPromise(provisioner.start({ threadId, lifecycleGeneration: "generation-2" }));
 
     await expect(
-      Effect.runPromise(
-        provisioner.start({ threadId, lifecycleGeneration: "generation-1" }),
-      ),
+      Effect.runPromise(provisioner.start({ threadId, lifecycleGeneration: "generation-1" })),
     ).rejects.toMatchObject({ operation: "stale-generation" });
   });
 });

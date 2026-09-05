@@ -24,7 +24,7 @@ describe("resolveThemeDomTarget", () => {
   it("preserves host-owned theme variables", () => {
     const themedRoot = {
       hasAttribute: (name: string) => name === "data-synara-host-themed",
-    } as HTMLElement;
+    };
 
     expect(shouldProjectSynaraThemeVariables(themedRoot, true)).toBe(false);
     expect(shouldProjectSynaraThemeVariables(themedRoot, false)).toBe(true);

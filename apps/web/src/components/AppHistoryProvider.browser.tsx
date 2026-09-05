@@ -10,7 +10,7 @@ describe("AppHistoryProvider", () => {
     const history = createMemoryHistory({ initialEntries: ["/settings"] });
     const browserUrl = window.location.href;
     const wrapper = ({ children }: PropsWithChildren) =>
-      createElement(AppHistoryProvider, { history }, children);
+      createElement(AppHistoryProvider, { history, children });
 
     const hook = await renderHook(() => useAppHistory(), { wrapper });
 

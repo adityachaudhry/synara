@@ -41,6 +41,7 @@ function makeThread(
     id: ThreadId.makeUnsafe(`activity-thread-${index}`),
     projectId: PROJECT_A,
     title: `Activity thread ${index}`,
+    feedSummary: null,
     modelSelection: { provider: "codex", model: "gpt-5" },
     interactionMode: "default",
     branch: null,

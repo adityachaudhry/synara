@@ -1144,13 +1144,13 @@ describe("resolveThreadStatusTrailingIndicator", () => {
 describe("resolveThreadStatusPill", () => {
   it("shows the stable sandbox queue position in the existing connecting status path", () => {
     const thread = {
-      interactionMode: "act" as const,
+      interactionMode: "default" as const,
       latestTurn: null,
       lastVisitedAt: undefined,
       updatedAt: "2026-08-29T00:00:00.000Z",
       session: {
         provider: "pi" as const,
-        status: "connecting",
+        status: "connecting" as const,
         orchestrationStatus: "queued" as never,
         queuePosition: 3,
         createdAt: "2026-08-29T00:00:00.000Z",
@@ -1916,6 +1916,7 @@ function makeSidebarThreadSummary(
   overrides: Partial<SidebarThreadSummary> = {},
 ): SidebarThreadSummary {
   return {
+    feedSummary: null,
     id: ThreadId.makeUnsafe("thread-1"),
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",

@@ -157,7 +157,8 @@ export async function collectReferencedCentralIcons(
     addAvailableLiterals(source);
     const tree = ts.createSourceFile(sourceFile, source, ts.ScriptTarget.Latest, true);
     for (const statement of tree.statements) {
-      if (!ts.isImportDeclaration(statement)) continue;
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+        continue;
       const importedFile = resolveImport(sourceFile, statement.moduleSpecifier.text);
       if (importedFile) addAvailableLiterals(sourceByFile.get(importedFile) ?? "");
     }

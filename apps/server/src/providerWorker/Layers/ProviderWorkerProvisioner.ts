@@ -50,8 +50,8 @@ function workerLaunchCommand(homeDir: string) {
     'const zlib=require("node:zlib")',
     `const source=${JSON.stringify(WORKER_ARTIFACT_ARCHIVE_PATH)}`,
     `const target=${JSON.stringify(WORKER_ARTIFACT_PATH)}`,
-    'fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})',
-    'fs.rmSync(source,{force:true})',
+    "fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
+    "fs.rmSync(source,{force:true})",
   ].join(";");
   return `mkdir -p ${shellQuote(logsDir)} && node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
 }
@@ -129,9 +129,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       };
     });
 
-    const checkpointOutboxUnlocked = Effect.fn(function* (
-      binding: ProviderWorkerRuntimeBinding,
-    ) {
+    const checkpointOutboxUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
       const liveExit = yield* Effect.exit(
         listProviderPersistenceCandidates({ workspaceRuntime, binding }),
       );
@@ -143,8 +141,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       if (!checkpointStore || !binding.threadId) return liveExit.value;
       const outbox = yield* Effect.forEach(
         liveExit.value.entries.filter((entry) => entry.source === "outbox"),
-        (selection) =>
-          readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
+        (selection) => readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
         { concurrency: 4 },
       );
       const manifest = yield* Effect.tryPromise({
@@ -323,28 +320,28 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   }),
                 );
               }).pipe(
-                  Effect.flatMap((result) =>
-                    result.exitCode === 0 && !result.timedOut
-                      ? Effect.try({
-                          try: () => parseRepositoryCheckoutResult(result.stdout),
-                          catch: (cause) =>
-                            provisionError(
-                              "checkout.verify",
-                              "Repository checkout did not report a verified commit.",
-                              cause,
-                              input.workspace.runtimeId,
-                            ),
-                        })
-                      : Effect.fail(
+                Effect.flatMap((result) =>
+                  result.exitCode === 0 && !result.timedOut
+                    ? Effect.try({
+                        try: () => parseRepositoryCheckoutResult(result.stdout),
+                        catch: (cause) =>
                           provisionError(
-                            "checkout.exec",
-                            "Repository checkout failed before worker startup.",
-                            new Error(result.stderr || result.stdout || "checkout failed"),
+                            "checkout.verify",
+                            "Repository checkout did not report a verified commit.",
+                            cause,
                             input.workspace.runtimeId,
                           ),
+                      })
+                    : Effect.fail(
+                        provisionError(
+                          "checkout.exec",
+                          "Repository checkout failed before worker startup.",
+                          new Error(result.stderr || result.stdout || "checkout failed"),
+                          input.workspace.runtimeId,
                         ),
-                  ),
-                );
+                      ),
+                ),
+              );
         yield* Effect.logInfo("provider worker artifact upload starting", {
           sandboxId: fence.sandboxId,
           bytes: options.artifact.byteLength,
@@ -395,7 +392,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return {
           schemaVersion: 1,
-          runtimeKind: "railway-sandbox-pi",
+          runtimeKind:
+            input.workspace.runtimeKind === "docker-container" ? "docker-pi" : "railway-sandbox-pi",
           threadId: input.threadId,
           workspace: input.workspace,
           fence,
@@ -460,28 +458,32 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ? {}
             : { onCapacityAdmitted: input.onCapacityAdmitted }),
         });
-        return yield* withWorkspaceCleanup(workspace, provisionConnectedWorker({
+        return yield* withWorkspaceCleanup(
           workspace,
-          threadId: input.threadId,
-          lifecycleGeneration: input.lifecycleGeneration,
-          cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
-          homeDir: DEFAULT_HOME_DIR,
-          ...(input.repositoryBinding === undefined
-            ? {}
-            : { repositoryBinding: input.repositoryBinding }),
-          ...(input.agentGatewayConnection === undefined
-            ? {}
-            : { agentGatewayConnection: input.agentGatewayConnection }),
-          ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
-          ...(input.repositoryBinding === undefined || options.repositoryAuthorization === undefined
-            ? {}
-            : {
-                repositoryCredential: makeRepositoryCredentialConfig(
-                  input.repositoryBinding,
-                  options.repositoryAuthorization,
-                ),
-              }),
-        }).pipe(Effect.tap(restoreOutbox)));
+          provisionConnectedWorker({
+            workspace,
+            threadId: input.threadId,
+            lifecycleGeneration: input.lifecycleGeneration,
+            cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
+            homeDir: DEFAULT_HOME_DIR,
+            ...(input.repositoryBinding === undefined
+              ? {}
+              : { repositoryBinding: input.repositoryBinding }),
+            ...(input.agentGatewayConnection === undefined
+              ? {}
+              : { agentGatewayConnection: input.agentGatewayConnection }),
+            ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
+            ...(input.repositoryBinding === undefined ||
+            options.repositoryAuthorization === undefined
+              ? {}
+              : {
+                  repositoryCredential: makeRepositoryCredentialConfig(
+                    input.repositoryBinding,
+                    options.repositoryAuthorization,
+                  ),
+                }),
+          }).pipe(Effect.tap(restoreOutbox)),
+        );
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
@@ -531,26 +533,29 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ? {}
             : { onCapacityAdmitted: input.onCapacityAdmitted }),
         });
-        return yield* withWorkspaceCleanup(replacementWorkspace, provisionConnectedWorker({
-          workspace: replacementWorkspace,
-          threadId: input.threadId,
-          lifecycleGeneration: input.lifecycleGeneration,
-          cwd: checkout?.cwd ?? input.cwd?.trim() ?? binding.cwd,
-          homeDir: binding.homeDir,
-          ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
-          ...(input.agentGatewayConnection === undefined
-            ? {}
-            : { agentGatewayConnection: input.agentGatewayConnection }),
-          ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
-          ...(repositoryBinding === undefined || options.repositoryAuthorization === undefined
-            ? {}
-            : {
-                repositoryCredential: makeRepositoryCredentialConfig(
-                  repositoryBinding,
-                  options.repositoryAuthorization,
-                ),
-              }),
-        }).pipe(Effect.tap(restoreOutbox)));
+        return yield* withWorkspaceCleanup(
+          replacementWorkspace,
+          provisionConnectedWorker({
+            workspace: replacementWorkspace,
+            threadId: input.threadId,
+            lifecycleGeneration: input.lifecycleGeneration,
+            cwd: checkout?.cwd ?? input.cwd?.trim() ?? binding.cwd,
+            homeDir: binding.homeDir,
+            ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
+            ...(input.agentGatewayConnection === undefined
+              ? {}
+              : { agentGatewayConnection: input.agentGatewayConnection }),
+            ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
+            ...(repositoryBinding === undefined || options.repositoryAuthorization === undefined
+              ? {}
+              : {
+                  repositoryCredential: makeRepositoryCredentialConfig(
+                    repositoryBinding,
+                    options.repositoryAuthorization,
+                  ),
+                }),
+          }).pipe(Effect.tap(restoreOutbox)),
+        );
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
@@ -650,16 +655,18 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     };
 
     const adopt: ProviderWorkerProvisionerShape["adopt"] = (binding) =>
-      workspaceRuntime.adopt(binding.workspace).pipe(
-        Effect.mapError((cause) =>
-          provisionError(
-            "adopt",
-            "Failed to commit the durable Railway provider workspace binding.",
-            cause,
-            binding.workspace.runtimeId,
+      workspaceRuntime
+        .adopt(binding.workspace)
+        .pipe(
+          Effect.mapError((cause) =>
+            provisionError(
+              "adopt",
+              "Failed to commit the durable Railway provider workspace binding.",
+              cause,
+              binding.workspace.runtimeId,
+            ),
           ),
-        ),
-      );
+        );
 
     const stageAttachments: NonNullable<ProviderWorkerProvisionerShape["stageAttachments"]> = (
       binding,
@@ -720,8 +727,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         }
         yield* Effect.forEach(
           persistedFiles,
-          (selection) =>
-            readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
+          (selection) => readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
           { concurrency: 1, discard: true },
         );
         const plan = yield* Effect.try({
@@ -742,10 +748,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         yield* workspaceRuntime.writeFile(binding.workspace, {
           path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
-          data: makeRepositoryCredentialConfig(
-            repositoryBinding,
-            options.repositoryAuthorization,
-          ),
+          data: makeRepositoryCredentialConfig(repositoryBinding, options.repositoryAuthorization),
           mode: 0o600,
         });
         const cleanupCredential = workspaceRuntime
@@ -830,52 +833,56 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const listPersistenceCandidates: ProviderWorkerProvisionerShape["listPersistenceCandidates"] =
       checkpointOutbox;
 
-    const readPersistenceCandidate: ProviderWorkerProvisionerShape["readPersistenceCandidate"] =
-      (binding, selection) =>
-        (checkpointStore && binding.threadId && selection.source === "outbox"
-          ? Effect.tryPromise({
-              try: () => checkpointStore.read(binding.threadId!, selection),
-              catch: (cause) =>
-                provisionError(
-                  "persistence.checkpoint.read",
-                  "Failed to read the selected durable Outbox file.",
-                  cause,
-                  binding.workspace.runtimeId,
-                ),
-            })
-          : readProviderPersistenceCandidate({ workspaceRuntime, binding, selection })
-        ).pipe(
-          Effect.mapError((cause) =>
-            cause instanceof ProviderWorkerProvisioningError
-              ? cause
-              : provisionError(
-                  "persistence.read",
-                  "Failed to read the selected sandbox file.",
-                  cause,
-                  binding.workspace.runtimeId,
-                ),
-          ),
-        );
-
-    const readOutboxCheckpoint: ProviderWorkerProvisionerShape["readOutboxCheckpoint"] =
-      (threadId, candidatePath) =>
-        checkpointStore
-          ? Effect.tryPromise({
-              try: () => checkpointStore.readPath(threadId, candidatePath),
-              catch: (cause) =>
-                provisionError(
-                  "persistence.checkpoint.read",
-                  "Failed to read the durable Outbox file.",
-                  cause,
-                ),
-            })
-          : Effect.fail(
+    const readPersistenceCandidate: ProviderWorkerProvisionerShape["readPersistenceCandidate"] = (
+      binding,
+      selection,
+    ) =>
+      (checkpointStore && binding.threadId && selection.source === "outbox"
+        ? Effect.tryPromise({
+            try: () => checkpointStore.read(binding.threadId!, selection),
+            catch: (cause) =>
               provisionError(
                 "persistence.checkpoint.read",
-                "Durable Outbox checkpoints are not configured.",
-                undefined,
+                "Failed to read the selected durable Outbox file.",
+                cause,
+                binding.workspace.runtimeId,
               ),
-            );
+          })
+        : readProviderPersistenceCandidate({ workspaceRuntime, binding, selection })
+      ).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError
+            ? cause
+            : provisionError(
+                "persistence.read",
+                "Failed to read the selected sandbox file.",
+                cause,
+                binding.workspace.runtimeId,
+              ),
+        ),
+      );
+
+    const readOutboxCheckpoint: ProviderWorkerProvisionerShape["readOutboxCheckpoint"] = (
+      threadId,
+      candidatePath,
+    ) =>
+      checkpointStore
+        ? Effect.tryPromise({
+            try: () => checkpointStore.readPath(threadId, candidatePath),
+            catch: (cause) =>
+              provisionError(
+                "persistence.checkpoint.read",
+                "Failed to read the durable Outbox file.",
+                cause,
+              ),
+          })
+        : Effect.fail(
+            provisionError(
+              "persistence.checkpoint.read",
+              "Durable Outbox checkpoints are not configured.",
+              undefined,
+            ),
+          );
 
     if (checkpointStore) {
       yield* Effect.forkScoped(
@@ -947,11 +954,13 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
           undefined,
         );
       }
-      const artifact = yield* fileSystem.readFile(artifactPath).pipe(
-        Effect.mapError((cause) =>
-          provisionError("artifact.read", "Failed to read the provider worker artifact.", cause),
-        ),
-      );
+      const artifact = yield* fileSystem
+        .readFile(artifactPath)
+        .pipe(
+          Effect.mapError((cause) =>
+            provisionError("artifact.read", "Failed to read the provider worker artifact.", cause),
+          ),
+        );
       return yield* makeProviderWorkerProvisioner({
         artifact,
         controlUrl: options.controlUrl,

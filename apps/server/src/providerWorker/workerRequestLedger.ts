@@ -52,6 +52,11 @@ export function makeProviderWorkerRequestLedger<TError>(input: {
 
         const response = Effect.runPromise(
           dispatchProviderWorkerRequest(input.adapter, request).pipe(
+            Effect.tapError((cause) =>
+              process.env.SYNARA_LOCAL_DEBUG === "1"
+                ? Effect.logError("local provider request failed", cause)
+                : Effect.void,
+            ),
             Effect.match({
               onSuccess: (result): ProviderWorkerResponse => ({
                 protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,

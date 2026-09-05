@@ -25,7 +25,10 @@ function configuredConnection(): { readonly url: string; readonly token: string 
   }
 
   const url = new URL(rawUrl);
-  const isLocal = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+  const isLocal =
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "localhost" ||
+    (process.env.SYNARA_LOCAL_DOCKER === "1" && url.hostname === "host.docker.internal");
   if (url.protocol !== "https:" && !(isLocal && url.protocol === "http:")) {
     throw new Error(`${MCP_URL_ENV} must use HTTPS, except for loopback development.`);
   }

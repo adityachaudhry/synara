@@ -3,10 +3,10 @@ import { Schema } from "effect";
 
 export const ProviderWorkerRuntimeBinding = Schema.Struct({
   schemaVersion: Schema.Literal(1),
-  runtimeKind: Schema.Literal("railway-sandbox-pi"),
+  runtimeKind: Schema.Literals(["railway-sandbox-pi", "docker-pi"]),
   threadId: Schema.optional(Schema.String),
   workspace: Schema.Struct({
-    runtimeKind: Schema.Literal("railway-sandbox"),
+    runtimeKind: Schema.Literals(["railway-sandbox", "docker-container"]),
     runtimeId: Schema.String,
     creationOperationId: Schema.optional(Schema.String),
     capacityKey: Schema.optional(Schema.String),

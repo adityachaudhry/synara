@@ -52,6 +52,7 @@ function makeSidebarThreadSummary(
   overrides: Partial<SidebarThreadSummary> = {},
 ): SidebarThreadSummary {
   return {
+    feedSummary: null,
     id: ThreadId.makeUnsafe("thread-1"),
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",

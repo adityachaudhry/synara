@@ -3,7 +3,7 @@ import { ServiceMap, type Effect } from "effect";
 import type { WorkspaceRuntimeError } from "../Errors";
 
 export interface WorkspaceRuntimeBinding {
-  readonly runtimeKind: "railway-sandbox";
+  readonly runtimeKind: "railway-sandbox" | "docker-container";
   readonly runtimeId: string;
   readonly creationOperationId?: string | undefined;
   readonly capacityKey?: string | undefined;
@@ -13,7 +13,7 @@ export interface WorkspaceRuntimeBinding {
 }
 
 export interface WorkspaceRuntimeInventoryRecord {
-  readonly runtimeKind: "railway-sandbox";
+  readonly runtimeKind: "railway-sandbox" | "docker-container";
   readonly runtimeId: string;
   readonly status: WorkspaceRuntimeBinding["status"];
   readonly region: string;

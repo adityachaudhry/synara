@@ -2,6 +2,7 @@ import {
   resolveRailwaySandboxRuntimeConfig,
   type RailwaySandboxRuntimeConfig,
 } from "../workspaceRuntime/railwaySandboxConfig";
+import type { DockerWorkspaceConfig } from "../workspaceRuntime/Layers/DockerWorkspaceRuntime";
 
 const DEFAULT_FORWARD_ENV_KEYS = [
   "OPENAI_API_KEY",
@@ -27,7 +28,8 @@ export type DistributedPiRuntimeConfig =
   | { readonly enabled: false }
   | {
       readonly enabled: true;
-      readonly railway: Extract<RailwaySandboxRuntimeConfig, { readonly enabled: true }>;
+      readonly railway: RailwaySandboxRuntimeConfig;
+      readonly docker?: DockerWorkspaceConfig;
       readonly controlUrl: string;
       readonly networkIsolation: "ISOLATED" | "PRIVATE";
       readonly workerEnvironment: Readonly<Record<string, string>>;
@@ -38,20 +40,32 @@ export function resolveDistributedPiRuntimeConfig(input: {
   readonly environment: Readonly<Record<string, string | undefined>>;
 }): DistributedPiRuntimeConfig {
   const environment = input.environment;
-  const railway = resolveRailwaySandboxRuntimeConfig({
-    token: environment.SYNARA_RAILWAY_SANDBOX_TOKEN,
-    environmentId: environment.SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID,
-    authType: environment.SYNARA_RAILWAY_SANDBOX_AUTH_TYPE,
-    region: environment.SYNARA_RAILWAY_SANDBOX_REGION,
-    idleTimeoutMinutes: environment.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
-    maxActiveSandboxes: environment.SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES,
-  });
-  if (!railway.enabled) return { enabled: false };
+  const docker =
+    environment.SYNARA_WORKSPACE_RUNTIME === "docker"
+      ? {
+          image: environment.SYNARA_DOCKER_IMAGE || "synara-local-worker:latest",
+          instance: environment.SYNARA_DOCKER_INSTANCE || "local",
+          ...(environment.SYNARA_DOCKER_LOG_DIR
+            ? { diagnosticsDirectory: environment.SYNARA_DOCKER_LOG_DIR }
+            : {}),
+        }
+      : undefined;
+  const railway: RailwaySandboxRuntimeConfig = docker
+    ? { enabled: false }
+    : resolveRailwaySandboxRuntimeConfig({
+        token: environment.SYNARA_RAILWAY_SANDBOX_TOKEN,
+        environmentId: environment.SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID,
+        authType: environment.SYNARA_RAILWAY_SANDBOX_AUTH_TYPE,
+        region: environment.SYNARA_RAILWAY_SANDBOX_REGION,
+        idleTimeoutMinutes: environment.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
+        maxActiveSandboxes: environment.SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES,
+      });
+  if (!railway.enabled && !docker) return { enabled: false };
 
   const rawControlUrl = environment.SYNARA_PROVIDER_WORKER_CONTROL_URL?.trim();
   if (!rawControlUrl) {
     throw new Error(
-      "SYNARA_PROVIDER_WORKER_CONTROL_URL is required when Railway Sandbox runtime is enabled.",
+      "SYNARA_PROVIDER_WORKER_CONTROL_URL is required when distributed runtime is enabled.",
     );
   }
   const controlUrl = new URL(rawControlUrl);
@@ -86,16 +100,21 @@ export function resolveDistributedPiRuntimeConfig(input: {
   }
 
   const networkIsolationInput =
-    environment.SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION?.trim().toUpperCase() || "ISOLATED";
+    environment.SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION?.trim().toUpperCase() ||
+    (docker ? "PRIVATE" : "ISOLATED");
   if (networkIsolationInput !== "ISOLATED" && networkIsolationInput !== "PRIVATE") {
+    throw new Error("SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION must be ISOLATED or PRIVATE.");
+  }
+  if (docker && networkIsolationInput !== "PRIVATE") {
     throw new Error(
-      "SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION must be ISOLATED or PRIVATE.",
+      "Local Docker requires PRIVATE networking for its host callback; it does not implement Railway ISOLATED networking.",
     );
   }
 
   return {
     enabled: true,
     railway,
+    ...(docker ? { docker } : {}),
     controlUrl: controlUrl.toString(),
     networkIsolation: networkIsolationInput,
     workerEnvironment,

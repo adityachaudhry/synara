@@ -41,6 +41,7 @@ function thread(input: { id: string; projectId: string }): SidebarThreadSummary 
     id: ThreadId.makeUnsafe(input.id),
     projectId: ProjectId.makeUnsafe(input.projectId),
     title: input.id,
+    feedSummary: null,
     modelSelection: { provider: "codex", model: "gpt-5" },
     interactionMode: "default",
     branch: null,

@@ -16,6 +16,7 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     id: ThreadId.makeUnsafe("thread-row-content"),
     projectId: ProjectId.makeUnsafe("project-row-content"),
     title: "Shared thread row",
+    feedSummary: null,
     modelSelection: { provider: "codex", model: "gpt-5.4" },
     interactionMode: DEFAULT_INTERACTION_MODE,
     branch: null,
