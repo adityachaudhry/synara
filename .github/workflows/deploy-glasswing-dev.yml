@@ -3,6 +3,20 @@ name: deploy Glasswing dev
 on:
   push:
     branches: [glasswingos/dev]
+    paths:
+      - 'apps/server/**'
+      - 'packages/**'
+      - 'scripts/**'
+      - '**/package.json'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - 'patches/**'
+      - 'tsconfig*.json'
+      - 'Dockerfile.glasswing'
+      - '.dockerignore'
+      - 'docker-entrypoint.sh'
+      - 'railway.json'
+      - '.github/workflows/deploy-glasswing-dev.yml'
   workflow_dispatch:
 
 concurrency:
