@@ -152,7 +152,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       ? modelLabel.slice("Claude ".length)
       : modelLabel;
 
-  // Reasoning controls follow the selected model's capabilities, not its label.
+  // Reasoning controls follow discovered capabilities, even when display labels change.
   const traitSelection = getComposerTraitSelection(
     props.provider,
     props.model,

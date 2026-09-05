@@ -20,3 +20,10 @@ with **Actions: read and write** permission restricted to `glasswing-ai-2`.
 It does not need repository contents write permission. A missing/expired token
 fails the dispatch job visibly; the published package remains available and can
 be consumed by the next Glasswing web build or a manual web-only dispatch.
+
+The embed build generates routes first, then runs bundling and checked declaration
+emit concurrently in separate directories. Incremental declarations and per-file
+React Compiler results are cached under `dist-embed`; changed source or compiler
+inputs invalidate the relevant entries. Compiler failures never produce a package.
+CI also reuses a fully checked package when its build inputs are unchanged, while
+refreshing the release provenance and README. Cold builds still do the full work.
