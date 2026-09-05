@@ -46,8 +46,9 @@ COPY --from=production-deps /app/package.json ./package.json
 COPY --from=production-deps /app/apps/server/package.json ./apps/server/package.json
 COPY --from=build --chown=node:node /app/apps/server/dist ./apps/server/dist
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
-RUN --mount=type=bind,from=build,source=/app/scripts,target=/app/scripts \
-    node apps/server/dist/index.mjs --help >/dev/null \
+COPY scripts/node-pty-smoke.mjs ./scripts/node-pty-smoke.mjs
+COPY scripts/lib/node-pty-smoke.ts ./scripts/lib/node-pty-smoke.ts
+RUN node apps/server/dist/index.mjs --help >/dev/null \
     && node scripts/node-pty-smoke.mjs
 RUN case "$(dpkg --print-architecture)" in \
       amd64) sdk_arch=x64 ;; arm64) sdk_arch=arm64 ;; *) exit 1 ;; esac \
