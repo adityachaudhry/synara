@@ -38,7 +38,10 @@ jobs:
           path: ~/.bun/install/cache
           key: embed-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: embed-bun-${{ runner.os }}-
-      - run: bun install --frozen-lockfile --filter @synara/web
+      # Declaration generation resolves shared workspace types as well as web.
+      - run: bun install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: bun run --cwd apps/web build:embed
         env:
           SYNARA_COMMIT: ${{ github.sha }}
