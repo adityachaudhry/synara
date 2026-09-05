@@ -135,6 +135,6 @@ Use these as implementation references when designing protocol handling, UX flow
 ## GlasswingOS Integration Lanes
 
 - `emanuele/main` is the sole upstream source for future Synara improvements. Do not use or merge the fork's `origin/main` as upstream.
-- `glasswingos/dev` is the GlasswingOS integration branch. Merge reviewed `emanuele/main` updates and GlasswingOS work here first; `glasswing-ai-2/dev` must pin exact package and server commits from this lane.
-- `glasswingos/main` is the production lane. Advance it only by promoting a commit already proven on `glasswingos/dev`; do not develop features or merge upstream directly on it. `glasswing-ai-2/main` must pin exact package and server commits from this lane.
-- Keep package, server, and protocol provenance aligned when promoting between lanes. Branch names select an integration lane; deployed consumers still pin immutable commits and artifacts.
+- `glasswingos/dev` is the GlasswingOS integration branch. Merge reviewed `emanuele/main` updates and GlasswingOS work here first; Glasswing dev resolves the latest successfully published dev UI package at build time and connects to the stable dev server URL. Do not make manual consumer pin commits.
+- `glasswingos/main` is the production lane. Advance it only by promoting a commit already proven on `glasswingos/dev`; do not develop features or merge upstream directly on it. Glasswing production follows only the production package channel and production server URL.
+- Keep protocol compatibility between independent server and UI deployments. CI resolves a channel once, verifies the immutable artifact, and records its exact source SHA and digest in deployed provenance. UI publication and server deployment may run independently.

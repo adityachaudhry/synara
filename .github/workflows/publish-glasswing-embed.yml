@@ -1,0 +1,88 @@
+name: publish Glasswing embed
+
+on:
+  push:
+    branches: [glasswingos/dev, glasswingos/main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/**'
+      - '**/package.json'
+      - 'bun.lock'
+      - 'patches/**'
+      - 'tsconfig*.json'
+      - '.github/workflows/publish-glasswing-embed.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-glasswing-embed-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.channel.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: embed-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: embed-bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile --filter @synara/web
+      - run: bun run --cwd apps/web build:embed
+        env:
+          SYNARA_COMMIT: ${{ github.sha }}
+          SYNARA_PROTOCOL_VERSION: '1'
+      - name: Publish immutable channel package
+        id: channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            glasswingos/dev) channel=dev; branch=dev ;;
+            glasswingos/main) channel=production; branch=main ;;
+            *) exit 1 ;;
+          esac
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          tag="synara-react-${channel}-${GITHUB_RUN_NUMBER}-${GITHUB_SHA}"
+          mkdir -p "$RUNNER_TEMP/embed"
+          npm pack ./apps/web/dist-embed/package --pack-destination "$RUNNER_TEMP/embed"
+          mv "$RUNNER_TEMP"/embed/*.tgz "$RUNNER_TEMP/synara-react.tgz"
+          # Reruns reuse the same immutable package; older runs cannot become latest.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft \
+              --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Synara React $channel build $GITHUB_RUN_NUMBER" \
+              --notes "Built from $GITHUB_SHA. Protocol version 1."
+          fi
+          if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ]; then
+            gh release upload "$tag" "$RUNNER_TEMP/synara-react.tgz" --clobber
+            gh release edit "$tag" --draft=false
+          fi
+
+  rebuild-glasswing:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Trigger Glasswing web build
+        env:
+          GH_TOKEN: ${{ secrets.GLASSWING_ACTIONS_TOKEN }}
+          TARGET_BRANCH: ${{ needs.publish.outputs.branch }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'GLASSWING_ACTIONS_TOKEN must have Actions write permission on glasswing-ai-2.' >&2
+            exit 1
+          fi
+          gh workflow run deploy.yml --repo adityachaudhry/glasswing-ai-2 \
+            --ref "$TARGET_BRANCH" -f web_only=true
