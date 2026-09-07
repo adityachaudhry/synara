@@ -15,6 +15,7 @@ import {
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import { makeWorkspaceCheckpointStore } from "../workspaceCheckpointStore.ts";
 import {
   listProviderPersistenceCandidates,
   readProviderPersistenceCandidate,
@@ -29,8 +30,10 @@ import {
   makeRepositoryCredentialConfig,
   makeRepositoryCheckoutPlan,
   makeRepositoryReconcilePlan,
+  makeRepositoryRefreshPlan,
   parseRepositoryCheckoutResult,
   parseRepositoryReconcileResult,
+  parseRepositoryRefreshResult,
   REPOSITORY_CREDENTIAL_CONFIG_PATH,
 } from "../repositoryCheckout";
 
@@ -94,6 +97,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const checkpointStore = options.checkpointRoot
       ? makeOutboxCheckpointStore(options.checkpointRoot)
       : undefined;
+    const workspaceCheckpointStore = options.checkpointRoot && workspaceRuntime.checkpoint
+      ? makeWorkspaceCheckpointStore(path.join(options.checkpointRoot, "workspaces"))
+      : undefined;
     const artifactArchive = gzipSync(options.artifact, { level: 6 });
     const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
@@ -111,6 +117,52 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         `Provider worker generation '${lifecycleGeneration}' for thread '${threadId}' is retired.`,
         undefined,
       );
+
+    const readWorkspaceCheckpoint = (threadId: string) => workspaceCheckpointStore
+      ? Effect.tryPromise({
+          try: () => workspaceCheckpointStore.read(threadId),
+          catch: (cause) => provisionError("workspace.checkpoint.read", "Could not read the saved worker disk checkpoint.", cause),
+        })
+      : Effect.succeed(undefined);
+
+    const checkpointWorkspaceUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
+      if (!workspaceCheckpointStore || !workspaceRuntime.checkpoint || !binding.threadId) return;
+      const active = activeByThread.get(binding.threadId);
+      if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
+        return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
+      }
+      // Bootstrap credentials are consumed before connect; repository credentials are erased after each fetch.
+      // A disk snapshot never contains a process or a reusable bootstrap configuration.
+      const flush = yield* workspaceRuntime.exec(binding.workspace, {
+        command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && sync`,
+        timeoutSeconds: 30,
+      });
+      if (flush.exitCode !== 0 || flush.timedOut) {
+        return yield* provisionError("workspace.checkpoint.flush", "Worker disk could not be flushed without transient credentials.", undefined, binding.workspace.runtimeId);
+      }
+      const previous = yield* readWorkspaceCheckpoint(binding.threadId);
+      const checkpoint = yield* workspaceRuntime.checkpoint(binding.workspace,
+        `synara-thread-${createHash("sha256").update(binding.threadId).digest("hex").slice(0, 16)}-${randomUUID()}`);
+      yield* Effect.tryPromise({
+        try: () => workspaceCheckpointStore.write(binding.threadId!, { binding, checkpoint }),
+        catch: (cause) => provisionError("workspace.checkpoint.write", "Could not persist the worker disk checkpoint pointer.", cause, binding.workspace.runtimeId),
+      });
+      if (previous && workspaceRuntime.deleteCheckpoint) {
+        yield* workspaceRuntime.deleteCheckpoint(previous.checkpoint.id).pipe(
+          Effect.catch((cause) => Effect.logWarning("old provider disk checkpoint cleanup deferred", { checkpointId: previous.checkpoint.id, cause })),
+        );
+      }
+      yield* Effect.logInfo("provider worker disk checkpoint saved", {
+        threadId: binding.threadId, sandboxId: binding.workspace.runtimeId,
+        checkpointId: checkpoint.id, sourceCommit: binding.repositoryCheckout?.commit,
+      });
+    });
+
+    const checkpointWorkspace: NonNullable<ProviderWorkerProvisionerShape["checkpointWorkspace"]> = (binding) =>
+      (binding.threadId
+        ? lifecycleLock.withLock(binding.threadId, checkpointWorkspaceUnlocked(binding))
+        : Effect.void).pipe(Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError ? cause : provisionError("workspace.checkpoint", "Could not checkpoint the provider worker disk.", cause, binding.workspace.runtimeId)));
 
     const storedCandidates = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
       if (!checkpointStore || !binding.threadId) return null;
@@ -446,8 +498,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
 
     const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
       Effect.gen(function* () {
+        const stored = yield* readWorkspaceCheckpoint(input.threadId);
+        const previousRepository = stored?.binding.repositoryCheckout?.binding;
+        const sameRepository = input.repositoryBinding && previousRepository &&
+          (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
+        const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
+        const checkpointName = saved?.checkpoint.key ?? options.templateCheckpointName;
         const checkout = input.repositoryBinding
-          ? makeRepositoryCheckoutPlan({
+          ? (saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
               binding: input.repositoryBinding,
               ...(options.repositoryAuthorization
                 ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
@@ -457,7 +515,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const workspace = yield* workspaceRuntime.create({
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
-          ...(options.templateCheckpointName ? { checkpointName: options.templateCheckpointName } : {}),
+          ...(checkpointName ? { checkpointName } : {}),
           environment: {
             ...(options.environment ?? {}),
           },
@@ -473,7 +531,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
             cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
-            homeDir: DEFAULT_HOME_DIR,
+            homeDir: saved?.binding.homeDir ?? DEFAULT_HOME_DIR,
             ...(input.repositoryBinding === undefined
               ? {}
               : { repositoryBinding: input.repositoryBinding }),
@@ -490,7 +548,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                     options.repositoryAuthorization,
                   ),
                 }),
-          }).pipe(Effect.tap(restoreOutbox)),
+          }).pipe(Effect.tap((binding) => saved ? Effect.void : restoreOutbox(binding))),
         );
       }).pipe(
         Effect.mapError((cause) =>
@@ -500,107 +558,59 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const stopWorkerProcess = (binding: ProviderWorkerRuntimeBinding) => Effect.gen(function* () {
+      yield* workspaceRuntime.stopDurableProcess(binding.workspace, binding.durableSessionName)
+        .pipe(Effect.catch(() => Effect.void));
+      if (!workspaceCheckpointStore) return;
+      const stopped = yield* workspaceRuntime.exec(binding.workspace, {
+        command: "for i in $(seq 1 100); do if ! pgrep -f '^node /opt/synara/provider-worker.mjs$' >/dev/null; then exit 0; fi; sleep 0.1; done; exit 1",
+        timeoutSeconds: 15,
+      });
+      if (stopped.exitCode !== 0 || stopped.timedOut) {
+        return yield* provisionError("workspace.stop", "Worker did not stop before its disk checkpoint.", undefined, binding.workspace.runtimeId);
+      }
+    });
+
+    const retireWorkspace = (binding: ProviderWorkerRuntimeBinding, reason: string) => Effect.gen(function* () {
+      if (workspaceCheckpointStore && binding.threadId) {
+        // Let Pi dispose its native session and child processes before the process/disk barrier.
+        yield* broker.request(binding.fence, "session.stop", { threadId: binding.threadId }).pipe(
+          Effect.timeout(Duration.seconds(10)),
+          Effect.catch(() => Effect.void),
+        );
+      }
+      yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
+      yield* authority.revoke(binding.fence);
+      const connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+      if (Exit.isSuccess(connection)) {
+        yield* stopWorkerProcess(binding);
+        yield* checkpointOutbox(binding);
+        yield* checkpointWorkspaceUnlocked(binding);
+      } else if (workspaceCheckpointStore) {
+        const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+        if (!saved) {
+          return yield* provisionError("workspace.restore", "The worker is unavailable and has no completed disk checkpoint; refusing to lose its native session.", Cause.squash(connection.cause), binding.workspace.runtimeId);
+        }
+        yield* Effect.logWarning("restoring last completed provider disk checkpoint", { threadId: binding.threadId, checkpointId: saved.checkpoint.id });
+      }
+      // Destruction is the authoritative generation barrier, including after a lost control connection.
+      yield* workspaceRuntime.destroy(binding.workspace);
+    });
+
     const replaceBinding: ProviderWorkerProvisionerShape["restart"] = (binding, input) =>
       Effect.gen(function* () {
-        yield* checkpointOutbox(binding);
-        yield* broker
-          .retire(binding.fence, "worker generation replaced")
-          .pipe(Effect.catch(() => Effect.void));
-        yield* authority.revoke(binding.fence);
-        const previousWorkspace = yield* workspaceRuntime.connect(binding.workspace).pipe(
-          Effect.catch(() =>
-            Effect.logWarning("provider worker workspace reconnect failed during replacement", {
-              sandboxId: binding.workspace.runtimeId,
-            }).pipe(Effect.as(binding.workspace)),
-          ),
-        );
-        yield* workspaceRuntime
-          .stopDurableProcess(previousWorkspace, binding.durableSessionName)
-          .pipe(Effect.catch(() => Effect.void));
-        // Destruction is the authoritative barrier. A durable-session handle can
-        // be stale after a control-plane restart, and must not leave an older
-        // worker reconnecting alongside the replacement generation.
-        yield* workspaceRuntime.destroy(previousWorkspace);
+        if (binding.threadId && binding.threadId !== input.threadId) {
+          return yield* provisionError("workspace.restore", "Cannot restore another thread's writable worker disk.", undefined, binding.workspace.runtimeId);
+        }
+        yield* retireWorkspace(binding, "worker generation replaced");
         const repositoryBinding = input.repositoryBinding ?? binding.repositoryCheckout?.binding;
-        const checkout = repositoryBinding
-          ? makeRepositoryCheckoutPlan({
-              binding: repositoryBinding,
-              ...(options.repositoryAuthorization
-                ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
-                : {}),
-            })
-          : undefined;
-        const replacementWorkspace = yield* workspaceRuntime.create({
-          threadId: input.threadId,
-          lifecycleGeneration: input.lifecycleGeneration,
-          ...(options.templateCheckpointName ? { checkpointName: options.templateCheckpointName } : {}),
-          environment: {
-            ...(options.environment ?? {}),
-          },
-          networkIsolation: options.networkIsolation ?? "ISOLATED",
-          ...(input.onCapacityAdmitted === undefined
-            ? {}
-            : { onCapacityAdmitted: input.onCapacityAdmitted }),
-        });
-        return yield* withWorkspaceCleanup(
-          replacementWorkspace,
-          provisionConnectedWorker({
-            workspace: replacementWorkspace,
-            threadId: input.threadId,
-            lifecycleGeneration: input.lifecycleGeneration,
-            cwd: checkout?.cwd ?? input.cwd?.trim() ?? binding.cwd,
-            homeDir: binding.homeDir,
-            ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
-            ...(input.agentGatewayConnection === undefined
-              ? {}
-              : { agentGatewayConnection: input.agentGatewayConnection }),
-            ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
-            ...(repositoryBinding === undefined || options.repositoryAuthorization === undefined
-              ? {}
-              : {
-                  repositoryCredential: makeRepositoryCredentialConfig(
-                    repositoryBinding,
-                    options.repositoryAuthorization,
-                  ),
-                }),
-          }).pipe(Effect.tap(restoreOutbox)),
-        );
-      }).pipe(
-        Effect.mapError((cause) =>
-          cause instanceof ProviderWorkerProvisioningError
-            ? cause
-            : provisionError(
-                "restart",
-                "Failed to reconnect the Railway provider workspace.",
-                cause,
-                binding.workspace.runtimeId,
-              ),
-        ),
-      );
+        return yield* createBinding({ ...input, ...(repositoryBinding ? { repositoryBinding } : {}) });
+      }).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("restart", "Failed to restore the provider worker disk.", cause, binding.workspace.runtimeId)));
 
     const stopBinding: ProviderWorkerProvisionerShape["stop"] = (binding) =>
-      checkpointOutbox(binding).pipe(
-        Effect.andThen(
-          broker
-            .retire(binding.fence, "provider session stopped")
-            .pipe(Effect.catch(() => Effect.void)),
-        ),
-        Effect.andThen(
-          workspaceRuntime
-            .stopDurableProcess(binding.workspace, binding.durableSessionName)
-            .pipe(Effect.catch(() => Effect.void)),
-        ),
-        Effect.andThen(authority.revoke(binding.fence)),
-        Effect.andThen(workspaceRuntime.destroy(binding.workspace)),
-        Effect.mapError((cause) =>
-          provisionError(
-            "stop",
-            "Failed to destroy the Railway provider workspace.",
-            cause,
-            binding.workspace.runtimeId,
-          ),
-        ),
-      );
+      retireWorkspace(binding, "provider session stopped").pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("stop", "Failed to checkpoint and destroy the provider worker.", cause, binding.workspace.runtimeId)));
 
     const start: ProviderWorkerProvisionerShape["start"] = (input) =>
       lifecycleLock.withLock(
@@ -719,6 +729,44 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         { concurrency: 1, discard: true },
       );
 
+    const refreshRepository: NonNullable<ProviderWorkerProvisionerShape["refreshRepository"]> = (binding) =>
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
+        const repository = binding.repositoryCheckout?.binding;
+        if (!repository) return yield* provisionError("repository.refresh", "Worker has no company source binding.", undefined, binding.workspace.runtimeId);
+        const active = binding.threadId ? activeByThread.get(binding.threadId) : undefined;
+        if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
+          return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
+        }
+        const plan = makeRepositoryRefreshPlan({
+          binding: repository,
+          ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
+        });
+        if (options.repositoryAuthorization) {
+          yield* workspaceRuntime.writeFile(binding.workspace, {
+            path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+            data: makeRepositoryCredentialConfig(repository, options.repositoryAuthorization),
+            mode: 0o600,
+          });
+        }
+        const result = yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+          const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: plan.command, timeoutSeconds: 300 })));
+          const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 });
+          if (cleanup.exitCode !== 0 || cleanup.timedOut) return yield* provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", undefined, binding.workspace.runtimeId);
+          if (Exit.isFailure(refreshed)) return yield* Effect.failCause(refreshed.cause);
+          return refreshed.value;
+        }));
+        if (result.exitCode !== 0 || result.timedOut) return yield* provisionError("repository.refresh", "Company sources could not be refreshed and verified. Conflicting local work is preserved; move edited evidence to a draft before retrying.", new Error(result.stderr || result.stdout || "refresh failed"), binding.workspace.runtimeId);
+        const refreshed = yield* Effect.try({
+          try: () => parseRepositoryRefreshResult(result.stdout),
+          catch: (cause) => provisionError("repository.refresh.verify", "Company refresh did not report its source commit.", cause, binding.workspace.runtimeId),
+        });
+        const updated = { ...binding, repositoryCheckout: { ...binding.repositoryCheckout!, commit: refreshed.commit } };
+        if (binding.threadId) activeByThread.set(binding.threadId, updated);
+        yield* Effect.logInfo("provider company sources refreshed", { threadId: binding.threadId, sandboxId: binding.workspace.runtimeId, ...refreshed });
+        return { binding: updated, ...refreshed };
+      })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("repository.refresh", "Failed to refresh company sources.", cause, binding.workspace.runtimeId)));
+
     const reconcileRepository: ProviderWorkerProvisionerShape["reconcileRepository"] = (
       binding,
       commit,
@@ -813,13 +861,15 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
               binding.workspace.runtimeId,
             ),
         });
-        return {
+        const updated = {
           ...binding,
           repositoryCheckout: {
             ...binding.repositoryCheckout,
             commit: reconciled.commit,
           },
         };
+        if (binding.threadId) activeByThread.set(binding.threadId, updated);
+        return updated;
       }).pipe(
         Effect.tapError((cause) =>
           Effect.logWarning("provider worker repository reconciliation deferred", {
@@ -920,6 +970,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       adopt,
       stageAttachments,
       checkpointOutbox,
+      checkpointWorkspace,
+      refreshRepository,
       markOutboxPromoted,
       reconcileRepository,
       listPersistenceCandidates,

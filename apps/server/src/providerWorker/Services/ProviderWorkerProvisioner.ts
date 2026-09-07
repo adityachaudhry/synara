@@ -42,6 +42,17 @@ export interface ProviderWorkerProvisionerShape {
   readonly checkpointOutbox: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<ProviderPersistenceCandidateList, ProviderWorkerProvisioningError>;
+  readonly checkpointWorkspace?: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly refreshRepository?: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<{
+    readonly binding: ProviderWorkerRuntimeBinding;
+    readonly previousCommit: string;
+    readonly commit: string;
+    readonly changedFiles: ReadonlyArray<string>;
+  }, ProviderWorkerProvisioningError>;
   readonly markOutboxPromoted: (
     binding: ProviderWorkerRuntimeBinding,
     selections: ReadonlyArray<ProviderPersistenceCandidateSelection>,
