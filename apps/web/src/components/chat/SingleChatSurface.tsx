@@ -544,6 +544,14 @@ export function SingleChatSurface(props: {
       }
       requestImmediateDockHydration("file");
       openPane(props.threadId, { kind: "file", filePath: targetPath });
+      const opened = selectRightDockState(props.threadId)(useRightDockStore.getState());
+      console.debug("[synara file preview] dock opened", {
+        threadId: props.threadId,
+        path: targetPath,
+        open: opened.open,
+        activePaneId: opened.activePaneId,
+        panes: opened.panes.map(({ id, kind, filePath }) => ({ id, kind, filePath })),
+      });
       return true;
     },
     prefetchFile: prefetchOpenerFile,
