@@ -84,8 +84,8 @@ export function makeRepositoryReconcilePlan(input: {
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
-    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
-    : `GIT_TERMINAL_PROMPT=0 ${git}`;
+    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true -c remote.origin.url=${shellQuote(repositoryUrl)} -c remote.origin.promisor=true`
+    : `GIT_TERMINAL_PROMPT=0 ${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true -c remote.origin.url=${shellQuote(repositoryUrl)} -c remote.origin.promisor=true`;
   const persistedFiles = input.persistedFiles ?? [];
   if (persistedFiles.some((file) => !isProviderPersistencePathSafe(file.path))) {
     throw new Error("Repository reconciliation received an unsafe persisted path.");
@@ -140,16 +140,16 @@ export function makeRepositoryRefreshPlan(input: {
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
-    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
-    : `GIT_TERMINAL_PROMPT=0 ${git}`;
+    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true -c remote.origin.url=${shellQuote(repositoryUrl)} -c remote.origin.promisor=true`
+    : `GIT_TERMINAL_PROMPT=0 ${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true -c remote.origin.url=${shellQuote(repositoryUrl)} -c remote.origin.promisor=true`;
   const changed = `const cp=require("node:child_process");process.stdout.write(${JSON.stringify(CHANGED_FILES_MARKER)}+cp.execFileSync("git",["-C",${JSON.stringify(checkoutRoot)},"diff","--name-only","-z",process.argv[1],process.argv[2],"--",${JSON.stringify(input.binding.path)}]).toString("base64")+"\\n")`;
   return {
     cwd: path.posix.join(checkoutRoot, input.binding.path),
     command: [
       "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
       `previous="$(${git} rev-parse HEAD)"`,
-      `${git} remote set-url origin ${shellQuote(repositoryUrl)}`,
-      `${authenticatedGit} fetch --no-tags --filter=blob:none origin ${shellQuote(input.binding.ref)}`,
+      `if ${git} remote get-url origin >/dev/null 2>&1; then ${git} remote set-url origin ${shellQuote(repositoryUrl)}; fi`,
+      `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}`,
       `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
       `${authenticatedGit} merge --ff-only --no-edit "$source_commit"`,
       `test "$(${git} rev-parse HEAD)" = "$source_commit"`,

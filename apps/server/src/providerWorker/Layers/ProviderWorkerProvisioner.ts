@@ -17,6 +17,7 @@ import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import { makeWorkspaceCheckpointStore } from "../workspaceCheckpointStore.ts";
 import { publishOutboxArtifacts } from "../artifactPublisher.ts";
+import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
 import {
   listProviderPersistenceCandidates,
   readProviderPersistenceCandidate,
@@ -508,6 +509,17 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       );
     });
 
+    const prepareRestoredToolchain = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"]) {
+      const probe = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_CHECK_COMMAND, timeoutSeconds: 15 });
+      if (probe.exitCode === 0 && !probe.timedOut) return;
+      const installed = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_INSTALL_COMMAND, timeoutSeconds: 180 });
+      const verified = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_CHECK_COMMAND, timeoutSeconds: 15 });
+      if (installed.exitCode !== 0 || installed.timedOut || verified.exitCode !== 0 || verified.timedOut) {
+        return yield* provisionError("workspace.restore.tools", "Could not prepare the saved worker disk's document and LFS tools.", undefined, workspace.runtimeId);
+      }
+      yield* Effect.logInfo("legacy provider disk toolchain upgraded", { sandboxId: workspace.runtimeId });
+    });
+
     const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
       Effect.gen(function* () {
         const stored = yield* readWorkspaceCheckpoint(input.threadId);
@@ -539,7 +551,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return yield* withWorkspaceCleanup(
           workspace,
-          provisionConnectedWorker({
+          (saved ? prepareRestoredToolchain(workspace) : Effect.void).pipe(Effect.andThen(provisionConnectedWorker({
             workspace,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
@@ -562,7 +574,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                     repositoryOrigin(input.repositoryBinding),
                   ),
                 }),
-          }).pipe(Effect.tap((binding) => saved ? Effect.void : restoreOutbox(binding))),
+          })), Effect.tap((binding) => saved ? Effect.void : restoreOutbox(binding))),
         );
       }).pipe(
         Effect.mapError((cause) =>
