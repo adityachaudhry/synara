@@ -514,14 +514,20 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       );
     });
 
-    const prepareRestoredToolchain = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"]) {
+    const checkedToolchains = new Set<string>();
+    const prepareWorkerToolchain = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"]) {
+      if (checkedToolchains.has(workspace.runtimeId)) return;
       const probe = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_CHECK_COMMAND, timeoutSeconds: 15 });
-      if (probe.exitCode === 0 && !probe.timedOut) return;
+      if (probe.exitCode === 0 && !probe.timedOut) {
+        checkedToolchains.add(workspace.runtimeId);
+        return;
+      }
       const installed = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_INSTALL_COMMAND, timeoutSeconds: 180 });
       const verified = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_CHECK_COMMAND, timeoutSeconds: 15 });
       if (installed.exitCode !== 0 || installed.timedOut || verified.exitCode !== 0 || verified.timedOut) {
-        return yield* provisionError("workspace.restore.tools", "Could not prepare the saved worker disk's document and LFS tools.", undefined, workspace.runtimeId);
+        return yield* provisionError("workspace.restore.tools", "Could not prepare the worker's document, LFS, and process tools.", undefined, workspace.runtimeId);
       }
+      checkedToolchains.add(workspace.runtimeId);
       yield* Effect.logInfo("legacy provider disk toolchain upgraded", { sandboxId: workspace.runtimeId });
     });
 
@@ -556,7 +562,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return yield* withWorkspaceCleanup(
           workspace,
-          (saved ? prepareRestoredToolchain(workspace) : Effect.void).pipe(Effect.andThen(provisionConnectedWorker({
+          (saved ? prepareWorkerToolchain(workspace) : Effect.void).pipe(Effect.andThen(provisionConnectedWorker({
             workspace,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
@@ -626,6 +632,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       }
       // Destruction is the authoritative generation barrier, including after a lost control connection.
       yield* workspaceRuntime.destroy(binding.workspace);
+      checkedToolchains.delete(binding.workspace.runtimeId);
     });
 
     const replaceBinding: ProviderWorkerProvisionerShape["restart"] = (binding, input) =>
@@ -768,6 +775,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
           return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
         }
+        yield* prepareWorkerToolchain(binding.workspace);
         const plan = makeRepositoryRefreshPlan({
           binding: repository,
           repositoryOrigin: repositoryOrigin(repository),
