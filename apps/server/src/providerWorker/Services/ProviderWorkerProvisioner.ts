@@ -25,6 +25,8 @@ export interface ProviderWorkerAttachmentStageInput {
 }
 
 export interface ProviderWorkerProvisionerShape {
+  /** A positive result means the runtime is conclusively gone; connection errors stay recoverable. */
+  readonly isWorkspaceUnavailable?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<boolean>;
   readonly start: (
     input: ProviderWorkerProvisionInput,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;

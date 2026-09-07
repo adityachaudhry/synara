@@ -11,7 +11,7 @@ import {
   type ProviderSessionRuntimeRepositoryShape,
 } from "../../persistence/Services/ProviderSessionRuntime";
 import { decodeProviderWorkerRuntimeBinding } from "../../providerWorker/runtimeBinding";
-import { WorkspaceRuntimeError } from "../Errors";
+import { RailwaySandboxNotFoundError, WorkspaceRuntimeError } from "../Errors";
 import { RailwaySandboxClient } from "../Services/RailwaySandboxClient";
 import {
   WorkspaceRuntime,
@@ -52,6 +52,7 @@ function toRuntimeError(operation: string, runtimeId?: string) {
       operation,
       detail: `Railway workspace runtime ${operation} failed.`,
       ...(runtimeId === undefined ? {} : { runtimeId }),
+      ...(cause instanceof RailwaySandboxNotFoundError ? { unavailable: true } : {}),
       cause,
     });
 }
@@ -448,6 +449,7 @@ export function makeWorkspaceRuntimeLive(
               operation: "connect",
               detail: `Railway Sandbox is ${record.status}, not RUNNING.`,
               runtimeId: binding.runtimeId,
+              unavailable: record.status !== "CREATING",
             });
           }
           return {

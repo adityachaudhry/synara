@@ -110,6 +110,11 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const repositoryOrigin = (binding: { readonly origin: string }) =>
       options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
         ? options.repositoryOriginOverride.origin : binding.origin;
+    const isWorkspaceUnavailable: NonNullable<ProviderWorkerProvisionerShape["isWorkspaceUnavailable"]> = (binding) =>
+      workspaceRuntime.connect(binding.workspace).pipe(
+        Effect.as(false),
+        Effect.catch((cause) => Effect.succeed(cause.unavailable === true)),
+      );
 
     const markRetired = (threadId: string, lifecycleGeneration: string) => {
       const retired = retiredGenerations.get(threadId) ?? new Set<string>();
@@ -598,7 +603,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     });
 
     const retireWorkspace = (binding: ProviderWorkerRuntimeBinding, reason: string) => Effect.gen(function* () {
-      if (workspaceCheckpointStore && binding.threadId) {
+      const connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+      if (Exit.isSuccess(connection) && workspaceCheckpointStore && binding.threadId) {
         // Let Pi dispose its native session and child processes before the process/disk barrier.
         yield* broker.request(binding.fence, "session.stop", { threadId: binding.threadId }).pipe(
           Effect.timeout(Duration.seconds(10)),
@@ -607,7 +613,6 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       }
       yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
       yield* authority.revoke(binding.fence);
-      const connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
       if (Exit.isSuccess(connection)) {
         yield* stopWorkerProcess(binding);
         yield* checkpointOutbox(binding);
@@ -993,6 +998,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     }
 
     return {
+      isWorkspaceUnavailable,
       start,
       restart,
       adopt,

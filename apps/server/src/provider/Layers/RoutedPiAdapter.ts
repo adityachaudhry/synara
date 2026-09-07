@@ -78,6 +78,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   );
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
   const remoteGatewayTokenByThread = new Map<string, string>();
+  const workspaceUnavailable = (binding: ProviderWorkerRuntimeBinding) =>
+    provisioner.isWorkspaceUnavailable?.(binding) ?? Effect.succeed(false);
   const revokeRemoteGatewayToken = (threadId: string) => {
     const token = remoteGatewayTokenByThread.get(threadId);
     if (token && agentGatewayCredentials) agentGatewayCredentials.revokeSessionToken(token);
@@ -241,8 +243,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       const persisted = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
       const persistedRemote = persistedDistributedBinding(persisted?.runtimePayload);
       const activeRemote = remoteByThread.get(input.threadId);
+      // ProviderService recovery supplies the native cursor; its repository coordinates live in this binding.
+      const repositoryBinding = input.repositoryBinding ??
+        (input.resumeCursor !== undefined ? (activeRemote ?? persistedRemote)?.repositoryCheckout?.binding : undefined);
 
-      if (input.repositoryBinding === undefined) {
+      if (repositoryBinding === undefined) {
         const remote = activeRemote ?? persistedRemote;
         if (remote) {
           yield* provisioner.stop(remote).pipe(
@@ -273,7 +278,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       threadId: input.threadId,
                       lifecycleGeneration,
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-                      repositoryBinding: input.repositoryBinding,
+                      repositoryBinding,
                       ...(agentGatewayConnection === undefined
                         ? {}
                         : { agentGatewayConnection }),
@@ -282,7 +287,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       threadId: input.threadId,
                       lifecycleGeneration,
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-                      repositoryBinding: input.repositoryBinding,
+                      repositoryBinding,
                       ...(agentGatewayConnection === undefined
                         ? {}
                         : { agentGatewayConnection }),
@@ -371,6 +376,9 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       input.threadId,
       (binding) =>
         Effect.gen(function* () {
+          if (yield* workspaceUnavailable(binding)) {
+            return yield* new ProviderAdapterSessionNotFoundError({ provider: "pi", threadId: input.threadId });
+          }
           let current = binding;
           let turnInput = input;
           if (binding.repositoryCheckout && provisioner.refreshRepository) {
@@ -624,7 +632,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     Effect.gen(function* () {
       const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
       if (!binding) return yield* local.stopSession(threadId);
-      yield* requestUnknown(binding, "session.stop", { threadId }).pipe(
+      if (!(yield* workspaceUnavailable(binding))) yield* requestUnknown(binding, "session.stop", { threadId }).pipe(
         Effect.tapError((cause) =>
           Effect.logWarning(
             "Remote Pi session.stop response was lost; destroying the bound sandbox.",
@@ -646,7 +654,10 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     Effect.all([
       local.listSessions(),
       Effect.forEach(Array.from(remoteByThread.values()), (binding) =>
-        requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession)).pipe(
+        workspaceUnavailable(binding).pipe(
+          Effect.flatMap((unavailable) => unavailable
+            ? Effect.succeed([] as const)
+            : requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession))),
           Effect.catch((cause) =>
             Effect.logWarning("remote Pi session discovery unavailable", {
               sandboxId: binding.fence.sandboxId,
@@ -660,7 +671,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
     route(
       threadId,
-      (binding) => requestDecoded(binding, "session.has", { threadId }, Schema.Boolean),
+      (binding) => workspaceUnavailable(binding).pipe(
+        Effect.flatMap((unavailable) => unavailable
+          ? Effect.succeed(false)
+          : requestDecoded(binding, "session.has", { threadId }, Schema.Boolean)),
+      ),
       local.hasSession(threadId),
     );
 

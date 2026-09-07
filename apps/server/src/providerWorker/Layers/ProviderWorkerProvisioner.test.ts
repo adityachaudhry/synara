@@ -507,9 +507,9 @@ describe("ProviderWorkerProvisioner", () => {
       onCapacityAdmitted,
     });
     expect(harness.calls).toEqual([
+      "connect-old",
       "retire",
       "revoke",
-      "connect-old",
       "stop-process",
       "destroy",
       "create-replacement",
