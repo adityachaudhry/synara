@@ -100,6 +100,7 @@ import { findProviderStatus } from "~/lib/providerAvailability";
 import { cn } from "~/lib/utils";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
+import { readSynaraRuntimeConfig } from "~/synaraRuntimeConfig";
 import { buildModelSelection } from "~/providerModelOptions";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
@@ -692,6 +693,7 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
   const automationsQuery = useQuery({
     queryKey: automationQueryKey,
     queryFn: () => ensureNativeApi().automation.list({}),
+    enabled: readSynaraRuntimeConfig().project === undefined,
   });
   const data = automationsQuery.data ?? EMPTY_AUTOMATION_LIST;
 
