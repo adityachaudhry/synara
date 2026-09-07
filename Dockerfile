@@ -48,8 +48,10 @@ COPY --from=build --chown=node:node /app/apps/server/dist ./apps/server/dist
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 COPY scripts/node-pty-smoke.mjs ./scripts/node-pty-smoke.mjs
 COPY scripts/lib/node-pty-smoke.ts ./scripts/lib/node-pty-smoke.ts
+COPY apps/server/scripts/smoke-mcp-bundle.mjs ./apps/server/scripts/smoke-mcp-bundle.mjs
 RUN node apps/server/dist/index.mjs --help >/dev/null \
-    && node scripts/node-pty-smoke.mjs
+    && node scripts/node-pty-smoke.mjs \
+    && node apps/server/scripts/smoke-mcp-bundle.mjs
 RUN case "$(dpkg --print-architecture)" in \
       amd64) sdk_arch=x64 ;; arm64) sdk_arch=arm64 ;; *) exit 1 ;; esac \
   && sdk_claude="$(find /app/node_modules/.bun -path "*/node_modules/@anthropic-ai/claude-agent-sdk-linux-${sdk_arch}/claude" -type f -print -quit)" \
