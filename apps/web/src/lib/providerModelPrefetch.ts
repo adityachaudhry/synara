@@ -11,6 +11,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import type { AppSettings } from "../appSettings";
 import type { DraftThreadEnvMode } from "../composerDraftDomain";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import { findProviderStatus, resolveAvailableProviderPreference } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
@@ -210,8 +211,9 @@ export function prefetchProviderModelsForNewThread(
   },
 ): void {
   const cwd = input.cwd ?? null;
+  const projectScoped = readSynaraRuntimeConfig().project !== undefined;
   const providers = (input.providers ?? NEW_THREAD_MODEL_PREFETCH_PROVIDERS).filter(
-    (provider) => provider !== "droid",
+    (provider) => provider !== "droid" && (!projectScoped || provider === "pi"),
   );
 
   for (const provider of providers) {
