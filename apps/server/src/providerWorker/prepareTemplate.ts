@@ -17,7 +17,7 @@ export async function prepareProviderWorkerTemplate(artifactPath: string) {
   const connection = { token, authType, environmentId };
   const artifact = await readFile(artifactPath);
   const sha256 = createHash("sha256").update(artifact).digest("hex");
-  const name = `synara-worker-tools-v1-${region ?? "default"}-${sha256}`;
+  const name = `synara-worker-tools-v2-${region ?? "default"}-${sha256}`;
   const existing = (await Sandbox.checkpoints(connection)).find(
     (checkpoint) => checkpoint.key === name,
   );

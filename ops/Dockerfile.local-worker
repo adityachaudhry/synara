@@ -1,5 +1,5 @@
 FROM node:24-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs bash tmux ca-certificates ripgrep python3 python3-openpyxl curl poppler-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs bash tmux ca-certificates ripgrep python3 python3-openpyxl curl poppler-utils procps \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /workspace /opt/synara
 WORKDIR /workspace
