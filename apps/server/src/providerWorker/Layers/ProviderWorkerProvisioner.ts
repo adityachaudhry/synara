@@ -72,6 +72,7 @@ export interface ProviderWorkerProvisionerOptions {
   readonly controlUrl: string;
   readonly checkpointRoot?: string;
   readonly templateCheckpointName?: string;
+  readonly repositoryOriginOverride?: { readonly sourceOrigin: string; readonly origin: string };
   readonly environment?: Readonly<Record<string, string>>;
   readonly repositoryAuthorization?: string;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";
@@ -104,6 +105,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
+    const repositoryOrigin = (binding: { readonly origin: string }) =>
+      options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
+        ? options.repositoryOriginOverride.origin : binding.origin;
 
     const markRetired = (threadId: string, lifecycleGeneration: string) => {
       const retired = retiredGenerations.get(threadId) ?? new Set<string>();
@@ -507,6 +511,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const checkout = input.repositoryBinding
           ? (saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
               binding: input.repositoryBinding,
+              repositoryOrigin: repositoryOrigin(input.repositoryBinding),
               ...(options.repositoryAuthorization
                 ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
                 : {}),
@@ -546,6 +551,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   repositoryCredential: makeRepositoryCredentialConfig(
                     input.repositoryBinding,
                     options.repositoryAuthorization,
+                    repositoryOrigin(input.repositoryBinding),
                   ),
                 }),
           }).pipe(Effect.tap((binding) => saved ? Effect.void : restoreOutbox(binding))),
@@ -739,12 +745,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         }
         const plan = makeRepositoryRefreshPlan({
           binding: repository,
+          repositoryOrigin: repositoryOrigin(repository),
           ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
         });
         if (options.repositoryAuthorization) {
           yield* workspaceRuntime.writeFile(binding.workspace, {
             path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
-            data: makeRepositoryCredentialConfig(repository, options.repositoryAuthorization),
+            data: makeRepositoryCredentialConfig(repository, options.repositoryAuthorization, repositoryOrigin(repository)),
             mode: 0o600,
           });
         }
@@ -791,6 +798,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           try: () =>
             makeRepositoryReconcilePlan({
               binding: repositoryBinding,
+              repositoryOrigin: repositoryOrigin(repositoryBinding),
               commit,
               persistedFiles,
               credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH,
@@ -805,7 +813,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         yield* workspaceRuntime.writeFile(binding.workspace, {
           path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
-          data: makeRepositoryCredentialConfig(repositoryBinding, options.repositoryAuthorization),
+          data: makeRepositoryCredentialConfig(repositoryBinding, options.repositoryAuthorization, repositoryOrigin(repositoryBinding)),
           mode: 0o600,
         });
         const cleanupCredential = workspaceRuntime
@@ -1026,6 +1034,7 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
         artifact,
         controlUrl: options.controlUrl,
         ...(options.templateCheckpointName ? { templateCheckpointName: options.templateCheckpointName } : {}),
+        ...(options.repositoryOriginOverride ? { repositoryOriginOverride: options.repositoryOriginOverride } : {}),
         checkpointRoot:
           options.checkpointRoot ?? path.join(serverConfig.baseDir, "provider-outbox-checkpoints"),
         ...(options.environment === undefined ? {} : { environment: options.environment }),

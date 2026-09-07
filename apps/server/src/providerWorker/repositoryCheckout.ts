@@ -16,8 +16,8 @@ const PREVIOUS_COMMIT_MARKER = "__SYNARA_PREVIOUS_COMMIT__=";
 const CHANGED_FILES_MARKER = "__SYNARA_CHANGED_FILES__=";
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, credentialConfigPath?: string): string {
-  const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, ...(credentialConfigPath ? { credentialConfigPath } : {}) });
+function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, sourceOrigin: string, credentialConfigPath?: string): string {
+  const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, sourceOrigin, ...(credentialConfigPath ? { credentialConfigPath } : {}) });
   return `GIT_TERMINAL_PROMPT=0 ${credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(credentialConfigPath)} ` : ""}node -e ${shellQuote(script)}`;
 }
 
@@ -57,7 +57,7 @@ export function makeRepositoryCheckoutPlan(input: {
     `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
     `${sparseGit} checkout --detach FETCH_HEAD`,
     `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
-    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.credentialConfigPath),
+    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
     `test -d ${shellQuote(cwd)}`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
   ].join(" && ");
@@ -111,7 +111,7 @@ export function makeRepositoryReconcilePlan(input: {
     stashSelected,
     `if ! ${authenticatedGit} merge --ff-only --no-edit FETCH_HEAD; then ${restoreSelectedOnFailure}; exit 1; fi`,
     `test "$(${git} rev-parse HEAD)" = ${shellQuote(input.commit)}`,
-    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.credentialConfigPath),
+    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
     discardSelectedOnSuccess,
     `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
@@ -153,7 +153,7 @@ export function makeRepositoryRefreshPlan(input: {
       `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
       `${authenticatedGit} merge --ff-only --no-edit "$source_commit"`,
       `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
-      hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.credentialConfigPath),
+      hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
       `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
       `printf '${COMMIT_MARKER}%s\\n' "$source_commit"`,
       `printf '${CHECKOUT_MODE_MARKER}partial\\n'`,

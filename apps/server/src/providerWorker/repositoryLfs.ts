@@ -3,6 +3,7 @@ export function repositoryLfsScript(input: {
   readonly checkoutRoot: string;
   readonly companyPath: string;
   readonly repositoryUrl: string;
+  readonly sourceOrigin: string;
   readonly credentialConfigPath?: string;
 }) {
   return `
@@ -64,7 +65,11 @@ async function matches(target, file) {
   async function materialize(file) {
     const object = downloads.get(file.oid), action = object?.actions?.download;
     if (object?.error || !action?.href || object.size !== file.size) throw Error("Company LFS object unavailable: " + file.name);
-    const url = new URL(action.href), origin = new URL(config.repositoryUrl).origin;
+    const url = new URL(action.href), repository = new URL(config.repositoryUrl), origin = repository.origin;
+    if (url.origin === config.sourceOrigin && url.origin !== origin) {
+      url.protocol = repository.protocol;
+      url.host = repository.host;
+    }
     if (url.protocol !== "https:" && url.origin !== origin) throw Error("Company LFS download URL is not trusted.");
     const response = await fetch(url, {
       signal: AbortSignal.timeout(120000),

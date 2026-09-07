@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { decodeProviderWorkerRuntimeBinding, type ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 
@@ -34,6 +34,12 @@ export function makeWorkspaceCheckpointStore(root: string) {
       const temporary = `${target}.${randomUUID()}.tmp`;
       await writeFile(temporary, JSON.stringify(value), { mode: 0o600, flush: true });
       await rename(temporary, target);
+      const directory = await open(root, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
     },
   };
 }

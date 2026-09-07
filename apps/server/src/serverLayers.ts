@@ -293,6 +293,9 @@ export function makeServerApplicationLayers() {
         ...(distributedPiConfig.templateCheckpointName
           ? { templateCheckpointName: distributedPiConfig.templateCheckpointName }
           : {}),
+        ...(distributedPiConfig.repositoryOriginOverride
+          ? { repositoryOriginOverride: distributedPiConfig.repositoryOriginOverride }
+          : {}),
         networkIsolation: distributedPiConfig.networkIsolation,
         environment: distributedPiConfig.workerEnvironment,
         ...(distributedPiConfig.repositoryAuthorization === undefined

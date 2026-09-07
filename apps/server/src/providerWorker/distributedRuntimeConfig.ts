@@ -3,6 +3,7 @@ import {
   type RailwaySandboxRuntimeConfig,
 } from "../workspaceRuntime/railwaySandboxConfig";
 import type { DockerWorkspaceConfig } from "../workspaceRuntime/Layers/DockerWorkspaceRuntime";
+import { isTrustedPrivateWorkerUrl, privateWorkerHosts } from "./privateNetwork.ts";
 
 const DEFAULT_FORWARD_ENV_KEYS = [
   "OPENAI_API_KEY",
@@ -32,6 +33,7 @@ export type DistributedPiRuntimeConfig =
       readonly docker?: DockerWorkspaceConfig;
       readonly controlUrl: string;
       readonly templateCheckpointName?: string;
+      readonly repositoryOriginOverride?: { readonly sourceOrigin: string; readonly origin: string };
       readonly networkIsolation: "ISOLATED" | "PRIVATE";
       readonly workerEnvironment: Readonly<Record<string, string>>;
       readonly repositoryAuthorization?: string;
@@ -112,6 +114,33 @@ export function resolveDistributedPiRuntimeConfig(input: {
     );
   }
 
+  const trustedEnvironment = { ...environment, SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION: networkIsolationInput };
+  const privateHosts = privateWorkerHosts(environment);
+  if (privateHosts.length && networkIsolationInput !== "PRIVATE") {
+    throw new Error("Private worker hosts require SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=PRIVATE.");
+  }
+  const isLocalControl = ["localhost", "127.0.0.1", "[::1]"].includes(controlUrl.hostname) ||
+    (docker !== undefined && controlUrl.hostname === "host.docker.internal");
+  if (controlUrl.protocol === "ws:" && !isLocalControl && !isTrustedPrivateWorkerUrl(controlUrl, trustedEnvironment)) {
+    throw new Error("Worker control URLs require WSS or an explicitly trusted private host.");
+  }
+  if (privateHosts.length) {
+    workerEnvironment.SYNARA_PROVIDER_WORKER_PRIVATE_HOSTS = privateHosts.join(",");
+    workerEnvironment.SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION = networkIsolationInput;
+  }
+  let repositoryOriginOverride: { readonly sourceOrigin: string; readonly origin: string } | undefined;
+  const privateRepositoryOrigin = environment.SYNARA_PROVIDER_WORKER_REPOSITORY_ORIGIN?.trim();
+  if (privateRepositoryOrigin) {
+    const origin = new URL(privateRepositoryOrigin);
+    const source = new URL(environment.SYNARA_GITEA_ORIGIN ?? "");
+    if (!["http:", "https:"].includes(origin.protocol) || !isTrustedPrivateWorkerUrl(origin, trustedEnvironment) ||
+      origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/" ||
+      source.protocol !== "https:" || source.username || source.password || source.search || source.hash || source.pathname !== "/") {
+      throw new Error("The worker repository origin must map the configured public Gitea origin to an explicitly trusted private origin.");
+    }
+    repositoryOriginOverride = { sourceOrigin: source.origin, origin: origin.origin };
+  }
+
   return {
     enabled: true,
     railway,
@@ -121,6 +150,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
       ? { templateCheckpointName: environment.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT.trim() }
       : {}),
     networkIsolation: networkIsolationInput,
+    ...(repositoryOriginOverride ? { repositoryOriginOverride } : {}),
     workerEnvironment,
     ...(environment.SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION?.trim()
       ? {
