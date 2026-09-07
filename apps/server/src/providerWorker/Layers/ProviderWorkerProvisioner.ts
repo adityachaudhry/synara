@@ -27,7 +27,7 @@ import {
   makeOutboxCheckpointStore,
   listUnpromotedOutboxCandidates,
 } from "../outboxCheckpointStore.ts";
-import { PROVIDER_PERSISTENCE_OUTBOX_ROOT } from "../../providerPersistence.ts";
+import { PROVIDER_PERSISTENCE_OUTBOX_ROOT, type ProviderWorkspaceFile } from "../../providerPersistence.ts";
 import { attachmentRelativePath } from "../../attachmentStore";
 import {
   makeRepositoryCredentialConfig,
@@ -98,6 +98,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const authority = yield* ProviderWorkerBootstrapAuthority;
     const lifecycleLock = makeKeyedLock<string>();
     const checkpointLock = makeKeyedLock<string>();
+    // Immutable checkpoint files are shared by preview, download and conversion.
+    // Bound both bytes and entries; live working copies always bypass this cache.
+    const checkpointFiles = new Map<string, ProviderWorkspaceFile>();
+    let checkpointFileBytes = 0;
     const checkpointStore = options.checkpointRoot
       ? makeOutboxCheckpointStore(options.checkpointRoot)
       : undefined;
@@ -977,9 +981,16 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             !(["origin", "owner", "repository", "ref", "path"] as const).every((key) => currentRepository[key] === savedRepository[key])) {
           return yield* provisionError("workspace.file.read", "No matching thread workspace checkpoint is available.", undefined);
         }
+        const cacheKey = `${binding.threadId}\0${saved.checkpoint.key}\0${filePath}`;
+        const cached = checkpointFiles.get(cacheKey);
+        if (cached) {
+          checkpointFiles.delete(cacheKey);
+          checkpointFiles.set(cacheKey, cached);
+          return cached;
+        }
         // A preview needs disk bytes only. It must not launch Pi or refresh the
         // checkout, which could change the saved working copy being inspected.
-        return yield* Effect.acquireUseRelease(
+        const file = yield* Effect.acquireUseRelease(
           workspaceRuntime.create({ threadId: binding.threadId!, lifecycleGeneration: randomUUID(),
             checkpointName: saved.checkpoint.key, environment: {}, networkIsolation: "ISOLATED" }),
           (workspace) => readProviderWorkspaceFile({ workspaceRuntime, binding: { ...saved.binding, workspace }, filePath })
@@ -987,6 +998,15 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           (workspace) => workspaceRuntime.destroy(workspace).pipe(Effect.catch((cause) =>
             Effect.logError("workspace preview sandbox cleanup failed", { sandboxId: workspace.runtimeId, cause }))),
         );
+        while (checkpointFiles.size >= 128 || checkpointFileBytes + file.sizeBytes > 64 * 1024 * 1024) {
+          const oldest = checkpointFiles.keys().next().value;
+          if (oldest === undefined) break;
+          checkpointFileBytes -= checkpointFiles.get(oldest)!.sizeBytes;
+          checkpointFiles.delete(oldest);
+        }
+        checkpointFiles.set(cacheKey, file);
+        checkpointFileBytes += file.sizeBytes;
+        return file;
       })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
         ? cause : provisionError("workspace.file.read", "Could not read the thread workspace.", cause)));
 

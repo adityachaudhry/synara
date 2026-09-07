@@ -386,6 +386,11 @@ export function SingleChatSurface(props: {
     [requestImmediateDockHydration, openPane, props.threadId],
   );
 
+  const handleOpenHostFile = useCallback((filePath: string, revision?: string) => {
+    requestImmediateDockHydration("file");
+    openPane(props.threadId, { kind: "file", filePath, fileSource: "host", fileRevision: revision });
+  }, [requestImmediateDockHydration, openPane, props.threadId]);
+
   const handleOpenWorkspaceSearchDirectory = useCallback(
     (relativePath: string) => {
       requestImmediateDockHydration("explorer");
@@ -1003,7 +1008,7 @@ export function SingleChatSurface(props: {
         if (hostSidebar?.filesPane) {
           const filesPane =
             typeof hostSidebar.filesPane === "function"
-              ? hostSidebar.filesPane(handleOpenWorkspaceSearchFile)
+              ? hostSidebar.filesPane(handleOpenHostFile)
               : hostSidebar.filesPane;
           return (
             <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -1028,6 +1033,8 @@ export function SingleChatSurface(props: {
             <div className="h-full min-h-0 w-full overflow-hidden">
               {hostSidebar.renderFilePane(pane.filePath, {
                 threadId: props.threadId,
+                fileSource: pane.fileSource ?? "workspace",
+                fileRevision: pane.fileRevision,
                 closePane: () => handleCloseDockPane(pane.id),
               })}
             </div>

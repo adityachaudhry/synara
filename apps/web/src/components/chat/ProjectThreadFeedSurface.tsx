@@ -343,16 +343,22 @@ export function ProjectThreadFeedSurface({
     [openThread, syncServerShellSnapshot],
   );
 
-  const openFeedFile = useCallback((filePath: string, threadId: ThreadId | null = null) => {
+  const openFeedFile = useCallback((filePath: string, threadId: ThreadId | null = null, fileSource: "host" | "workspace" = "workspace", fileRevision?: string) => {
     setDockState((state) =>
       openPaneInState(state, {
         paneId: randomUUID(),
         kind: "file",
         filePath,
+        fileSource,
+        fileRevision,
         threadId,
       }),
     );
   }, []);
+
+  const openFeedHostFile = useCallback((filePath: string, revision?: string) => {
+    openFeedFile(filePath, null, "host", revision);
+  }, [openFeedFile]);
 
   const feedFileOpener = useMemo<WorkspaceFileOpener>(
     () => ({
@@ -383,19 +389,21 @@ export function ProjectThreadFeedSurface({
         }
         const filesPane =
           typeof hostSidebar.filesPane === "function"
-            ? hostSidebar.filesPane(openFeedFile)
+            ? hostSidebar.filesPane(openFeedHostFile)
             : hostSidebar.filesPane;
         return <div className="h-full min-h-0 w-full overflow-hidden">{filesPane}</div>;
       }
       if (pane.kind === "file" && pane.filePath && hostSidebar?.renderFilePane) {
         return hostSidebar.renderFilePane(pane.filePath, {
           threadId: pane.threadId,
+          fileSource: pane.fileSource ?? "workspace",
+          fileRevision: pane.fileRevision,
           closePane: () => closeDockPane(pane.id),
         });
       }
       return <PanelStateMessage>This panel is unavailable from the thread feed.</PanelStateMessage>;
     },
-    [closeDockPane, hostSidebar, openFeedFile],
+    [closeDockPane, hostSidebar, openFeedHostFile],
   );
 
   const toggleDock = useCallback((open: boolean) => {

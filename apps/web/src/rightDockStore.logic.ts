@@ -36,6 +36,8 @@ export interface RightDockPane {
   diffFilePath: string | null;
   // file panes preview one workspace-relative file.
   filePath: string | null;
+  fileSource?: "host" | "workspace";
+  fileRevision?: string | null;
   pullRequestProjectId: ProjectId | null;
   pullRequestRepository: string | null;
   pullRequestNumber: number | null;
@@ -93,6 +95,8 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
     diffTurnId: typeof candidate.diffTurnId === "string" ? (candidate.diffTurnId as TurnId) : null,
     diffFilePath: typeof candidate.diffFilePath === "string" ? candidate.diffFilePath : null,
     filePath: typeof candidate.filePath === "string" ? candidate.filePath : null,
+    ...(candidate.fileSource === "host" ? { fileSource: "host" as const } : {}),
+    ...(typeof candidate.fileRevision === "string" ? { fileRevision: candidate.fileRevision } : {}),
     pullRequestProjectId:
       typeof candidate.pullRequestProjectId === "string"
         ? (candidate.pullRequestProjectId as ProjectId)
@@ -165,6 +169,8 @@ export interface OpenPaneInput {
   diffTurnId?: TurnId | null;
   diffFilePath?: string | null;
   filePath?: string | null;
+  fileSource?: "host" | "workspace";
+  fileRevision?: string | null;
   pullRequestProjectId?: ProjectId | null;
   pullRequestRepository?: string | null;
   pullRequestNumber?: number | null;
@@ -179,6 +185,8 @@ function createPane(input: OpenPaneInput): RightDockPane {
     diffTurnId: input.diffTurnId ?? null,
     diffFilePath: input.diffFilePath ?? null,
     filePath: input.filePath ?? null,
+    ...(input.fileSource ? { fileSource: input.fileSource } : {}),
+    ...(input.fileRevision ? { fileRevision: input.fileRevision } : {}),
     pullRequestProjectId: input.pullRequestProjectId ?? null,
     pullRequestRepository: input.pullRequestRepository ?? null,
     pullRequestNumber: input.pullRequestNumber ?? null,
@@ -228,6 +236,8 @@ function findMatchingMultiInstancePane(
       (pane) =>
         pane.kind === "file" &&
         pane.filePath === filePath &&
+        (pane.fileSource ?? "workspace") === (input.fileSource ?? "workspace") &&
+        (pane.fileRevision ?? null) === (input.fileRevision ?? null) &&
         pane.threadId === (input.threadId ?? null),
     );
   }
