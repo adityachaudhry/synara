@@ -59,13 +59,15 @@ const RollbackThreadParams = Schema.Struct({
 });
 
 const ArtifactUploads = Schema.Struct({
-  files: Schema.Array(Schema.Struct({
-    path: ProviderWorkerBoundedString,
-    sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
-    sizeBytes: NonNegativeInt,
-    uploadUrl: Schema.String.check(Schema.isMaxLength(16_384)),
-    headers: Schema.Record(Schema.String, Schema.String),
-  })).check(Schema.isMaxLength(100)),
+  files: Schema.Array(
+    Schema.Struct({
+      path: ProviderWorkerBoundedString,
+      sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
+      sizeBytes: NonNegativeInt,
+      uploadUrl: Schema.String.check(Schema.isMaxLength(16_384)),
+      headers: Schema.Record(Schema.String, Schema.String),
+    }),
+  ).check(Schema.isMaxLength(100)),
 });
 
 const request = <Method extends ProviderWorkerMethod, Params extends Schema.Top>(
@@ -169,8 +171,7 @@ export const ProviderWorkerResponseAcknowledged = Schema.Struct({
   type: Schema.Literal("response.ack"),
   requestId: ProviderWorkerRequestId,
 });
-export type ProviderWorkerResponseAcknowledged =
-  typeof ProviderWorkerResponseAcknowledged.Type;
+export type ProviderWorkerResponseAcknowledged = typeof ProviderWorkerResponseAcknowledged.Type;
 
 export const ProviderWorkerClientFrame = Schema.Union([
   ProviderWorkerRegister,

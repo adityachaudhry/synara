@@ -30,7 +30,11 @@ export async function uploadOutboxArtifacts(files: ReadonlyArray<ArtifactUploadG
     const target = await realpath(path.join(root, file.path));
     if (!target.startsWith(`${root}${path.sep}`)) throw new Error("Artifact escaped the Outbox.");
     const info = await stat(target);
-    if (!info.isFile() || info.size !== file.sizeBytes || info.size > MAX_PROVIDER_PERSISTENCE_FILE_BYTES) {
+    if (
+      !info.isFile() ||
+      info.size !== file.sizeBytes ||
+      info.size > MAX_PROVIDER_PERSISTENCE_FILE_BYTES
+    ) {
       throw new Error("Artifact size changed before upload.");
     }
     const digest = createHash("sha256");

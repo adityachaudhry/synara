@@ -5,17 +5,35 @@ import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 import type { ProviderWorkerBrokerShape } from "./Services/ProviderWorkerBroker.ts";
 import { isTrustedPrivateWorkerUrl } from "./privateNetwork.ts";
 
-interface ArtifactRecord { artifact_id: string; path: string; sha256: string; size_bytes: number; published_commit_sha?: string | null; }
-interface UploadGrant { artifact_id: string; upload_url: string; headers: Record<string, string>; }
+interface ArtifactRecord {
+  artifact_id: string;
+  path: string;
+  sha256: string;
+  size_bytes: number;
+  published_commit_sha?: string | null;
+}
+interface UploadGrant {
+  artifact_id: string;
+  upload_url: string;
+  headers: Record<string, string>;
+}
 
 function client() {
   const origin = process.env.SYNARA_ARTIFACT_API_URL?.trim();
   const token = process.env.GLASSWING_ARTIFACT_SERVICE_TOKEN?.trim();
   if (!origin && !token) return undefined;
-  if (!origin || !token) throw new Error("Artifact API URL and service token must both be configured.");
+  if (!origin || !token)
+    throw new Error("Artifact API URL and service token must both be configured.");
   const url = new URL(origin);
-  if (url.username || url.password || url.search || url.hash || url.pathname !== "/" ||
-      (url.protocol !== "https:" && !(url.protocol === "http:" && isTrustedPrivateWorkerUrl(url, process.env)))) {
+  if (
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== "/" ||
+    (url.protocol !== "https:" &&
+      !(url.protocol === "http:" && isTrustedPrivateWorkerUrl(url, process.env)))
+  ) {
     throw new Error("Artifact API origin must be HTTPS or an explicit Railway private service.");
   }
   return async <T>(route: string, body?: unknown): Promise<T> => {
@@ -48,35 +66,60 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
     try: () => api<{ artifacts: ArtifactRecord[] }>(`/internal/chat-artifacts?${query}`),
     catch: (cause) => cause,
   });
-  const files = input.entries.filter((entry) => entry.source === "outbox" &&
-    !existing.artifacts.some((saved) => saved.path === entry.path && saved.sha256 === entry.sha256));
+  const files = input.entries.filter(
+    (entry) =>
+      entry.source === "outbox" &&
+      !existing.artifacts.some(
+        (saved) => saved.path === entry.path && saved.sha256 === entry.sha256,
+      ),
+  );
   for (const file of files) {
     const grant = yield* Effect.tryPromise({
-      try: () => api<UploadGrant>("/internal/chat-artifacts/grants", {
-        company_slug: companySlug,
-        thread_id: binding.threadId,
-        ...(input.turnId ? { turn_id: input.turnId } : {}),
-        source_commit: binding.repositoryCheckout!.commit,
-        path: file.path,
-        sha256: file.sha256,
-        size_bytes: file.sizeBytes,
-        media_type: Mime.getType(file.path) ?? "application/octet-stream",
-      }),
+      try: () =>
+        api<UploadGrant>("/internal/chat-artifacts/grants", {
+          company_slug: companySlug,
+          thread_id: binding.threadId,
+          ...(input.turnId ? { turn_id: input.turnId } : {}),
+          source_commit: binding.repositoryCheckout!.commit,
+          path: file.path,
+          sha256: file.sha256,
+          size_bytes: file.sizeBytes,
+          media_type: Mime.getType(file.path) ?? "application/octet-stream",
+        }),
       catch: (cause) => cause,
     });
-    yield* input.broker.request(binding.fence, "artifacts.upload", { files: [{
-      path: file.path, sha256: file.sha256, sizeBytes: file.sizeBytes,
-      uploadUrl: grant.upload_url, headers: grant.headers,
-    }] });
+    yield* input.broker.request(binding.fence, "artifacts.upload", {
+      files: [
+        {
+          path: file.path,
+          sha256: file.sha256,
+          sizeBytes: file.sizeBytes,
+          uploadUrl: grant.upload_url,
+          headers: grant.headers,
+        },
+      ],
+    });
     yield* Effect.tryPromise({
-      try: () => api<ArtifactRecord>(`/internal/chat-artifacts/${encodeURIComponent(grant.artifact_id)}/complete`, {}),
+      try: () =>
+        api<ArtifactRecord>(
+          `/internal/chat-artifacts/${encodeURIComponent(grant.artifact_id)}/complete`,
+          {},
+        ),
       catch: (cause) => cause,
     });
   }
-  if (files.length) yield* Effect.logInfo("provider artifacts uploaded directly", {
-    threadId: binding.threadId, count: files.length,
-    bytes: files.reduce((total, file) => total + file.sizeBytes, 0),
-  });
-  return input.entries.filter((entry) => entry.source !== "outbox" ||
-    !existing.artifacts.some((saved) => saved.path === entry.path && saved.sha256 === entry.sha256 && saved.published_commit_sha));
+  if (files.length)
+    yield* Effect.logInfo("provider artifacts uploaded directly", {
+      threadId: binding.threadId,
+      count: files.length,
+      bytes: files.reduce((total, file) => total + file.sizeBytes, 0),
+    });
+  return input.entries.filter(
+    (entry) =>
+      entry.source !== "outbox" ||
+      !existing.artifacts.some(
+        (saved) =>
+          saved.path === entry.path && saved.sha256 === entry.sha256 && saved.published_commit_sha,
+      ),
+  );
 });
