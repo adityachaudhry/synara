@@ -396,7 +396,7 @@ export function RightDock(props: RightDockProps) {
                 <div
                   key={pane.id}
                   className={cn(
-                    "absolute inset-0 flex min-h-0 w-full",
+                    "absolute inset-0 flex min-h-0 min-w-0 w-full flex-col",
                     isActive ? undefined : "invisible pointer-events-none",
                   )}
                   aria-hidden={isVisible ? undefined : true}
