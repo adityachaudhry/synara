@@ -32,9 +32,15 @@ function client() {
     url.hash ||
     url.pathname !== "/" ||
     (url.protocol !== "https:" &&
-      !(url.protocol === "http:" && isTrustedPrivateWorkerUrl(url, process.env)))
+      !(
+        url.protocol === "http:" &&
+        (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+          isTrustedPrivateWorkerUrl(url, process.env))
+      ))
   ) {
-    throw new Error("Artifact API origin must be HTTPS or an explicit Railway private service.");
+    throw new Error(
+      "Artifact API origin must be HTTPS, loopback, or an explicit Railway private service.",
+    );
   }
   return async <T>(route: string, body?: unknown): Promise<T> => {
     const response = await fetch(`${url.origin}${route}`, {
