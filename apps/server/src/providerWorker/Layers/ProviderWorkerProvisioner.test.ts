@@ -158,6 +158,9 @@ describe("ProviderWorkerProvisioner", () => {
             truncated: false,
           };
         }
+        if (input.command.includes("sha256sum --check")) {
+          return { exitCode: 1, stdout: "", stderr: "", timedOut: false, truncated: false };
+        }
         harness.calls.push("checkout");
         return {
           exitCode: 0,

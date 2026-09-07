@@ -12,12 +12,12 @@ export async function prepareProviderWorkerTemplate(artifactPath: string) {
   const connection = { token, authType, environmentId };
   const artifact = await readFile(artifactPath);
   const sha256 = createHash("sha256").update(artifact).digest("hex");
-  const name = `synara-worker-${sha256}`;
+  const name = `synara-worker-tools-v1-${sha256}`;
   const existing = (await Sandbox.checkpoints(connection)).find((checkpoint) => checkpoint.key === name);
   if (existing) return { ...existing, sha256, reused: true };
   const template = await Sandbox.template()
-    .withPackages("git-lfs")
-    .run("node --version && git lfs version && mkdir -p /opt/synara /workspace")
+    .withPackages("git-lfs", "poppler-utils", "python3-openpyxl")
+    .run("node --version && dpkg-query -W git-lfs && git config --get filter.lfs.process && pdftotext -v && python3 -c 'import openpyxl' && mkdir -p /opt/synara /workspace")
     .build(connection);
   const sandbox = await Sandbox.create(template, {
     ...connection,

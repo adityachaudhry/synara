@@ -1,4 +1,5 @@
 import path from "node:path";
+import { repositoryLfsScript } from "./repositoryLfs.ts";
 
 import type { ProjectRepositoryBinding } from "@synara/contracts";
 import {
@@ -15,20 +16,9 @@ const PREVIOUS_COMMIT_MARKER = "__SYNARA_PREVIOUS_COMMIT__=";
 const CHANGED_FILES_MARKER = "__SYNARA_CHANGED_FILES__=";
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-/** Download only the admitted company's LFS objects, then verify every byte against HEAD. */
-function hydrateLfs(git: string, checkoutRoot: string, companyPath: string): string {
-  const verify = [
-    'const fs=require("node:fs"),crypto=require("node:crypto"),cp=require("node:child_process"),path=require("node:path")',
-    `const root=${JSON.stringify(checkoutRoot)},prefix=${JSON.stringify(`${companyPath}/`)}`,
-    'const result=JSON.parse(cp.execFileSync("git",["-C",root,"lfs","ls-files","--json","HEAD"],{encoding:"utf8",maxBuffer:32*1024*1024}))',
-    'const files=result.files.filter(f=>f.name.startsWith(prefix))',
-    '(async()=>{for(const file of files){const target=path.join(root,file.name);const stat=fs.lstatSync(target);if(!stat.isFile()||stat.size!==file.size||file.oid_type!=="sha256")throw Error("LFS size/type mismatch: "+file.name);const hash=crypto.createHash("sha256");for await(const chunk of fs.createReadStream(target))hash.update(chunk);if(hash.digest("hex")!==file.oid)throw Error("LFS content mismatch: "+file.name)}process.stdout.write("__SYNARA_LFS_VERIFIED__="+files.length+"\\n")})().catch(error=>{console.error(error.message);process.exitCode=1})',
-  ].join(";\n");
-  return [
-    `${git} lfs version >/dev/null`,
-    `${git} lfs pull --include=${shellQuote(`${companyPath}/**`)} --exclude='' origin`,
-    `node -e ${shellQuote(verify)}`,
-  ].join(" && ");
+function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, credentialConfigPath?: string): string {
+  const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, ...(credentialConfigPath ? { credentialConfigPath } : {}) });
+  return `GIT_TERMINAL_PROMPT=0 ${credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(credentialConfigPath)} ` : ""}node -e ${shellQuote(script)}`;
 }
 
 function sparseCheckoutPattern(bindingPath: string): string {
@@ -53,24 +43,21 @@ export function makeRepositoryCheckoutPlan(input: {
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
-    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
+    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
     : `GIT_TERMINAL_PROMPT=0 ${git}`;
   const sparseGit = `${authenticatedGit} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true`;
   const sparsePath = path.posix.join(checkoutRoot, ".git", "info", "sparse-checkout");
   const command = [
     "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
     `mkdir -p ${shellQuote(checkoutRoot)}`,
-    `${git} init`,
-    `${git} remote add origin ${shellQuote(repositoryUrl)}`,
-    `${git} config core.sparseCheckout true`,
-    `${git} config core.sparseCheckoutCone true`,
+    `${input.credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ` : ""}GIT_TERMINAL_PROMPT=0 git clone --no-checkout --depth=1 --filter=blob:none --config core.sparseCheckout=true --config core.sparseCheckoutCone=true ${shellQuote(repositoryUrl)} ${shellQuote(checkoutRoot)}`,
     `mkdir -p ${shellQuote(path.posix.dirname(sparsePath))}`,
     `printf '%s' ${shellQuote(sparseCheckoutPattern(input.binding.path))} > ${shellQuote(sparsePath)}`,
-    `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
+    `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none origin ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags origin ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
     `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
     `${sparseGit} checkout --detach FETCH_HEAD`,
     `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
-    hydrateLfs(authenticatedGit, checkoutRoot, input.binding.path),
+    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.credentialConfigPath),
     `test -d ${shellQuote(cwd)}`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
   ].join(" && ");
@@ -97,7 +84,7 @@ export function makeRepositoryReconcilePlan(input: {
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
-    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
+    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
     : `GIT_TERMINAL_PROMPT=0 ${git}`;
   const persistedFiles = input.persistedFiles ?? [];
   if (persistedFiles.some((file) => !isProviderPersistencePathSafe(file.path))) {
@@ -124,7 +111,7 @@ export function makeRepositoryReconcilePlan(input: {
     stashSelected,
     `if ! ${authenticatedGit} merge --ff-only --no-edit FETCH_HEAD; then ${restoreSelectedOnFailure}; exit 1; fi`,
     `test "$(${git} rev-parse HEAD)" = ${shellQuote(input.commit)}`,
-    hydrateLfs(authenticatedGit, checkoutRoot, input.binding.path),
+    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.credentialConfigPath),
     discardSelectedOnSuccess,
     `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
@@ -153,7 +140,7 @@ export function makeRepositoryRefreshPlan(input: {
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
-    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
+    ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
     : `GIT_TERMINAL_PROMPT=0 ${git}`;
   const changed = `const cp=require("node:child_process");process.stdout.write(${JSON.stringify(CHANGED_FILES_MARKER)}+cp.execFileSync("git",["-C",${JSON.stringify(checkoutRoot)},"diff","--name-only","-z",process.argv[1],process.argv[2],"--",${JSON.stringify(input.binding.path)}]).toString("base64")+"\\n")`;
   return {
@@ -166,7 +153,7 @@ export function makeRepositoryRefreshPlan(input: {
       `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
       `${authenticatedGit} merge --ff-only --no-edit "$source_commit"`,
       `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
-      hydrateLfs(authenticatedGit, checkoutRoot, input.binding.path),
+      hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.credentialConfigPath),
       `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
       `printf '${COMMIT_MARKER}%s\\n' "$source_commit"`,
       `printf '${CHECKOUT_MODE_MARKER}partial\\n'`,
