@@ -523,6 +523,15 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         );
       });
 
+  const readWorkspaceFile: NonNullable<PiAdapterShape["readWorkspaceFile"]> = (threadId, filePath) =>
+    Effect.gen(function* () {
+      const binding = yield* requireRepositoryBinding(threadId, "workspace.file.read");
+      if (!provisioner.readWorkspaceFile) return yield* adapterError("workspace.file.read", "Workspace file preview is unavailable.");
+      return yield* provisioner.readWorkspaceFile(binding, filePath).pipe(
+        Effect.mapError((cause) => adapterError("workspace.file.read", cause.detail, cause)),
+      );
+    });
+
   const readOutboxCheckpoint: NonNullable<PiAdapterShape["readOutboxCheckpoint"]> =
     (threadId, candidatePath) =>
       provisioner.readOutboxCheckpoint(threadId, candidatePath).pipe(
@@ -754,6 +763,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     listPersistenceCandidates,
     readPersistenceCandidate,
     readOutboxCheckpoint,
+    readWorkspaceFile,
     steerTurn,
     interruptTurn,
     respondToRequest,

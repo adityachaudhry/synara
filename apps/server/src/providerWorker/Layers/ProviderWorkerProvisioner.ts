@@ -15,6 +15,7 @@ import {
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import { isWorkspaceFilePathAllowed, readProviderWorkspaceFile } from "../workspaceFiles.ts";
 import { makeWorkspaceCheckpointStore } from "../workspaceCheckpointStore.ts";
 import { publishOutboxArtifacts } from "../artifactPublisher.ts";
 import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
@@ -962,6 +963,33 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const readWorkspaceFile: NonNullable<ProviderWorkerProvisionerShape["readWorkspaceFile"]> = (binding, filePath) =>
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
+        if (!isWorkspaceFilePathAllowed(binding, filePath)) return yield* provisionError("workspace.file.read", "This path is outside the permitted thread workspace.", undefined);
+        if (!(yield* isWorkspaceUnavailable(binding))) {
+          const file = yield* readProviderWorkspaceFile({ workspaceRuntime, binding, filePath });
+          return { ...file, workspaceSource: "live" as const };
+        }
+        const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+        const currentRepository = binding.repositoryCheckout?.binding;
+        const savedRepository = saved?.binding.repositoryCheckout?.binding;
+        if (!saved || !currentRepository || !savedRepository ||
+            !(["origin", "owner", "repository", "ref", "path"] as const).every((key) => currentRepository[key] === savedRepository[key])) {
+          return yield* provisionError("workspace.file.read", "No matching thread workspace checkpoint is available.", undefined);
+        }
+        // A preview needs disk bytes only. It must not launch Pi or refresh the
+        // checkout, which could change the saved working copy being inspected.
+        return yield* Effect.acquireUseRelease(
+          workspaceRuntime.create({ threadId: binding.threadId!, lifecycleGeneration: randomUUID(),
+            checkpointName: saved.checkpoint.key, environment: {}, networkIsolation: "ISOLATED" }),
+          (workspace) => readProviderWorkspaceFile({ workspaceRuntime, binding: { ...saved.binding, workspace }, filePath })
+            .pipe(Effect.map((file) => ({ ...file, workspaceSource: "checkpoint" as const }))),
+          (workspace) => workspaceRuntime.destroy(workspace).pipe(Effect.catch((cause) =>
+            Effect.logError("workspace preview sandbox cleanup failed", { sandboxId: workspace.runtimeId, cause }))),
+        );
+      })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("workspace.file.read", "Could not read the thread workspace.", cause)));
+
     const readOutboxCheckpoint: ProviderWorkerProvisionerShape["readOutboxCheckpoint"] = (
       threadId,
       candidatePath,
@@ -1019,6 +1047,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       listPersistenceCandidates,
       readPersistenceCandidate,
       readOutboxCheckpoint,
+      readWorkspaceFile,
       stop,
     } satisfies ProviderWorkerProvisionerShape;
   });

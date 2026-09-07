@@ -78,3 +78,13 @@ export function providerPersistenceSelectionKey(
 ): string {
   return `${selection.source}\0${selection.path}`;
 }
+
+/** A read-only snapshot from a thread workspace, independent of Git publication. */
+export interface ProviderWorkspaceFile {
+  readonly workspaceSource?: "live" | "checkpoint";
+  readonly path: string;
+  readonly name: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  readonly bytes: Uint8Array;
+}

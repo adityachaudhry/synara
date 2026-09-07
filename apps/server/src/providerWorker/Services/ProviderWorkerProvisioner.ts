@@ -5,6 +5,7 @@ import type {
   ProviderPersistenceCandidateList,
   ProviderPersistenceCandidateSelection,
   ProviderPersistenceFile,
+  ProviderWorkspaceFile,
 } from "../../providerPersistence.ts";
 
 import type { ProviderWorkerProvisioningError } from "../Errors";
@@ -72,6 +73,11 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     selection: ProviderPersistenceCandidateSelection,
   ) => Effect.Effect<ProviderPersistenceFile, ProviderWorkerProvisioningError>;
+  readonly readWorkspaceFile?: (
+    binding: ProviderWorkerRuntimeBinding,
+    filePath: string,
+  ) => Effect.Effect<ProviderWorkspaceFile, ProviderWorkerProvisioningError>;
+
   readonly readOutboxCheckpoint: (
     threadId: string,
     path: string,

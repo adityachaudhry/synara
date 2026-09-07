@@ -47,6 +47,7 @@ import type {
   ProviderPersistenceCandidateList,
   ProviderPersistenceCandidateSelection,
   ProviderPersistenceFile,
+  ProviderWorkspaceFile,
 } from "../../providerPersistence.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
@@ -148,6 +149,12 @@ export interface ProviderAdapterShape<TError> {
     lifecycleGeneration: string,
     selection: ProviderPersistenceCandidateSelection,
   ) => Effect.Effect<ProviderPersistenceFile, TError>;
+
+  /** Read a file from the thread workspace or its saved disk without running the agent. */
+  readonly readWorkspaceFile?: (
+    threadId: ThreadId,
+    filePath: string,
+  ) => Effect.Effect<ProviderWorkspaceFile, TError>;
 
   /** Read the latest durable Outbox checkpoint by thread and safe relative path. */
   readonly readOutboxCheckpoint?: (
