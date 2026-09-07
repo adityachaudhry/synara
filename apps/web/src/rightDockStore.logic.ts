@@ -224,7 +224,12 @@ function findMatchingMultiInstancePane(
 ): RightDockPane | undefined {
   if (input.kind === "file") {
     const filePath = input.filePath ?? null;
-    return state.panes.find((pane) => pane.kind === "file" && pane.filePath === filePath);
+    return state.panes.find(
+      (pane) =>
+        pane.kind === "file" &&
+        pane.filePath === filePath &&
+        pane.threadId === (input.threadId ?? null),
+    );
   }
   return undefined;
 }

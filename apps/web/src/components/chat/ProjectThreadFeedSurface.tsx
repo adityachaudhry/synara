@@ -15,8 +15,13 @@ import {
 
 import { resolveHostMessageAuthorLabel, useSynaraHostSidebar } from "../../hostSidebar";
 import { useAppSettings, type TimestampFormat } from "../../appSettings";
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { basenameOfPath } from "../../file-icons";
 import { cn, randomUUID } from "../../lib/utils";
+import {
+  WorkspaceFileOpenerContext,
+  type WorkspaceFileOpener,
+} from "../../lib/workspaceFileOpener";
 import { readNativeApi } from "../../nativeApi";
 import {
   closePaneInState,
@@ -338,15 +343,30 @@ export function ProjectThreadFeedSurface({
     [openThread, syncServerShellSnapshot],
   );
 
-  const openFeedFile = useCallback((filePath: string) => {
+  const openFeedFile = useCallback((filePath: string, threadId: ThreadId | null = null) => {
     setDockState((state) =>
       openPaneInState(state, {
         paneId: randomUUID(),
         kind: "file",
         filePath,
+        threadId,
       }),
     );
   }, []);
+
+  const feedFileOpener = useMemo<WorkspaceFileOpener>(
+    () => ({
+      openFile: (filePath) => {
+        if (!hostSidebar?.renderFilePane) return false;
+        const threadId =
+          useComposerDraftStore.getState().draftThreadsByThreadId[draftThreadId]?.promotedTo ??
+          draftThreadId;
+        openFeedFile(filePath, threadId);
+        return true;
+      },
+    }),
+    [draftThreadId, hostSidebar, openFeedFile],
+  );
 
   const closeDockPane = useCallback((paneId: string) => {
     setDockState((state) => {
@@ -369,7 +389,7 @@ export function ProjectThreadFeedSurface({
       }
       if (pane.kind === "file" && pane.filePath && hostSidebar?.renderFilePane) {
         return hostSidebar.renderFilePane(pane.filePath, {
-          threadId: null,
+          threadId: pane.threadId,
           closePane: () => closeDockPane(pane.id),
         });
       }
@@ -431,24 +451,26 @@ export function ProjectThreadFeedSurface({
   return (
     <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
       <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
-        <DeferredChatView
-          threadId={draftThreadId}
-          paneScopeId={FEED_CHAT_PANE_SCOPE_ID}
-          deferMount={false}
-          surfaceMode="single"
-          isFocusedPane
-          panelState={FEED_CHAT_PANEL_STATE}
-          onToggleDiff={noopChatSurfaceAction}
-          onToggleRightDock={() => toggleDock(!dockState.open)}
-          onToggleBrowser={noopChatSurfaceAction}
-          onOpenBrowserUrl={noopChatSurfaceAction}
-          onOpenTurnDiff={noopChatSurfaceAction}
-          emptyLandingContent={feedContent}
-          emptyLandingProjectName={projectName}
-          onOpenEmptyLandingProject={openFeedExplorer}
-          onThreadStarted={openStartedThread}
-          hideNewThreadAction
-        />
+        <WorkspaceFileOpenerContext.Provider value={feedFileOpener}>
+          <DeferredChatView
+            threadId={draftThreadId}
+            paneScopeId={FEED_CHAT_PANE_SCOPE_ID}
+            deferMount={false}
+            surfaceMode="single"
+            isFocusedPane
+            panelState={FEED_CHAT_PANEL_STATE}
+            onToggleDiff={noopChatSurfaceAction}
+            onToggleRightDock={() => toggleDock(!dockState.open)}
+            onToggleBrowser={noopChatSurfaceAction}
+            onOpenBrowserUrl={noopChatSurfaceAction}
+            onOpenTurnDiff={noopChatSurfaceAction}
+            emptyLandingContent={feedContent}
+            emptyLandingProjectName={projectName}
+            onOpenEmptyLandingProject={openFeedExplorer}
+            onThreadStarted={openStartedThread}
+            hideNewThreadAction
+          />
+        </WorkspaceFileOpenerContext.Provider>
       </RouteInsetSurface>
       <RightDock
         state={dockState}
