@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule } from "effect";
@@ -42,7 +42,7 @@ const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-function workerLaunchCommand(homeDir: string) {
+function workerLaunchCommand(homeDir: string, artifactDigest: string) {
   const logsDir = `${homeDir}/state/logs`;
   const workerLogPath = `${logsDir}/worker.log`;
   const extractArtifact = [
@@ -50,8 +50,9 @@ function workerLaunchCommand(homeDir: string) {
     'const zlib=require("node:zlib")',
     `const source=${JSON.stringify(WORKER_ARTIFACT_ARCHIVE_PATH)}`,
     `const target=${JSON.stringify(WORKER_ARTIFACT_PATH)}`,
-    "fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
+    "if(fs.existsSync(source))fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
     "fs.rmSync(source,{force:true})",
+    `if(require("node:crypto").createHash("sha256").update(fs.readFileSync(target)).digest("hex")!==${JSON.stringify(artifactDigest)})throw Error("Worker artifact digest mismatch")`,
   ].join(";");
   return `mkdir -p ${shellQuote(logsDir)} && node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
 }
@@ -67,6 +68,7 @@ export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
   readonly controlUrl: string;
   readonly checkpointRoot?: string;
+  readonly templateCheckpointName?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly repositoryAuthorization?: string;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";
@@ -93,6 +95,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       ? makeOutboxCheckpointStore(options.checkpointRoot)
       : undefined;
     const artifactArchive = gzipSync(options.artifact, { level: 6 });
+    const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
 
@@ -342,18 +345,22 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                       ),
                 ),
               );
-        yield* Effect.logInfo("provider worker artifact upload starting", {
-          sandboxId: fence.sandboxId,
-          bytes: options.artifact.byteLength,
-          uploadBytes: artifactArchive.byteLength,
+        const artifactProbe = yield* workspaceRuntime.exec(input.workspace, {
+          command: `test -f ${shellQuote(WORKER_ARTIFACT_PATH)} && printf '%s  %s\\n' ${shellQuote(artifactDigest)} ${shellQuote(WORKER_ARTIFACT_PATH)} | sha256sum --check --status`,
+          timeoutSeconds: 15,
         });
-        yield* workspaceRuntime.writeFile(input.workspace, {
-          path: WORKER_ARTIFACT_ARCHIVE_PATH,
-          data: artifactArchive,
-          mode: 0o400,
-        });
-        yield* Effect.logInfo("provider worker artifact upload completed", {
+        if (artifactProbe.exitCode !== 0 || artifactProbe.timedOut) {
+          yield* workspaceRuntime.writeFile(input.workspace, {
+            path: WORKER_ARTIFACT_ARCHIVE_PATH,
+            data: artifactArchive,
+            mode: 0o400,
+          });
+        }
+        yield* Effect.logInfo("provider worker artifact ready", {
           sandboxId: fence.sandboxId,
+          sha256: artifactDigest,
+          reused: artifactProbe.exitCode === 0 && !artifactProbe.timedOut,
+          uploadBytes: artifactProbe.exitCode === 0 && !artifactProbe.timedOut ? 0 : artifactArchive.byteLength,
         });
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_CONFIG_PATH,
@@ -378,7 +385,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: workerLaunchCommand(input.homeDir),
+          command: workerLaunchCommand(input.homeDir, artifactDigest),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {
@@ -450,6 +457,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const workspace = yield* workspaceRuntime.create({
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
+          ...(options.templateCheckpointName ? { checkpointName: options.templateCheckpointName } : {}),
           environment: {
             ...(options.environment ?? {}),
           },
@@ -525,6 +533,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const replacementWorkspace = yield* workspaceRuntime.create({
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
+          ...(options.templateCheckpointName ? { checkpointName: options.templateCheckpointName } : {}),
           environment: {
             ...(options.environment ?? {}),
           },
@@ -964,6 +973,7 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
       return yield* makeProviderWorkerProvisioner({
         artifact,
         controlUrl: options.controlUrl,
+        ...(options.templateCheckpointName ? { templateCheckpointName: options.templateCheckpointName } : {}),
         checkpointRoot:
           options.checkpointRoot ?? path.join(serverConfig.baseDir, "provider-outbox-checkpoints"),
         ...(options.environment === undefined ? {} : { environment: options.environment }),

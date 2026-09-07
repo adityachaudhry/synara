@@ -31,6 +31,7 @@ export type DistributedPiRuntimeConfig =
       readonly railway: RailwaySandboxRuntimeConfig;
       readonly docker?: DockerWorkspaceConfig;
       readonly controlUrl: string;
+      readonly templateCheckpointName?: string;
       readonly networkIsolation: "ISOLATED" | "PRIVATE";
       readonly workerEnvironment: Readonly<Record<string, string>>;
       readonly repositoryAuthorization?: string;
@@ -116,6 +117,9 @@ export function resolveDistributedPiRuntimeConfig(input: {
     railway,
     ...(docker ? { docker } : {}),
     controlUrl: controlUrl.toString(),
+    ...(environment.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT?.trim()
+      ? { templateCheckpointName: environment.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT.trim() }
+      : {}),
     networkIsolation: networkIsolationInput,
     workerEnvironment,
     ...(environment.SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION?.trim()

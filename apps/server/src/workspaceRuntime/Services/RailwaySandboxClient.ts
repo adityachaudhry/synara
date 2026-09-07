@@ -18,6 +18,7 @@ export interface RailwaySandboxRecord {
 
 export interface RailwaySandboxCreateInput {
   readonly operationId: string;
+  readonly checkpointName?: string;
   readonly networkIsolation: "PRIVATE" | "ISOLATED";
   readonly idleTimeoutMinutes: number;
   readonly region?: string;
@@ -68,6 +69,11 @@ export interface RailwaySandboxClientShape {
   readonly create: (
     input: RailwaySandboxCreateInput,
   ) => Effect.Effect<RailwaySandboxRecord, RailwaySandboxClientError>;
+  readonly checkpoint?: (
+    runtimeId: string,
+    name: string,
+  ) => Effect.Effect<{ readonly id: string; readonly key: string }, RailwaySandboxClientFailure>;
+  readonly deleteCheckpoint?: (id: string) => Effect.Effect<void, RailwaySandboxClientFailure>;
   readonly connect: (
     runtimeId: string,
   ) => Effect.Effect<RailwaySandboxRecord, RailwaySandboxClientFailure>;

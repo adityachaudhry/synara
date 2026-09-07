@@ -363,6 +363,7 @@ export function makeWorkspaceRuntimeLive(
                     client
                       .create({
                         operationId,
+                        ...(input.checkpointName ? { checkpointName: input.checkpointName } : {}),
                         networkIsolation: input.networkIsolation ?? "ISOLATED",
                         idleTimeoutMinutes: enabled.idleTimeoutMinutes,
                         ...(enabled.region === undefined ? {} : { region: enabled.region }),
@@ -612,6 +613,15 @@ export function makeWorkspaceRuntimeLive(
 
       return {
         create,
+        ...(client.checkpoint ? {
+          checkpoint: (binding: WorkspaceRuntimeBinding, name: string) => client
+            .checkpoint!(binding.runtimeId, name)
+            .pipe(Effect.mapError(toRuntimeError("checkpoint", binding.runtimeId))),
+        } : {}),
+        ...(client.deleteCheckpoint ? {
+          deleteCheckpoint: (id: string) => client.deleteCheckpoint!(id)
+            .pipe(Effect.mapError(toRuntimeError("checkpoint.delete"))),
+        } : {}),
         connect,
         adopt,
         exec,

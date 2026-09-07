@@ -290,6 +290,9 @@ export function makeServerApplicationLayers() {
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled
     ? makeProviderWorkerProvisionerFromArtifactLive({
         controlUrl: distributedPiConfig.controlUrl,
+        ...(distributedPiConfig.templateCheckpointName
+          ? { templateCheckpointName: distributedPiConfig.templateCheckpointName }
+          : {}),
         networkIsolation: distributedPiConfig.networkIsolation,
         environment: distributedPiConfig.workerEnvironment,
         ...(distributedPiConfig.repositoryAuthorization === undefined

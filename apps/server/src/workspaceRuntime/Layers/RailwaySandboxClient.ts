@@ -24,6 +24,7 @@ import {
 import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 
 export interface RailwaySdkCreateInput {
+  readonly checkpointName?: string;
   readonly token: string;
   readonly authType: "bearer" | "project-token";
   readonly environmentId: string;
@@ -67,6 +68,7 @@ export interface RailwaySdkSandbox {
   readonly status: SandboxStatus;
   readonly region: string;
   readonly refresh: () => PromiseLike<RailwaySdkSandbox>;
+  readonly checkpoint?: Sandbox["checkpoint"];
   readonly exec: (
     target: string | { readonly sessionName: string },
     input?: RailwaySdkExecInput,
@@ -83,6 +85,7 @@ export interface RailwaySdkFacade {
   ) => PromiseLike<RailwaySdkSandbox>;
   readonly list: (input: RailwaySdkConnectionInput) => PromiseLike<ReadonlyArray<SandboxInfo>>;
   readonly isNotFoundError: (cause: unknown) => boolean;
+  readonly deleteCheckpoint?: typeof Sandbox.deleteCheckpoint;
 }
 
 export interface RailwaySandboxClientOptions {
@@ -102,7 +105,9 @@ export const WORKSPACE_CREATE_OPERATION_ENV_KEY =
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 const liveRailwaySdk: RailwaySdkFacade = {
-  create: (input) => Sandbox.create(input),
+  create: ({ checkpointName, ...input }) =>
+    checkpointName ? Sandbox.create(checkpointName, input) : Sandbox.create(input),
+  deleteCheckpoint: (id, options) => Sandbox.deleteCheckpoint(id, options),
   connect: (runtimeId, input) => Sandbox.connect(runtimeId, input),
   list: (input) => Sandbox.list(input),
   isNotFoundError: (cause) => cause instanceof SandboxNotFoundError,
@@ -201,6 +206,7 @@ export function makeRailwaySandboxClient(
       try: async () => {
         const sandbox = await sdk.create({
           ...connectionInput,
+          ...(input.checkpointName ? { checkpointName: input.checkpointName } : {}),
           networkIsolation: input.networkIsolation,
           idleTimeoutMinutes: input.idleTimeoutMinutes,
           ...(input.region === undefined ? {} : { region: input.region }),
@@ -214,6 +220,26 @@ export function makeRailwaySandboxClient(
       },
       catch: (cause) =>
         clientFailure(sdk, "create", undefined, cause) as RailwaySandboxClientError,
+    });
+
+  const checkpoint: NonNullable<RailwaySandboxClientShape["checkpoint"]> = (runtimeId, name) =>
+    loadFresh(runtimeId).pipe(
+      Effect.flatMap((sandbox) => Effect.tryPromise({
+        try: () => {
+          if (!sandbox.checkpoint) throw new Error("Railway disk checkpoints are unavailable.");
+          return sandbox.checkpoint(name);
+        },
+        catch: (cause) => clientFailure(sdk, "checkpoint", runtimeId, cause),
+      })),
+    );
+
+  const deleteCheckpoint: NonNullable<RailwaySandboxClientShape["deleteCheckpoint"]> = (id) =>
+    Effect.tryPromise({
+      try: async () => {
+        if (!sdk.deleteCheckpoint) throw new Error("Railway checkpoint deletion is unavailable.");
+        await sdk.deleteCheckpoint(id, connectionInput);
+      },
+      catch: (cause) => clientFailure(sdk, "checkpoint.delete", undefined, cause),
     });
 
   const connect: RailwaySandboxClientShape["connect"] = (runtimeId) =>
@@ -427,6 +453,8 @@ export function makeRailwaySandboxClient(
 
   return {
     create,
+    checkpoint,
+    deleteCheckpoint,
     connect,
     exec,
     writeFile,
