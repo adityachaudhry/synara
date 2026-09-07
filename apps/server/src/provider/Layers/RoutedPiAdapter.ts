@@ -775,7 +775,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                 Effect.catch((cause) => Effect.logWarning("provider native session checkpoint deferred", { threadId: event.threadId, cause })),
               )
             : Effect.void;
-          return checkpoint.pipe(Effect.andThen(provisioner.checkpointOutbox(binding)),
+          return checkpoint.pipe(Effect.andThen(provisioner.checkpointOutbox(binding, event.turnId ?? undefined)),
             Effect.asVoid,
             Effect.catch((cause) =>
               Effect.logWarning("provider Outbox terminal checkpoint deferred", {

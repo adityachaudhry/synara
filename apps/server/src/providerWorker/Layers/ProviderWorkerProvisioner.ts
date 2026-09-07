@@ -16,6 +16,7 @@ import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBoot
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import { makeWorkspaceCheckpointStore } from "../workspaceCheckpointStore.ts";
+import { publishOutboxArtifacts } from "../artifactPublisher.ts";
 import {
   listProviderPersistenceCandidates,
   readProviderPersistenceCandidate,
@@ -188,7 +189,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       };
     });
 
-    const checkpointOutboxUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
+    const checkpointOutboxUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding, turnId?: string) {
       const liveExit = yield* Effect.exit(
         listProviderPersistenceCandidates({ workspaceRuntime, binding }),
       );
@@ -196,6 +197,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const stored = yield* storedCandidates(binding);
         if (stored) return stored;
         return yield* Effect.failCause(liveExit.cause);
+      }
+      const published = yield* Effect.exit(publishOutboxArtifacts({ binding, entries: liveExit.value.entries, broker, ...(turnId ? { turnId } : {}) }));
+      if (Exit.isSuccess(published) && published.value !== undefined) {
+        return { ...liveExit.value, entries: published.value };
+      }
+      if (Exit.isFailure(published)) {
+        yield* Effect.logWarning("direct artifact upload deferred; preserving Outbox locally", { threadId: binding.threadId });
       }
       if (!checkpointStore || !binding.threadId) return liveExit.value;
       const outbox = yield* Effect.forEach(
@@ -228,10 +236,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       };
     });
 
-    const checkpointOutbox: ProviderWorkerProvisionerShape["checkpointOutbox"] = (binding) =>
+    const checkpointOutbox: ProviderWorkerProvisionerShape["checkpointOutbox"] = (binding, turnId) =>
       binding.threadId
-        ? checkpointLock.withLock(binding.threadId, checkpointOutboxUnlocked(binding))
-        : checkpointOutboxUnlocked(binding);
+        ? checkpointLock.withLock(binding.threadId, checkpointOutboxUnlocked(binding, turnId))
+        : checkpointOutboxUnlocked(binding, turnId);
 
     const restoreOutbox = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
       if (!checkpointStore || !binding.threadId) return;

@@ -41,6 +41,7 @@ export interface ProviderWorkerProvisionerShape {
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
   readonly checkpointOutbox: (
     binding: ProviderWorkerRuntimeBinding,
+    turnId?: string,
   ) => Effect.Effect<ProviderPersistenceCandidateList, ProviderWorkerProvisioningError>;
   readonly checkpointWorkspace?: (
     binding: ProviderWorkerRuntimeBinding,
