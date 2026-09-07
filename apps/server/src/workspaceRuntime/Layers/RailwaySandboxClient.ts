@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   Sandbox,
@@ -105,8 +106,21 @@ export const WORKSPACE_CREATE_OPERATION_ENV_KEY =
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 const liveRailwaySdk: RailwaySdkFacade = {
-  create: ({ checkpointName, ...input }) =>
-    checkpointName ? Sandbox.create(checkpointName, input) : Sandbox.create(input),
+  create: async ({ checkpointName, ...input }) => {
+    const sandbox = await (checkpointName ? Sandbox.create(checkpointName, input) : Sandbox.create(input));
+    // Railway can report RUNNING before the exec service leaves CREATING.
+    // Retry only this harmless readiness probe, never a caller's command.
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        await sandbox.exec(":", { timeoutSec: 5 });
+        return sandbox;
+      } catch (error) {
+        if (Date.now() >= deadline || !String(error).includes("Sandbox is not running (status: CREATING)")) throw error;
+        await delay(250);
+      }
+    }
+  },
   deleteCheckpoint: (id, options) => Sandbox.deleteCheckpoint(id, options),
   connect: (runtimeId, input) => Sandbox.connect(runtimeId, input),
   list: (input) => Sandbox.list(input),

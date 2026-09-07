@@ -137,10 +137,7 @@ export function resolveDockFileOpenTarget(
  * Pass a null opener to force the external editor (e.g. meta/ctrl-click).
  */
 export function openWorkspaceFileReference(opener: WorkspaceFileOpener | null, path: string): void {
-  console.debug("[synara file preview] activate", { hasOpener: opener !== null, path });
-  const handled = opener?.openFile(path) ?? false;
-  console.debug("[synara file preview] handled", { hasOpener: opener !== null, handled, path });
-  if (handled) {
+  if (opener?.openFile(path)) {
     return;
   }
   const api = readNativeApi();
