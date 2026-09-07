@@ -388,7 +388,7 @@ export function SingleChatSurface(props: {
 
   const handleOpenHostFile = useCallback((filePath: string, revision?: string) => {
     requestImmediateDockHydration("file");
-    openPane(props.threadId, { kind: "file", filePath, fileSource: "host", fileRevision: revision });
+    openPane(props.threadId, { kind: "file", filePath, fileSource: "host", fileRevision: revision ?? null });
   }, [requestImmediateDockHydration, openPane, props.threadId]);
 
   const handleOpenWorkspaceSearchDirectory = useCallback(
@@ -1034,7 +1034,7 @@ export function SingleChatSurface(props: {
               {hostSidebar.renderFilePane(pane.filePath, {
                 threadId: props.threadId,
                 fileSource: pane.fileSource ?? "workspace",
-                fileRevision: pane.fileRevision,
+                fileRevision: pane.fileRevision ?? null,
                 closePane: () => handleCloseDockPane(pane.id),
               })}
             </div>

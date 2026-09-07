@@ -350,7 +350,7 @@ export function ProjectThreadFeedSurface({
         kind: "file",
         filePath,
         fileSource,
-        fileRevision,
+        fileRevision: fileRevision ?? null,
         threadId,
       }),
     );
@@ -397,7 +397,7 @@ export function ProjectThreadFeedSurface({
         return hostSidebar.renderFilePane(pane.filePath, {
           threadId: pane.threadId,
           fileSource: pane.fileSource ?? "workspace",
-          fileRevision: pane.fileRevision,
+          fileRevision: pane.fileRevision ?? null,
           closePane: () => closeDockPane(pane.id),
         });
       }
