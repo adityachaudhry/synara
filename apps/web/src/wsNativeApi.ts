@@ -442,20 +442,29 @@ export function createWsNativeApi(): NativeApi {
     replayCurrent: true,
   });
 
-  transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
-    welcomeListeners.emit(message.data);
-  });
-  transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
-    serverConfigUpdatedListeners.emit(message.data);
-  });
+  // External project sessions cannot subscribe to global server resources.
+  if (projectId === undefined) {
+    transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
+      welcomeListeners.emit(message.data);
+    });
+    transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
+      serverConfigUpdatedListeners.emit(message.data);
+    });
+    transport.subscribe(WS_CHANNELS.serverMaintenanceUpdated, (message) => {
+      serverMaintenanceUpdatedListeners.emit(message.data);
+    });
+    transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
+      serverSettingsUpdatedListeners.emit(message.data);
+    });
+    transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
+      automationEventListeners.emit(message.data);
+    });
+    transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
+      deviceEventListeners.emit(message.data);
+    });
+  }
   transport.subscribe(WS_CHANNELS.serverProviderStatusesUpdated, (message) => {
     serverProviderStatusesUpdatedListeners.emit(message.data);
-  });
-  transport.subscribe(WS_CHANNELS.serverMaintenanceUpdated, (message) => {
-    serverMaintenanceUpdatedListeners.emit(message.data);
-  });
-  transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
-    serverSettingsUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
@@ -471,12 +480,6 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(WS_CHANNELS.projectDevServerEvent, (message) => {
     projectDevServerEventListeners.emit(message.data);
-  });
-  transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
-    automationEventListeners.emit(message.data);
-  });
-  transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
-    deviceEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);

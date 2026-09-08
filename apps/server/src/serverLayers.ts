@@ -57,6 +57,7 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { artifactApiClient } from "./providerWorker/artifactPublisher.ts";
 import { ProviderWorkerBootstrapAuthorityLive } from "./providerWorker/Layers/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBrokerLive } from "./providerWorker/Layers/ProviderWorkerBroker";
 import {
@@ -281,15 +282,26 @@ export function makeServerApplicationLayers() {
     ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
   );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
+  if (distributedPiConfig.enabled && distributedPiConfig.railway.enabled &&
+      distributedPiConfig.railway.maxActiveSandboxes < 2 && artifactApiClient() !== undefined) {
+    throw new Error("Workspace archives require SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES to be at least 2 so a temporary archive reader can run while a worker is retiring.");
+  }
   const sandboxCapacity =
     distributedPiConfig.enabled && distributedPiConfig.railway.enabled
       ? new SandboxCapacity(distributedPiConfig.railway.maxActiveSandboxes, {
           reconcileBeforeAdmission: true,
+          reserveForMaintenance: 2,
         })
       : undefined;
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled
     ? makeProviderWorkerProvisionerFromArtifactLive({
         controlUrl: distributedPiConfig.controlUrl,
+        ...(distributedPiConfig.templateCheckpointName
+          ? { templateCheckpointName: distributedPiConfig.templateCheckpointName }
+          : {}),
+        ...(distributedPiConfig.repositoryOriginOverride
+          ? { repositoryOriginOverride: distributedPiConfig.repositoryOriginOverride }
+          : {}),
         networkIsolation: distributedPiConfig.networkIsolation,
         environment: distributedPiConfig.workerEnvironment,
         ...(distributedPiConfig.repositoryAuthorization === undefined

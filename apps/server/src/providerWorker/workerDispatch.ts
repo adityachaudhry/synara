@@ -3,6 +3,7 @@ import { Effect } from "effect";
 
 import { ProviderAdapterRequestError } from "../provider/Errors";
 import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter";
+import { uploadOutboxArtifacts } from "./artifactUpload.ts";
 
 const unsupported = (method: ProviderWorkerRequest["method"]) =>
   Effect.fail(
@@ -18,6 +19,11 @@ export function dispatchProviderWorkerRequest<TError>(
   request: ProviderWorkerRequest,
 ): Effect.Effect<unknown, TError | ProviderAdapterRequestError> {
   switch (request.method) {
+    case "artifacts.upload":
+      return Effect.tryPromise({
+        try: () => uploadOutboxArtifacts(request.params.files),
+        catch: () => new ProviderAdapterRequestError({ provider: "pi", method: "artifacts.upload", detail: "Direct artifact upload failed or its file changed." }),
+      });
     case "session.start":
       return adapter.startSession(request.params);
     case "turn.send":

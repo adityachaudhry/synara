@@ -5,6 +5,7 @@ import type {
   ProviderPersistenceCandidateList,
   ProviderPersistenceCandidateSelection,
   ProviderPersistenceFile,
+  ProviderWorkspaceFile,
 } from "../../providerPersistence.ts";
 
 import type { ProviderWorkerProvisioningError } from "../Errors";
@@ -25,6 +26,8 @@ export interface ProviderWorkerAttachmentStageInput {
 }
 
 export interface ProviderWorkerProvisionerShape {
+  /** A positive result means the runtime is conclusively gone; connection errors stay recoverable. */
+  readonly isWorkspaceUnavailable?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<boolean>;
   readonly start: (
     input: ProviderWorkerProvisionInput,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
@@ -41,7 +44,19 @@ export interface ProviderWorkerProvisionerShape {
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
   readonly checkpointOutbox: (
     binding: ProviderWorkerRuntimeBinding,
+    turnId?: string,
   ) => Effect.Effect<ProviderPersistenceCandidateList, ProviderWorkerProvisioningError>;
+  readonly checkpointWorkspace?: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly refreshRepository?: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<{
+    readonly binding: ProviderWorkerRuntimeBinding;
+    readonly previousCommit: string;
+    readonly commit: string;
+    readonly changedFiles: ReadonlyArray<string>;
+  }, ProviderWorkerProvisioningError>;
   readonly markOutboxPromoted: (
     binding: ProviderWorkerRuntimeBinding,
     selections: ReadonlyArray<ProviderPersistenceCandidateSelection>,
@@ -58,6 +73,11 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     selection: ProviderPersistenceCandidateSelection,
   ) => Effect.Effect<ProviderPersistenceFile, ProviderWorkerProvisioningError>;
+  readonly readWorkspaceFile?: (
+    binding: ProviderWorkerRuntimeBinding,
+    filePath: string,
+  ) => Effect.Effect<ProviderWorkspaceFile, ProviderWorkerProvisioningError>;
+
   readonly readOutboxCheckpoint: (
     threadId: string,
     path: string,

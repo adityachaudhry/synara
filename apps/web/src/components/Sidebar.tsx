@@ -1374,6 +1374,7 @@ export default function Sidebar() {
   const automationListQuery = useQuery({
     queryKey: automationQueryKey,
     queryFn: () => ensureNativeApi().automation.list({}),
+    enabled: hostProject === undefined,
   });
   useEffect(() => {
     const api = ensureNativeApi();

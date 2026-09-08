@@ -10,6 +10,7 @@ import type {
 } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import { readSynaraRuntimeConfig } from "~/synaraRuntimeConfig";
 
 const EMPTY_SKILLS_RESULT: ProviderListSkillsResult = {
   skills: [],
@@ -205,16 +206,23 @@ export function providerModelsQueryOptions(input: {
   cwd?: string | null;
   enabled?: boolean;
 }) {
+  const projectId = readSynaraRuntimeConfig().project?.projectId;
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.models(
-      input.provider,
-      input.binaryPath ?? null,
-      input.apiEndpoint ?? null,
-      input.agentDir ?? null,
-      input.cwd ?? null,
-    ),
+    queryKey: [
+      ...providerDiscoveryQueryKeys.models(
+        input.provider,
+        projectId ? null : (input.binaryPath ?? null),
+        projectId ? null : (input.apiEndpoint ?? null),
+        projectId ? null : (input.agentDir ?? null),
+        projectId ? null : (input.cwd ?? null),
+      ),
+      ...(projectId ? [projectId] : []),
+    ],
     queryFn: async (): Promise<ProviderListModelsResult> => {
+      if (projectId && input.provider !== "pi") return EMPTY_MODELS_RESULT;
       const api = ensureNativeApi();
+      // Project sessions allow the server-owned Pi catalog, without local paths.
+      if (projectId) return api.provider.listModels({ provider: "pi" });
       return api.provider.listModels({
         provider: input.provider,
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
@@ -223,7 +231,7 @@ export function providerModelsQueryOptions(input: {
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
-    enabled: input.enabled ?? true,
+    enabled: (input.enabled ?? true) && (!projectId || input.provider === "pi"),
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
@@ -243,6 +251,7 @@ export function providerAgentsQueryOptions(input: {
   cwd?: string | null;
   enabled?: boolean;
 }) {
+  const projectScoped = readSynaraRuntimeConfig().project !== undefined;
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.agents(
       input.provider,
@@ -250,6 +259,7 @@ export function providerAgentsQueryOptions(input: {
       input.cwd ?? null,
     ),
     queryFn: async () => {
+      if (projectScoped) return EMPTY_AGENTS_RESULT;
       const api = ensureNativeApi();
       return api.provider.listAgents({
         provider: input.provider,
@@ -257,7 +267,7 @@ export function providerAgentsQueryOptions(input: {
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
-    enabled: input.enabled ?? true,
+    enabled: (input.enabled ?? true) && !projectScoped,
     staleTime: 60_000,
     placeholderData: (previous) => previous ?? EMPTY_AGENTS_RESULT,
   });

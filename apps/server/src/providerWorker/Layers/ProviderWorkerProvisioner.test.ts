@@ -117,7 +117,7 @@ describe("ProviderWorkerProvisioner", () => {
         SYNARA_RAILWAY_SANDBOX_TOKEN: "railway-secret",
         SYNARA_RAILWAY_SANDBOX_ENVIRONMENT_ID: "environment",
         SYNARA_PROVIDER_WORKER_CONTROL_URL:
-          "http://synara.railway.internal:3000/internal/provider-worker",
+          "https://synara.example.com/internal/provider-worker",
         SYNARA_RELEASE: "0.7.3",
         SYNARA_COMMIT: "abc123",
         SYNARA_EXTERNAL_AUTH_SECRET: "must-not-forward",
@@ -157,6 +157,9 @@ describe("ProviderWorkerProvisioner", () => {
             timedOut: false,
             truncated: false,
           };
+        }
+        if (input.command.includes("sha256sum --check")) {
+          return { exitCode: 1, stdout: "", stderr: "", timedOut: false, truncated: false };
         }
         harness.calls.push("checkout");
         return {
@@ -504,9 +507,9 @@ describe("ProviderWorkerProvisioner", () => {
       onCapacityAdmitted,
     });
     expect(harness.calls).toEqual([
+      "connect-old",
       "retire",
       "revoke",
-      "connect-old",
       "stop-process",
       "destroy",
       "create-replacement",

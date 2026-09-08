@@ -39,6 +39,7 @@ function abortError() {
 
 export class SandboxCapacity {
   readonly #maxActive: number;
+  readonly #maintenanceSlots: number;
   readonly #active = new Map<string, SandboxCapacityLease>();
   readonly #queued: CapacityWaiter[] = [];
   readonly #queuedByKey = new Map<string, CapacityWaiter>();
@@ -47,12 +48,13 @@ export class SandboxCapacity {
 
   constructor(
     maxActive: number,
-    options: { readonly reconcileBeforeAdmission?: boolean } = {},
+    options: { readonly reconcileBeforeAdmission?: boolean; readonly reserveForMaintenance?: number } = {},
   ) {
     if (!Number.isInteger(maxActive) || maxActive < 1) {
       throw new Error("Sandbox capacity must be a positive integer.");
     }
     this.#maxActive = maxActive;
+    this.#maintenanceSlots = Math.min(maxActive - 1, Math.max(0, options.reserveForMaintenance ?? 0));
     this.#reconciled = options.reconcileBeforeAdmission !== true;
   }
 
@@ -62,7 +64,7 @@ export class SandboxCapacity {
     if (active) return Promise.resolve(active);
     const queued = this.#queuedByKey.get(input.key);
     if (queued) return this.#addCaller(queued, input.signal);
-    if (this.#reconciled && this.#active.size < this.#maxActive && this.#queued.length === 0) {
+    if (this.#reconciled && this.#canAdmit(input.key) && !this.#queued.some((entry) => this.#canAdmit(entry.key))) {
       const lease = this.#makeLease(input);
       this.#active.set(input.key, lease);
       this.#publish();
@@ -182,9 +184,20 @@ export class SandboxCapacity {
     waiter.callers.clear();
   }
 
+  #canAdmit(key: string): boolean {
+    if (this.#active.size >= this.#maxActive) return false;
+    if (this.#maintenanceSlots === 0) return true;
+    const maintenance = Array.from(this.#active.keys()).filter((key) => key.startsWith("maintenance:")).length;
+    return key.startsWith("maintenance:")
+      ? maintenance < this.#maintenanceSlots
+      : this.#active.size - maintenance < this.#maxActive - this.#maintenanceSlots;
+  }
+
   #drain(): void {
     while (this.#reconciled && this.#active.size < this.#maxActive && this.#queued.length > 0) {
-      const waiter = this.#queued.shift()!;
+      const index = this.#queued.findIndex((entry) => this.#canAdmit(entry.key));
+      if (index < 0) break;
+      const waiter = this.#queued.splice(index, 1)[0]!;
       const lease = this.#makeLease(waiter);
       this.#active.set(lease.key, lease);
       this.#admit(waiter, lease);

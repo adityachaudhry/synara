@@ -17,6 +17,7 @@ on:
       - 'docker-entrypoint.sh'
       - 'railway.json'
       - '.github/workflows/deploy-glasswing-dev.yml'
+      - '.github/actions/prepare-worker/**'
   workflow_dispatch:
 
 concurrency:
@@ -28,7 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm install --global @railway/cli
+      - uses: ./.github/actions/prepare-worker
+        with:
+          service: synara-gitea-dev
+          environment: dev
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       - run: railway up --service synara-gitea-dev --project 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0 --environment dev --ci
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

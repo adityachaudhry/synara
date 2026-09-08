@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule, Semaphore } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import { ServerConfig } from "../../config.ts";
@@ -15,6 +15,11 @@ import {
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
+import { isWorkspaceFilePathAllowed, readProviderWorkspaceFile } from "../workspaceFiles.ts";
+import { makeWorkspaceCheckpointStore, workspaceCheckpointRevision, type ProviderWorkspaceCheckpoint } from "../workspaceCheckpointStore.ts";
+import { archiveWorkspaceCheckpoint, restoreWorkspaceArchive } from "../workspaceArchive.ts";
+import { publishOutboxArtifacts, artifactApiClient } from "../artifactPublisher.ts";
+import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
 import {
   listProviderPersistenceCandidates,
   readProviderPersistenceCandidate,
@@ -23,14 +28,16 @@ import {
   makeOutboxCheckpointStore,
   listUnpromotedOutboxCandidates,
 } from "../outboxCheckpointStore.ts";
-import { PROVIDER_PERSISTENCE_OUTBOX_ROOT } from "../../providerPersistence.ts";
+import { PROVIDER_PERSISTENCE_OUTBOX_ROOT, type ProviderWorkspaceFile } from "../../providerPersistence.ts";
 import { attachmentRelativePath } from "../../attachmentStore";
 import {
   makeRepositoryCredentialConfig,
   makeRepositoryCheckoutPlan,
   makeRepositoryReconcilePlan,
+  makeRepositoryRefreshPlan,
   parseRepositoryCheckoutResult,
   parseRepositoryReconcileResult,
+  parseRepositoryRefreshResult,
   REPOSITORY_CREDENTIAL_CONFIG_PATH,
 } from "../repositoryCheckout";
 
@@ -42,7 +49,7 @@ const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-function workerLaunchCommand(homeDir: string) {
+function workerLaunchCommand(homeDir: string, artifactDigest: string) {
   const logsDir = `${homeDir}/state/logs`;
   const workerLogPath = `${logsDir}/worker.log`;
   const extractArtifact = [
@@ -50,8 +57,9 @@ function workerLaunchCommand(homeDir: string) {
     'const zlib=require("node:zlib")',
     `const source=${JSON.stringify(WORKER_ARTIFACT_ARCHIVE_PATH)}`,
     `const target=${JSON.stringify(WORKER_ARTIFACT_PATH)}`,
-    "fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
+    "if(fs.existsSync(source))fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
     "fs.rmSync(source,{force:true})",
+    `if(require("node:crypto").createHash("sha256").update(fs.readFileSync(target)).digest("hex")!==${JSON.stringify(artifactDigest)})throw Error("Worker artifact digest mismatch")`,
   ].join(";");
   return `mkdir -p ${shellQuote(logsDir)} && node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
 }
@@ -67,6 +75,8 @@ export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
   readonly controlUrl: string;
   readonly checkpointRoot?: string;
+  readonly templateCheckpointName?: string;
+  readonly repositoryOriginOverride?: { readonly sourceOrigin: string; readonly origin: string };
   readonly environment?: Readonly<Record<string, string>>;
   readonly repositoryAuthorization?: string;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";
@@ -89,12 +99,39 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const authority = yield* ProviderWorkerBootstrapAuthority;
     const lifecycleLock = makeKeyedLock<string>();
     const checkpointLock = makeKeyedLock<string>();
+    // Immutable checkpoint files are shared by preview, download and conversion.
+    // Bound both bytes and entries; live working copies always bypass this cache.
+    const checkpointFiles = new Map<string, ProviderWorkspaceFile>();
+    let checkpointFileBytes = 0;
     const checkpointStore = options.checkpointRoot
       ? makeOutboxCheckpointStore(options.checkpointRoot)
       : undefined;
+    const workspaceCheckpointStore = options.checkpointRoot && workspaceRuntime.checkpoint
+      ? makeWorkspaceCheckpointStore(path.join(options.checkpointRoot, "workspaces"))
+      : undefined;
+    const archiveEnabled = artifactApiClient() !== undefined;
+    const maxCachedDisks = Number(process.env.SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS ?? "64");
+    if (!Number.isInteger(maxCachedDisks) || maxCachedDisks < 1 || maxCachedDisks > 64) {
+      throw new Error("SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS must be an integer from 1 through 64.");
+    }
+    const checkpointPool = makeKeyedLock<string>();
+    const captureSlots = yield* Semaphore.make(4);
+    const diskReaders = new Map<string, number>();
+    const cachedDisks = new Map<string, ProviderWorkspaceCheckpoint>();
+    const activeCaptures = new Set<string>();
+    let diskIndexLoaded = false;
     const artifactArchive = gzipSync(options.artifact, { level: 6 });
+    const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
+    const repositoryOrigin = (binding: { readonly origin: string }) =>
+      options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
+        ? options.repositoryOriginOverride.origin : binding.origin;
+    const isWorkspaceUnavailable: NonNullable<ProviderWorkerProvisionerShape["isWorkspaceUnavailable"]> = (binding) =>
+      workspaceRuntime.connect(binding.workspace).pipe(
+        Effect.as(false),
+        Effect.catch((cause) => Effect.succeed(cause.unavailable === true)),
+      );
 
     const markRetired = (threadId: string, lifecycleGeneration: string) => {
       const retired = retiredGenerations.get(threadId) ?? new Set<string>();
@@ -108,6 +145,152 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         `Provider worker generation '${lifecycleGeneration}' for thread '${threadId}' is retired.`,
         undefined,
       );
+
+    const readWorkspaceCheckpoint = (threadId: string) => workspaceCheckpointStore
+      ? Effect.tryPromise({
+          try: () => workspaceCheckpointStore.read(threadId),
+          catch: (cause) => provisionError("workspace.checkpoint.read", "Could not read the saved worker disk checkpoint.", cause),
+        })
+      : Effect.succeed(undefined);
+
+    const indexDisks = Effect.gen(function* () {
+      if (diskIndexLoaded || !workspaceCheckpointStore || !archiveEnabled) return;
+      const entries = yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.list(), catch: (cause) => cause });
+      for (const entry of entries) {
+        if (entry.saved.checkpoint || entry.saved.retiredCheckpoints?.length) cachedDisks.set(entry.threadId, entry.saved);
+      }
+      diskIndexLoaded = true;
+    });
+    const saveDiskPointer = (threadId: string, saved: ProviderWorkspaceCheckpoint) => Effect.gen(function* () {
+      yield* Effect.tryPromise({ try: () => workspaceCheckpointStore!.write(threadId, saved), catch: (cause) => cause });
+      cachedDisks.delete(threadId);
+      if (saved.checkpoint || saved.retiredCheckpoints?.length) cachedDisks.set(threadId, saved);
+    });
+    const reconcileCaptures = Effect.gen(function* () {
+      if (!workspaceCheckpointStore || !workspaceRuntime.listCheckpoints || !workspaceRuntime.deleteCheckpoint) return;
+      const pending = (yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.listCaptures(), catch: (cause) => cause }))
+        .filter((capture) => !activeCaptures.has(capture.key));
+      if (!pending.length) return;
+      const inventory = yield* workspaceRuntime.listCheckpoints();
+      let unresolved = 0;
+      for (const capture of pending) {
+        const saved = yield* readWorkspaceCheckpoint(capture.threadId);
+        // A write may have renamed the pointer before its fsync failed. The file is authoritative.
+        cachedDisks.delete(capture.threadId);
+        if (saved && (saved.checkpoint || saved.retiredCheckpoints?.length)) cachedDisks.set(capture.threadId, saved);
+        const referenced = saved?.checkpoint?.key === capture.key || saved?.retiredCheckpoints?.some((old) => old.key === capture.key);
+        const disk = inventory.find((checkpoint) => checkpoint.key === capture.key);
+        if (!referenced && disk) yield* workspaceRuntime.deleteCheckpoint(disk.id);
+        if (!referenced && !disk && Date.now() - capture.createdAt < 600_000) {
+          // An interrupted API request may still be capturing. Reserve its slot until it settles.
+          unresolved += 1;
+          continue;
+        }
+        yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.finishCapture(capture.key), catch: (cause) => cause });
+      }
+      if (unresolved >= 4) return yield* provisionError("workspace.checkpoint.pending",
+        "Previous checkpoint requests have not settled; retaining the last saved disks.", undefined);
+    });
+    const cleanRetiredDisks = Effect.gen(function* () {
+      if (!workspaceRuntime.deleteCheckpoint) return;
+      for (const [threadId, saved] of cachedDisks) {
+        const remaining = [...(saved.retiredCheckpoints ?? [])];
+        for (const old of saved.retiredCheckpoints ?? []) {
+          if (diskReaders.has(old.key)) continue;
+          yield* workspaceRuntime.deleteCheckpoint(old.id);
+          remaining.splice(remaining.findIndex((item) => item.id === old.id), 1);
+        }
+        if (remaining.length !== (saved.retiredCheckpoints?.length ?? 0)) {
+          yield* saveDiskPointer(threadId, { ...saved, retiredCheckpoints: remaining });
+        }
+      }
+    });
+    const trimDiskCache = (limit: number) => Effect.gen(function* () {
+      if (!archiveEnabled || !workspaceCheckpointStore || !workspaceRuntime.deleteCheckpoint) return;
+      yield* indexDisks;
+      yield* cleanRetiredDisks;
+      const count = () => new Set(Array.from(cachedDisks.values()).flatMap((saved) =>
+        [...(saved.checkpoint ? [saved.checkpoint.id] : []), ...(saved.retiredCheckpoints ?? []).map((item) => item.id)])).size;
+      while (count() > limit) {
+        const candidate = Array.from(cachedDisks.entries()).find(([, saved]) =>
+          saved.checkpoint && !diskReaders.has(saved.checkpoint.key) &&
+          /^companies\/[a-z0-9][a-z0-9-]*$/.test(saved.binding.repositoryCheckout?.binding.path ?? ""));
+        if (!candidate) return yield* provisionError("workspace.archive.capacity",
+          "No saved workspace can be archived safely; retaining all disk snapshots.", undefined);
+        const [threadId, saved] = candidate;
+        // ponytail: serialize cold archive commits; add parallel eviction only if measured backlog requires it.
+        const archive = saved.archive ?? (yield* archiveWorkspaceCheckpoint({
+          workspaceRuntime, binding: saved.binding, checkpoint: saved.checkpoint!,
+        }));
+        // The pointer is durable before deletion. Keeping both locations makes a failed deletion retryable.
+        const verified = { ...saved, archive };
+        yield* saveDiskPointer(threadId, verified);
+        yield* workspaceRuntime.deleteCheckpoint(saved.checkpoint!.id);
+        const { checkpoint: _released, ...cold } = verified;
+        yield* saveDiskPointer(threadId, cold);
+        yield* Effect.logInfo("provider workspace archived", { threadId, revision: archive.revision, bytes: archive.sizeBytes });
+      }
+    });
+    const withSavedDisk = <A, E, R>(threadId: string, use: (saved: ProviderWorkspaceCheckpoint | undefined) => Effect.Effect<A, E, R>) =>
+      Effect.acquireUseRelease(
+        checkpointPool.withLock("pool", Effect.gen(function* () {
+          const saved = yield* readWorkspaceCheckpoint(threadId);
+          if (saved?.checkpoint && !saved.archive) {
+            const key = saved.checkpoint.key;
+            diskReaders.set(key, (diskReaders.get(key) ?? 0) + 1);
+          }
+          return saved;
+        })),
+        use,
+        (saved) => Effect.sync(() => {
+          if (!saved?.checkpoint || saved.archive) return;
+          const key = saved.checkpoint.key, count = (diskReaders.get(key) ?? 1) - 1;
+          if (count) diskReaders.set(key, count); else diskReaders.delete(key);
+        }),
+      );
+    const checkpointWorkspaceUnlocked = (binding: ProviderWorkerRuntimeBinding) => captureSlots.withPermits(1)(Effect.gen(function* () {
+      if (!workspaceCheckpointStore || !workspaceRuntime.checkpoint || !binding.threadId) return;
+      const active = activeByThread.get(binding.threadId);
+      if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
+        return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
+      }
+      const flush = yield* workspaceRuntime.exec(binding.workspace, {
+        command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && sync`,
+        timeoutSeconds: 30,
+      });
+      if (flush.exitCode !== 0 || flush.timedOut) {
+        return yield* provisionError("workspace.checkpoint.flush", "Worker disk could not be flushed without transient credentials.", undefined, binding.workspace.runtimeId);
+      }
+      const captureKey = `synara-thread-${createHash("sha256").update(binding.threadId).digest("hex").slice(0, 16)}-${randomUUID()}`;
+      yield* checkpointPool.withLock("pool", Effect.gen(function* () {
+        yield* indexDisks;
+        yield* reconcileCaptures;
+        yield* trimDiskCache(maxCachedDisks);
+        yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.beginCapture(binding.threadId!, binding, captureKey), catch: (cause) => cause });
+        activeCaptures.add(captureKey);
+      }));
+      yield* Effect.gen(function* () {
+      const checkpoint = yield* workspaceRuntime.checkpoint!(binding.workspace, captureKey);
+      yield* checkpointPool.withLock("pool", Effect.gen(function* () {
+        const previous = yield* readWorkspaceCheckpoint(binding.threadId!);
+        const retiredCheckpoints = [...(previous?.retiredCheckpoints ?? []), ...(previous?.checkpoint ? [previous.checkpoint] : [])];
+        yield* saveDiskPointer(binding.threadId!, { binding, checkpoint, retiredCheckpoints });
+        yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.finishCapture(captureKey), catch: (cause) => cause });
+        yield* cleanRetiredDisks;
+        yield* trimDiskCache(maxCachedDisks);
+      }));
+      yield* Effect.logInfo("provider worker disk checkpoint saved", {
+        threadId: binding.threadId, sandboxId: binding.workspace.runtimeId,
+        checkpointId: checkpoint.id, sourceCommit: binding.repositoryCheckout?.commit,
+      });
+      }).pipe(Effect.ensuring(Effect.sync(() => activeCaptures.delete(captureKey))));
+    }));
+
+    const checkpointWorkspace: NonNullable<ProviderWorkerProvisionerShape["checkpointWorkspace"]> = (binding) =>
+      (binding.threadId
+        ? lifecycleLock.withLock(binding.threadId, checkpointWorkspaceUnlocked(binding))
+        : Effect.void).pipe(Effect.mapError((cause) =>
+          cause instanceof ProviderWorkerProvisioningError ? cause : provisionError("workspace.checkpoint", "Could not checkpoint the provider worker disk.", cause, binding.workspace.runtimeId)));
 
     const storedCandidates = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
       if (!checkpointStore || !binding.threadId) return null;
@@ -129,7 +312,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       };
     });
 
-    const checkpointOutboxUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
+    const checkpointOutboxUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding, turnId?: string) {
       const liveExit = yield* Effect.exit(
         listProviderPersistenceCandidates({ workspaceRuntime, binding }),
       );
@@ -137,6 +320,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const stored = yield* storedCandidates(binding);
         if (stored) return stored;
         return yield* Effect.failCause(liveExit.cause);
+      }
+      const published = yield* Effect.exit(publishOutboxArtifacts({ binding, entries: liveExit.value.entries, broker, ...(turnId ? { turnId } : {}) }));
+      if (Exit.isSuccess(published) && published.value !== undefined) {
+        return { ...liveExit.value, entries: published.value };
+      }
+      if (Exit.isFailure(published)) {
+        yield* Effect.logWarning("direct artifact upload deferred; preserving Outbox locally", { threadId: binding.threadId });
       }
       if (!checkpointStore || !binding.threadId) return liveExit.value;
       const outbox = yield* Effect.forEach(
@@ -169,10 +359,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       };
     });
 
-    const checkpointOutbox: ProviderWorkerProvisionerShape["checkpointOutbox"] = (binding) =>
+    const checkpointOutbox: ProviderWorkerProvisionerShape["checkpointOutbox"] = (binding, turnId) =>
       binding.threadId
-        ? checkpointLock.withLock(binding.threadId, checkpointOutboxUnlocked(binding))
-        : checkpointOutboxUnlocked(binding);
+        ? checkpointLock.withLock(binding.threadId, checkpointOutboxUnlocked(binding, turnId))
+        : checkpointOutboxUnlocked(binding, turnId);
 
     const restoreOutbox = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
       if (!checkpointStore || !binding.threadId) return;
@@ -342,18 +532,22 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                       ),
                 ),
               );
-        yield* Effect.logInfo("provider worker artifact upload starting", {
-          sandboxId: fence.sandboxId,
-          bytes: options.artifact.byteLength,
-          uploadBytes: artifactArchive.byteLength,
+        const artifactProbe = yield* workspaceRuntime.exec(input.workspace, {
+          command: `test -f ${shellQuote(WORKER_ARTIFACT_PATH)} && printf '%s  %s\\n' ${shellQuote(artifactDigest)} ${shellQuote(WORKER_ARTIFACT_PATH)} | sha256sum --check --status`,
+          timeoutSeconds: 15,
         });
-        yield* workspaceRuntime.writeFile(input.workspace, {
-          path: WORKER_ARTIFACT_ARCHIVE_PATH,
-          data: artifactArchive,
-          mode: 0o400,
-        });
-        yield* Effect.logInfo("provider worker artifact upload completed", {
+        if (artifactProbe.exitCode !== 0 || artifactProbe.timedOut) {
+          yield* workspaceRuntime.writeFile(input.workspace, {
+            path: WORKER_ARTIFACT_ARCHIVE_PATH,
+            data: artifactArchive,
+            mode: 0o400,
+          });
+        }
+        yield* Effect.logInfo("provider worker artifact ready", {
           sandboxId: fence.sandboxId,
+          sha256: artifactDigest,
+          reused: artifactProbe.exitCode === 0 && !artifactProbe.timedOut,
+          uploadBytes: artifactProbe.exitCode === 0 && !artifactProbe.timedOut ? 0 : artifactArchive.byteLength,
         });
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_CONFIG_PATH,
@@ -378,7 +572,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: workerLaunchCommand(input.homeDir),
+          command: workerLaunchCommand(input.homeDir, artifactDigest),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {
@@ -437,11 +631,34 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       );
     });
 
+    const checkedToolchains = new Set<string>();
+    const prepareWorkerToolchain = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"]) {
+      if (checkedToolchains.has(workspace.runtimeId)) return;
+      const probe = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_CHECK_COMMAND, timeoutSeconds: 15 });
+      if (probe.exitCode === 0 && !probe.timedOut) {
+        checkedToolchains.add(workspace.runtimeId);
+        return;
+      }
+      const installed = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_INSTALL_COMMAND, timeoutSeconds: 180 });
+      const verified = yield* workspaceRuntime.exec(workspace, { command: WORKER_TOOLCHAIN_CHECK_COMMAND, timeoutSeconds: 15 });
+      if (installed.exitCode !== 0 || installed.timedOut || verified.exitCode !== 0 || verified.timedOut) {
+        return yield* provisionError("workspace.restore.tools", "Could not prepare the worker's document, LFS, and process tools.", undefined, workspace.runtimeId);
+      }
+      checkedToolchains.add(workspace.runtimeId);
+      yield* Effect.logInfo("legacy provider disk toolchain upgraded", { sandboxId: workspace.runtimeId });
+    });
+
     const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
-      Effect.gen(function* () {
+      withSavedDisk(input.threadId, (stored) => Effect.gen(function* () {
+        const previousRepository = stored?.binding.repositoryCheckout?.binding;
+        const sameRepository = input.repositoryBinding && previousRepository &&
+          (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
+        const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
+        const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
         const checkout = input.repositoryBinding
-          ? makeRepositoryCheckoutPlan({
+          ? (saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
               binding: input.repositoryBinding,
+              repositoryOrigin: repositoryOrigin(input.repositoryBinding),
               ...(options.repositoryAuthorization
                 ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
                 : {}),
@@ -450,6 +667,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const workspace = yield* workspaceRuntime.create({
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
+          ...(checkpointName ? { checkpointName } : {}),
           environment: {
             ...(options.environment ?? {}),
           },
@@ -460,12 +678,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return yield* withWorkspaceCleanup(
           workspace,
-          provisionConnectedWorker({
+          (saved?.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(
+            Effect.andThen(saved ? prepareWorkerToolchain(workspace) : Effect.void), Effect.andThen(provisionConnectedWorker({
             workspace,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
             cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
-            homeDir: DEFAULT_HOME_DIR,
+            homeDir: saved?.binding.homeDir ?? DEFAULT_HOME_DIR,
             ...(input.repositoryBinding === undefined
               ? {}
               : { repositoryBinding: input.repositoryBinding }),
@@ -480,11 +699,12 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   repositoryCredential: makeRepositoryCredentialConfig(
                     input.repositoryBinding,
                     options.repositoryAuthorization,
+                    repositoryOrigin(input.repositoryBinding),
                   ),
                 }),
-          }).pipe(Effect.tap(restoreOutbox)),
+          })), Effect.tap((binding) => saved ? Effect.void : restoreOutbox(binding))),
         );
-      }).pipe(
+      })).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
             ? cause
@@ -492,106 +712,60 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const stopWorkerProcess = (binding: ProviderWorkerRuntimeBinding) => Effect.gen(function* () {
+      yield* workspaceRuntime.stopDurableProcess(binding.workspace, binding.durableSessionName)
+        .pipe(Effect.catch(() => Effect.void));
+      if (!workspaceCheckpointStore) return;
+      const stopped = yield* workspaceRuntime.exec(binding.workspace, {
+        command: "for i in $(seq 1 100); do if ! pgrep -f '^node /opt/synara/provider-worker.mjs$' >/dev/null; then exit 0; fi; sleep 0.1; done; exit 1",
+        timeoutSeconds: 15,
+      });
+      if (stopped.exitCode !== 0 || stopped.timedOut) {
+        return yield* provisionError("workspace.stop", "Worker did not stop before its disk checkpoint.", undefined, binding.workspace.runtimeId);
+      }
+    });
+
+    const retireWorkspace = (binding: ProviderWorkerRuntimeBinding, reason: string) => Effect.gen(function* () {
+      const connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+      if (Exit.isSuccess(connection) && workspaceCheckpointStore && binding.threadId) {
+        // Let Pi dispose its native session and child processes before the process/disk barrier.
+        yield* broker.request(binding.fence, "session.stop", { threadId: binding.threadId }).pipe(
+          Effect.timeout(Duration.seconds(10)),
+          Effect.catch(() => Effect.void),
+        );
+      }
+      yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
+      yield* authority.revoke(binding.fence);
+      if (Exit.isSuccess(connection)) {
+        yield* stopWorkerProcess(binding);
+        yield* checkpointOutbox(binding);
+        yield* checkpointWorkspaceUnlocked(binding);
+      } else if (workspaceCheckpointStore) {
+        const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+        if (!saved) {
+          return yield* provisionError("workspace.restore", "The worker is unavailable and has no completed disk checkpoint; refusing to lose its native session.", Cause.squash(connection.cause), binding.workspace.runtimeId);
+        }
+        yield* Effect.logWarning("restoring last completed provider disk checkpoint", { threadId: binding.threadId, revision: workspaceCheckpointRevision(saved) });
+      }
+      // Destruction is the authoritative generation barrier, including after a lost control connection.
+      yield* workspaceRuntime.destroy(binding.workspace);
+      checkedToolchains.delete(binding.workspace.runtimeId);
+    });
+
     const replaceBinding: ProviderWorkerProvisionerShape["restart"] = (binding, input) =>
       Effect.gen(function* () {
-        yield* checkpointOutbox(binding);
-        yield* broker
-          .retire(binding.fence, "worker generation replaced")
-          .pipe(Effect.catch(() => Effect.void));
-        yield* authority.revoke(binding.fence);
-        const previousWorkspace = yield* workspaceRuntime.connect(binding.workspace).pipe(
-          Effect.catch(() =>
-            Effect.logWarning("provider worker workspace reconnect failed during replacement", {
-              sandboxId: binding.workspace.runtimeId,
-            }).pipe(Effect.as(binding.workspace)),
-          ),
-        );
-        yield* workspaceRuntime
-          .stopDurableProcess(previousWorkspace, binding.durableSessionName)
-          .pipe(Effect.catch(() => Effect.void));
-        // Destruction is the authoritative barrier. A durable-session handle can
-        // be stale after a control-plane restart, and must not leave an older
-        // worker reconnecting alongside the replacement generation.
-        yield* workspaceRuntime.destroy(previousWorkspace);
+        if (binding.threadId && binding.threadId !== input.threadId) {
+          return yield* provisionError("workspace.restore", "Cannot restore another thread's writable worker disk.", undefined, binding.workspace.runtimeId);
+        }
+        yield* retireWorkspace(binding, "worker generation replaced");
         const repositoryBinding = input.repositoryBinding ?? binding.repositoryCheckout?.binding;
-        const checkout = repositoryBinding
-          ? makeRepositoryCheckoutPlan({
-              binding: repositoryBinding,
-              ...(options.repositoryAuthorization
-                ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
-                : {}),
-            })
-          : undefined;
-        const replacementWorkspace = yield* workspaceRuntime.create({
-          threadId: input.threadId,
-          lifecycleGeneration: input.lifecycleGeneration,
-          environment: {
-            ...(options.environment ?? {}),
-          },
-          networkIsolation: options.networkIsolation ?? "ISOLATED",
-          ...(input.onCapacityAdmitted === undefined
-            ? {}
-            : { onCapacityAdmitted: input.onCapacityAdmitted }),
-        });
-        return yield* withWorkspaceCleanup(
-          replacementWorkspace,
-          provisionConnectedWorker({
-            workspace: replacementWorkspace,
-            threadId: input.threadId,
-            lifecycleGeneration: input.lifecycleGeneration,
-            cwd: checkout?.cwd ?? input.cwd?.trim() ?? binding.cwd,
-            homeDir: binding.homeDir,
-            ...(repositoryBinding === undefined ? {} : { repositoryBinding }),
-            ...(input.agentGatewayConnection === undefined
-              ? {}
-              : { agentGatewayConnection: input.agentGatewayConnection }),
-            ...(checkout === undefined ? {} : { checkoutCommand: checkout.command }),
-            ...(repositoryBinding === undefined || options.repositoryAuthorization === undefined
-              ? {}
-              : {
-                  repositoryCredential: makeRepositoryCredentialConfig(
-                    repositoryBinding,
-                    options.repositoryAuthorization,
-                  ),
-                }),
-          }).pipe(Effect.tap(restoreOutbox)),
-        );
-      }).pipe(
-        Effect.mapError((cause) =>
-          cause instanceof ProviderWorkerProvisioningError
-            ? cause
-            : provisionError(
-                "restart",
-                "Failed to reconnect the Railway provider workspace.",
-                cause,
-                binding.workspace.runtimeId,
-              ),
-        ),
-      );
+        return yield* createBinding({ ...input, ...(repositoryBinding ? { repositoryBinding } : {}) });
+      }).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("restart", "Failed to restore the provider worker disk.", cause, binding.workspace.runtimeId)));
 
     const stopBinding: ProviderWorkerProvisionerShape["stop"] = (binding) =>
-      checkpointOutbox(binding).pipe(
-        Effect.andThen(
-          broker
-            .retire(binding.fence, "provider session stopped")
-            .pipe(Effect.catch(() => Effect.void)),
-        ),
-        Effect.andThen(
-          workspaceRuntime
-            .stopDurableProcess(binding.workspace, binding.durableSessionName)
-            .pipe(Effect.catch(() => Effect.void)),
-        ),
-        Effect.andThen(authority.revoke(binding.fence)),
-        Effect.andThen(workspaceRuntime.destroy(binding.workspace)),
-        Effect.mapError((cause) =>
-          provisionError(
-            "stop",
-            "Failed to destroy the Railway provider workspace.",
-            cause,
-            binding.workspace.runtimeId,
-          ),
-        ),
-      );
+      retireWorkspace(binding, "provider session stopped").pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("stop", "Failed to checkpoint and destroy the provider worker.", cause, binding.workspace.runtimeId)));
 
     const start: ProviderWorkerProvisionerShape["start"] = (input) =>
       lifecycleLock.withLock(
@@ -710,6 +884,46 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         { concurrency: 1, discard: true },
       );
 
+    const refreshRepository: NonNullable<ProviderWorkerProvisionerShape["refreshRepository"]> = (binding) =>
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
+        const repository = binding.repositoryCheckout?.binding;
+        if (!repository) return yield* provisionError("repository.refresh", "Worker has no company source binding.", undefined, binding.workspace.runtimeId);
+        const active = binding.threadId ? activeByThread.get(binding.threadId) : undefined;
+        if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
+          return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
+        }
+        yield* prepareWorkerToolchain(binding.workspace);
+        const plan = makeRepositoryRefreshPlan({
+          binding: repository,
+          repositoryOrigin: repositoryOrigin(repository),
+          ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
+        });
+        if (options.repositoryAuthorization) {
+          yield* workspaceRuntime.writeFile(binding.workspace, {
+            path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+            data: makeRepositoryCredentialConfig(repository, options.repositoryAuthorization, repositoryOrigin(repository)),
+            mode: 0o600,
+          });
+        }
+        const result = yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+          const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: plan.command, timeoutSeconds: 300 })));
+          const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 });
+          if (cleanup.exitCode !== 0 || cleanup.timedOut) return yield* provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", undefined, binding.workspace.runtimeId);
+          if (Exit.isFailure(refreshed)) return yield* Effect.failCause(refreshed.cause);
+          return refreshed.value;
+        }));
+        if (result.exitCode !== 0 || result.timedOut) return yield* provisionError("repository.refresh", "Company sources could not be refreshed and verified. Conflicting local work is preserved; move edited evidence to a draft before retrying.", new Error(result.stderr || result.stdout || "refresh failed"), binding.workspace.runtimeId);
+        const refreshed = yield* Effect.try({
+          try: () => parseRepositoryRefreshResult(result.stdout),
+          catch: (cause) => provisionError("repository.refresh.verify", "Company refresh did not report its source commit.", cause, binding.workspace.runtimeId),
+        });
+        const updated = { ...binding, repositoryCheckout: { ...binding.repositoryCheckout!, commit: refreshed.commit } };
+        if (binding.threadId) activeByThread.set(binding.threadId, updated);
+        yield* Effect.logInfo("provider company sources refreshed", { threadId: binding.threadId, sandboxId: binding.workspace.runtimeId, ...refreshed });
+        return { binding: updated, ...refreshed };
+      })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("repository.refresh", "Failed to refresh company sources.", cause, binding.workspace.runtimeId)));
+
     const reconcileRepository: ProviderWorkerProvisionerShape["reconcileRepository"] = (
       binding,
       commit,
@@ -734,6 +948,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           try: () =>
             makeRepositoryReconcilePlan({
               binding: repositoryBinding,
+              repositoryOrigin: repositoryOrigin(repositoryBinding),
               commit,
               persistedFiles,
               credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH,
@@ -748,7 +963,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         yield* workspaceRuntime.writeFile(binding.workspace, {
           path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
-          data: makeRepositoryCredentialConfig(repositoryBinding, options.repositoryAuthorization),
+          data: makeRepositoryCredentialConfig(repositoryBinding, options.repositoryAuthorization, repositoryOrigin(repositoryBinding)),
           mode: 0o600,
         });
         const cleanupCredential = workspaceRuntime
@@ -804,13 +1019,15 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
               binding.workspace.runtimeId,
             ),
         });
-        return {
+        const updated = {
           ...binding,
           repositoryCheckout: {
             ...binding.repositoryCheckout,
             commit: reconciled.commit,
           },
         };
+        if (binding.threadId) activeByThread.set(binding.threadId, updated);
+        return updated;
       }).pipe(
         Effect.tapError((cause) =>
           Effect.logWarning("provider worker repository reconciliation deferred", {
@@ -862,6 +1079,51 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const readWorkspaceFile: NonNullable<ProviderWorkerProvisionerShape["readWorkspaceFile"]> = (binding, filePath) =>
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
+        if (!isWorkspaceFilePathAllowed(binding, filePath)) return yield* provisionError("workspace.file.read", "This path is outside the permitted thread workspace.", undefined);
+        if (!(yield* isWorkspaceUnavailable(binding))) {
+          const file = yield* readProviderWorkspaceFile({ workspaceRuntime, binding, filePath });
+          return { ...file, workspaceSource: "live" as const };
+        }
+        if (!binding.threadId) return yield* provisionError("workspace.file.read", "No thread workspace is available.", undefined);
+        return yield* withSavedDisk(binding.threadId, (saved) => Effect.gen(function* () {
+        const currentRepository = binding.repositoryCheckout?.binding;
+        const savedRepository = saved?.binding.repositoryCheckout?.binding;
+        if (!saved || !currentRepository || !savedRepository ||
+            !(["origin", "owner", "repository", "ref", "path"] as const).every((key) => currentRepository[key] === savedRepository[key])) {
+          return yield* provisionError("workspace.file.read", "No matching thread workspace checkpoint is available.", undefined);
+        }
+        const cacheKey = `${binding.threadId}\0${workspaceCheckpointRevision(saved)}\0${filePath}`;
+        const cached = checkpointFiles.get(cacheKey);
+        if (cached) {
+          checkpointFiles.delete(cacheKey);
+          checkpointFiles.set(cacheKey, cached);
+          return cached;
+        }
+        // A preview needs disk bytes only. It must not launch Pi or refresh the
+        // checkout, which could change the saved working copy being inspected.
+        const file = yield* Effect.acquireUseRelease(
+          workspaceRuntime.create({ maintenance: true, threadId: binding.threadId!, lifecycleGeneration: randomUUID(),
+            ...((saved.archive ? options.templateCheckpointName : saved.checkpoint?.key) ? { checkpointName: saved.archive ? options.templateCheckpointName! : saved.checkpoint!.key } : {}), environment: {}, networkIsolation: "ISOLATED" }),
+          (workspace) => (saved.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(Effect.andThen(readProviderWorkspaceFile({ workspaceRuntime, binding: { ...saved.binding, workspace }, filePath })))
+            .pipe(Effect.map((file) => ({ ...file, workspaceSource: "checkpoint" as const }))),
+          (workspace) => workspaceRuntime.destroy(workspace).pipe(Effect.catch((cause) =>
+            Effect.logError("workspace preview sandbox cleanup failed", { sandboxId: workspace.runtimeId, cause }))),
+        );
+        while (checkpointFiles.size >= 128 || checkpointFileBytes + file.sizeBytes > 64 * 1024 * 1024) {
+          const oldest = checkpointFiles.keys().next().value;
+          if (oldest === undefined) break;
+          checkpointFileBytes -= checkpointFiles.get(oldest)!.sizeBytes;
+          checkpointFiles.delete(oldest);
+        }
+        checkpointFiles.set(cacheKey, file);
+        checkpointFileBytes += file.sizeBytes;
+        return file;
+        }));
+      })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("workspace.file.read", "Could not read the thread workspace.", cause)));
+
     const readOutboxCheckpoint: ProviderWorkerProvisionerShape["readOutboxCheckpoint"] = (
       threadId,
       candidatePath,
@@ -906,16 +1168,20 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     }
 
     return {
+      isWorkspaceUnavailable,
       start,
       restart,
       adopt,
       stageAttachments,
       checkpointOutbox,
+      checkpointWorkspace,
+      refreshRepository,
       markOutboxPromoted,
       reconcileRepository,
       listPersistenceCandidates,
       readPersistenceCandidate,
       readOutboxCheckpoint,
+      readWorkspaceFile,
       stop,
     } satisfies ProviderWorkerProvisionerShape;
   });
@@ -964,6 +1230,8 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
       return yield* makeProviderWorkerProvisioner({
         artifact,
         controlUrl: options.controlUrl,
+        ...(options.templateCheckpointName ? { templateCheckpointName: options.templateCheckpointName } : {}),
+        ...(options.repositoryOriginOverride ? { repositoryOriginOverride: options.repositoryOriginOverride } : {}),
         checkpointRoot:
           options.checkpointRoot ?? path.join(serverConfig.baseDir, "provider-outbox-checkpoints"),
         ...(options.environment === undefined ? {} : { environment: options.environment }),

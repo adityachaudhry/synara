@@ -20,9 +20,13 @@ export interface WorkspaceRuntimeInventoryRecord {
 }
 
 export interface WorkspaceRuntimeCreateInput {
+  /** Internal readers/archivers share the total limit but have reserved progress slots. */
+  readonly maintenance?: boolean;
   readonly threadId?: string;
   readonly lifecycleGeneration: string;
   readonly environment: Readonly<Record<string, string>>;
+  /** A prepared base or a same-thread disk snapshot; never a running process. */
+  readonly checkpointName?: string;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";
   readonly onCapacityAdmitted?: () => void;
 }
@@ -69,6 +73,14 @@ export interface WorkspaceRuntimeShape {
   readonly create: (
     input: WorkspaceRuntimeCreateInput,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
+  readonly checkpoint?: (
+    binding: WorkspaceRuntimeBinding,
+    name: string,
+  ) => Effect.Effect<{ readonly id: string; readonly key: string }, WorkspaceRuntimeError>;
+  readonly deleteCheckpoint?: (id: string) => Effect.Effect<void, WorkspaceRuntimeError>;
+  readonly listCheckpoints?: () => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly key: string }>, WorkspaceRuntimeError
+  >;
   readonly connect: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;

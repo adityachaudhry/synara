@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   Sandbox,
@@ -24,6 +25,7 @@ import {
 import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 
 export interface RailwaySdkCreateInput {
+  readonly checkpointName?: string;
   readonly token: string;
   readonly authType: "bearer" | "project-token";
   readonly environmentId: string;
@@ -67,6 +69,7 @@ export interface RailwaySdkSandbox {
   readonly status: SandboxStatus;
   readonly region: string;
   readonly refresh: () => PromiseLike<RailwaySdkSandbox>;
+  readonly checkpoint?: Sandbox["checkpoint"];
   readonly exec: (
     target: string | { readonly sessionName: string },
     input?: RailwaySdkExecInput,
@@ -83,6 +86,8 @@ export interface RailwaySdkFacade {
   ) => PromiseLike<RailwaySdkSandbox>;
   readonly list: (input: RailwaySdkConnectionInput) => PromiseLike<ReadonlyArray<SandboxInfo>>;
   readonly isNotFoundError: (cause: unknown) => boolean;
+  readonly deleteCheckpoint?: typeof Sandbox.deleteCheckpoint;
+  readonly listCheckpoints?: typeof Sandbox.checkpoints;
 }
 
 export interface RailwaySandboxClientOptions {
@@ -102,7 +107,23 @@ export const WORKSPACE_CREATE_OPERATION_ENV_KEY =
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 const liveRailwaySdk: RailwaySdkFacade = {
-  create: (input) => Sandbox.create(input),
+  create: async ({ checkpointName, ...input }) => {
+    const sandbox = await (checkpointName ? Sandbox.create(checkpointName, input) : Sandbox.create(input));
+    // Railway can report RUNNING before the exec service leaves CREATING.
+    // Retry only this harmless readiness probe, never a caller's command.
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        await sandbox.exec(":", { timeoutSec: 5 });
+        return sandbox;
+      } catch (error) {
+        if (Date.now() >= deadline || !String(error).includes("Sandbox is not running (status: CREATING)")) throw error;
+        await delay(250);
+      }
+    }
+  },
+  deleteCheckpoint: (id, options) => Sandbox.deleteCheckpoint(id, options),
+  listCheckpoints: (options) => Sandbox.checkpoints(options),
   connect: (runtimeId, input) => Sandbox.connect(runtimeId, input),
   list: (input) => Sandbox.list(input),
   isNotFoundError: (cause) => cause instanceof SandboxNotFoundError,
@@ -201,6 +222,7 @@ export function makeRailwaySandboxClient(
       try: async () => {
         const sandbox = await sdk.create({
           ...connectionInput,
+          ...(input.checkpointName ? { checkpointName: input.checkpointName } : {}),
           networkIsolation: input.networkIsolation,
           idleTimeoutMinutes: input.idleTimeoutMinutes,
           ...(input.region === undefined ? {} : { region: input.region }),
@@ -214,6 +236,26 @@ export function makeRailwaySandboxClient(
       },
       catch: (cause) =>
         clientFailure(sdk, "create", undefined, cause) as RailwaySandboxClientError,
+    });
+
+  const checkpoint: NonNullable<RailwaySandboxClientShape["checkpoint"]> = (runtimeId, name) =>
+    loadFresh(runtimeId).pipe(
+      Effect.flatMap((sandbox) => Effect.tryPromise({
+        try: () => {
+          if (!sandbox.checkpoint) throw new Error("Railway disk checkpoints are unavailable.");
+          return sandbox.checkpoint(name);
+        },
+        catch: (cause) => clientFailure(sdk, "checkpoint", runtimeId, cause),
+      })),
+    );
+
+  const deleteCheckpoint: NonNullable<RailwaySandboxClientShape["deleteCheckpoint"]> = (id) =>
+    Effect.tryPromise({
+      try: async () => {
+        if (!sdk.deleteCheckpoint) throw new Error("Railway checkpoint deletion is unavailable.");
+        await sdk.deleteCheckpoint(id, connectionInput);
+      },
+      catch: (cause) => clientFailure(sdk, "checkpoint.delete", undefined, cause),
     });
 
   const connect: RailwaySandboxClientShape["connect"] = (runtimeId) =>
@@ -427,6 +469,14 @@ export function makeRailwaySandboxClient(
 
   return {
     create,
+    checkpoint,
+    deleteCheckpoint,
+    ...(sdk.listCheckpoints ? {
+      listCheckpoints: () => Effect.tryPromise({
+        try: () => sdk.listCheckpoints!(connectionInput),
+        catch: (cause) => clientFailure(sdk, "checkpoint.list", undefined, cause),
+      }),
+    } : {}),
     connect,
     exec,
     writeFile,

@@ -11,7 +11,7 @@ import {
   type ProviderSessionRuntimeRepositoryShape,
 } from "../../persistence/Services/ProviderSessionRuntime";
 import { decodeProviderWorkerRuntimeBinding } from "../../providerWorker/runtimeBinding";
-import { WorkspaceRuntimeError } from "../Errors";
+import { RailwaySandboxNotFoundError, WorkspaceRuntimeError } from "../Errors";
 import { RailwaySandboxClient } from "../Services/RailwaySandboxClient";
 import {
   WorkspaceRuntime,
@@ -52,6 +52,7 @@ function toRuntimeError(operation: string, runtimeId?: string) {
       operation,
       detail: `Railway workspace runtime ${operation} failed.`,
       ...(runtimeId === undefined ? {} : { runtimeId }),
+      ...(cause instanceof RailwaySandboxNotFoundError ? { unavailable: true } : {}),
       cause,
     });
 }
@@ -301,7 +302,7 @@ export function makeWorkspaceRuntimeLive(
         );
 
       const create: WorkspaceRuntimeShape["create"] = (input) => {
-        const capacityKey = `${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
+        const capacityKey = `${input.maintenance ? "maintenance:" : ""}${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
         const acquire =
           options.capacity === undefined
             ? Effect.succeed(undefined)
@@ -363,6 +364,7 @@ export function makeWorkspaceRuntimeLive(
                     client
                       .create({
                         operationId,
+                        ...(input.checkpointName ? { checkpointName: input.checkpointName } : {}),
                         networkIsolation: input.networkIsolation ?? "ISOLATED",
                         idleTimeoutMinutes: enabled.idleTimeoutMinutes,
                         ...(enabled.region === undefined ? {} : { region: enabled.region }),
@@ -447,6 +449,7 @@ export function makeWorkspaceRuntimeLive(
               operation: "connect",
               detail: `Railway Sandbox is ${record.status}, not RUNNING.`,
               runtimeId: binding.runtimeId,
+              unavailable: record.status !== "CREATING",
             });
           }
           return {
@@ -612,6 +615,19 @@ export function makeWorkspaceRuntimeLive(
 
       return {
         create,
+        ...(client.checkpoint ? {
+          checkpoint: (binding: WorkspaceRuntimeBinding, name: string) => client
+            .checkpoint!(binding.runtimeId, name)
+            .pipe(Effect.mapError(toRuntimeError("checkpoint", binding.runtimeId))),
+        } : {}),
+        ...(client.deleteCheckpoint ? {
+          deleteCheckpoint: (id: string) => client.deleteCheckpoint!(id)
+            .pipe(Effect.mapError(toRuntimeError("checkpoint.delete"))),
+        } : {}),
+        ...(client.listCheckpoints ? {
+          listCheckpoints: () => client.listCheckpoints!()
+            .pipe(Effect.mapError(toRuntimeError("checkpoint.list"))),
+        } : {}),
         connect,
         adopt,
         exec,

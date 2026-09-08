@@ -39,6 +39,8 @@ export interface SynaraHostPersistenceResult {
 }
 
 export interface SynaraHostFilePaneContext {
+  readonly fileSource?: "host" | "workspace";
+  readonly fileRevision?: string | null;
   readonly threadId: string | null;
   readonly closePane: () => void;
 }
@@ -59,7 +61,7 @@ export interface SynaraHostSidebar {
   /** Suppress successful thread/terminal completion notifications; attention alerts remain enabled. */
   readonly suppressCompletionNotifications?: boolean;
   readonly openFilesPaneOnMount?: boolean;
-  readonly filesPane?: ReactNode | ((openFile: (filePath: string) => void) => ReactNode);
+  readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;
   readonly threadFeedHeader?: ReactNode;

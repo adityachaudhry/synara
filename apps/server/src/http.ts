@@ -250,6 +250,7 @@ export function makeEffectHttpRouteLayer(
     chatPersistenceSandboxCandidatesEffectRouteLayer,
     chatPersistenceSandboxFileEffectRouteLayer,
     chatPersistenceOutboxFileEffectRouteLayer,
+    chatWorkspaceFileEffectRouteLayer,
     chatPersistenceReconcileEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
@@ -1568,6 +1569,31 @@ export const chatPersistenceSandboxFileEffectRouteLayer = HttpRouter.add(
           ),
         ),
       );
+  }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
+);
+
+export const chatWorkspaceFileEffectRouteLayer = HttpRouter.add(
+  "GET", "/api/chat-persistence/workspace-file",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    const session = yield* requireAuthenticatedRequest;
+    const threadId = url?.searchParams.get("threadId")?.trim();
+    const filePath = url?.searchParams.get("path");
+    if (!threadId || !filePath) return HttpServerResponse.jsonUnsafe({ error: "threadId and path are required" }, { status: 400 });
+    yield* requireProjectScopeAccess({ session, threadId });
+    const adapter = yield* (yield* ProviderAdapterRegistry).getByProvider("pi");
+    if (!adapter.readWorkspaceFile) return HttpServerResponse.jsonUnsafe({ error: "Workspace preview is unavailable." }, { status: 404 });
+    return yield* adapter.readWorkspaceFile(ThreadId.makeUnsafe(threadId), filePath).pipe(
+      Effect.map((file) => HttpServerResponse.uint8Array(file.bytes, {
+        contentType: "application/octet-stream",
+        headers: { "cache-control": "private, no-store", "x-synara-file-sha256": file.sha256,
+          "x-synara-workspace-source": file.workspaceSource ?? "live" },
+      })),
+      Effect.catch(() => Effect.succeed(HttpServerResponse.jsonUnsafe(
+        { error: "This file is not available in the thread workspace. It may have been removed, or the workspace needs to be resumed." }, { status: 404 },
+      ))),
+    );
   }).pipe(Effect.catch((error) => Effect.succeed(chatPersistenceErrorResponse(error)))),
 );
 

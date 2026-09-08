@@ -8,6 +8,7 @@ import type {
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import { readSynaraRuntimeConfig } from "~/synaraRuntimeConfig";
 import { EXPENSIVE_READ_RETRY_OPTIONS } from "./expensiveReadRetry";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
@@ -40,6 +41,7 @@ export const serverMutationKeys = {
 export function serverConfigQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.config(),
+    enabled: readSynaraRuntimeConfig().project === undefined,
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.server.getConfig();
@@ -90,6 +92,7 @@ export async function reconcileServerProviderStatuses(
 ): Promise<void> {
   recordProviderStatusSnapshot(queryClient, providers);
   queryClient.setQueryData(serverQueryKeys.providerStatuses(), providers);
+  if (readSynaraRuntimeConfig().project) return;
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
@@ -125,6 +128,7 @@ export async function refreshServerConfigAfterTransportOpen(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
+  if (readSynaraRuntimeConfig().project) return;
   const providerSnapshotAtStart = latestProviderStatusSnapshotByQueryClient.get(queryClient);
   const providerRevisionAtStart = providerSnapshotAtStart?.revision ?? 0;
   latestProviderStatusSnapshotByQueryClient.set(queryClient, {
@@ -170,6 +174,7 @@ export function serverAuthSessionQueryOptions() {
 export function serverEnvironmentQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.environment(),
+    enabled: readSynaraRuntimeConfig().project === undefined,
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.server.getEnvironment();
@@ -181,6 +186,7 @@ export function serverEnvironmentQueryOptions() {
 export function serverSettingsQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.settings(),
+    enabled: readSynaraRuntimeConfig().project === undefined,
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.server.getSettings();
@@ -290,13 +296,17 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
 }) {
   return queryOptions({
     queryKey: serverQueryKeys.providerUsage(input.provider, input.homePath),
-    enabled: (input.enabled ?? true) && input.provider !== null && input.provider !== undefined,
+    enabled:
+      (input.enabled ?? true) &&
+      input.provider !== null &&
+      input.provider !== undefined &&
+      readSynaraRuntimeConfig().project === undefined,
     staleTime: 30_000,
     refetchInterval: 30_000,
     refetchOnWindowFocus: false,
     retry: false,
     queryFn: async () => {
-      if (!input.provider) return null;
+      if (!input.provider || readSynaraRuntimeConfig().project) return null;
       const api = ensureNativeApi();
       return api.server.getProviderUsageSnapshot({
         provider: input.provider,
@@ -307,6 +317,7 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
 }
 
 export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
+  if (readSynaraRuntimeConfig().project) return [];
   const api = ensureNativeApi();
   return api.server.listProviderUsage(input);
 }
@@ -359,7 +370,9 @@ export function serverAllProviderUsageQueryOptions(
         enabled?: boolean;
       } = true,
 ) {
-  const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const enabled =
+    (typeof input === "boolean" ? input : (input.enabled ?? true)) &&
+    readSynaraRuntimeConfig().project === undefined;
   return queryOptions({
     queryKey: serverQueryKeys.allProviderUsage(),
     enabled,

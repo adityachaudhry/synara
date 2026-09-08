@@ -1,6 +1,7 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
 import { lazyModule } from "../lazyModule.ts";
+import { isTrustedPrivateWorkerUrl } from "../providerWorker/privateNetwork.ts";
 
 const MCP_URL_ENV = "GLASSWING_CRUNCHBASE_MCP_URL";
 const MCP_TOKEN_ENV = "GLASSWING_CRUNCHBASE_MCP_TOKEN";
@@ -29,8 +30,8 @@ function configuredConnection(): { readonly url: string; readonly token: string 
     url.hostname === "127.0.0.1" ||
     url.hostname === "localhost" ||
     (process.env.SYNARA_LOCAL_DOCKER === "1" && url.hostname === "host.docker.internal");
-  if (url.protocol !== "https:" && !(isLocal && url.protocol === "http:")) {
-    throw new Error(`${MCP_URL_ENV} must use HTTPS, except for loopback development.`);
+  if (url.protocol !== "https:" && !((isLocal || isTrustedPrivateWorkerUrl(url, process.env)) && url.protocol === "http:")) {
+    throw new Error(`${MCP_URL_ENV} must use HTTPS, loopback, or an explicitly trusted private worker host.`);
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new Error(`${MCP_URL_ENV} must not contain credentials, query, or fragment.`);
