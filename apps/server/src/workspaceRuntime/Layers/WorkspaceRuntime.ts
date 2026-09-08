@@ -302,7 +302,7 @@ export function makeWorkspaceRuntimeLive(
         );
 
       const create: WorkspaceRuntimeShape["create"] = (input) => {
-        const capacityKey = `${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
+        const capacityKey = `${input.maintenance ? "maintenance:" : ""}${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
         const acquire =
           options.capacity === undefined
             ? Effect.succeed(undefined)
@@ -623,6 +623,10 @@ export function makeWorkspaceRuntimeLive(
         ...(client.deleteCheckpoint ? {
           deleteCheckpoint: (id: string) => client.deleteCheckpoint!(id)
             .pipe(Effect.mapError(toRuntimeError("checkpoint.delete"))),
+        } : {}),
+        ...(client.listCheckpoints ? {
+          listCheckpoints: () => client.listCheckpoints!()
+            .pipe(Effect.mapError(toRuntimeError("checkpoint.list"))),
         } : {}),
         connect,
         adopt,

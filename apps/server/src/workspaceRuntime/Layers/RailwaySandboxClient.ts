@@ -87,6 +87,7 @@ export interface RailwaySdkFacade {
   readonly list: (input: RailwaySdkConnectionInput) => PromiseLike<ReadonlyArray<SandboxInfo>>;
   readonly isNotFoundError: (cause: unknown) => boolean;
   readonly deleteCheckpoint?: typeof Sandbox.deleteCheckpoint;
+  readonly listCheckpoints?: typeof Sandbox.checkpoints;
 }
 
 export interface RailwaySandboxClientOptions {
@@ -122,6 +123,7 @@ const liveRailwaySdk: RailwaySdkFacade = {
     }
   },
   deleteCheckpoint: (id, options) => Sandbox.deleteCheckpoint(id, options),
+  listCheckpoints: (options) => Sandbox.checkpoints(options),
   connect: (runtimeId, input) => Sandbox.connect(runtimeId, input),
   list: (input) => Sandbox.list(input),
   isNotFoundError: (cause) => cause instanceof SandboxNotFoundError,
@@ -469,6 +471,12 @@ export function makeRailwaySandboxClient(
     create,
     checkpoint,
     deleteCheckpoint,
+    ...(sdk.listCheckpoints ? {
+      listCheckpoints: () => Effect.tryPromise({
+        try: () => sdk.listCheckpoints!(connectionInput),
+        catch: (cause) => clientFailure(sdk, "checkpoint.list", undefined, cause),
+      }),
+    } : {}),
     connect,
     exec,
     writeFile,

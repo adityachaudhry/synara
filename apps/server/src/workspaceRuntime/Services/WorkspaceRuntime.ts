@@ -20,6 +20,8 @@ export interface WorkspaceRuntimeInventoryRecord {
 }
 
 export interface WorkspaceRuntimeCreateInput {
+  /** Internal readers/archivers share the total limit but have reserved progress slots. */
+  readonly maintenance?: boolean;
   readonly threadId?: string;
   readonly lifecycleGeneration: string;
   readonly environment: Readonly<Record<string, string>>;
@@ -76,6 +78,9 @@ export interface WorkspaceRuntimeShape {
     name: string,
   ) => Effect.Effect<{ readonly id: string; readonly key: string }, WorkspaceRuntimeError>;
   readonly deleteCheckpoint?: (id: string) => Effect.Effect<void, WorkspaceRuntimeError>;
+  readonly listCheckpoints?: () => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly key: string }>, WorkspaceRuntimeError
+  >;
   readonly connect: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;

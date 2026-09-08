@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule, Semaphore } from "effect";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import { ServerConfig } from "../../config.ts";
@@ -16,8 +16,9 @@ import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBoot
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import { isWorkspaceFilePathAllowed, readProviderWorkspaceFile } from "../workspaceFiles.ts";
-import { makeWorkspaceCheckpointStore } from "../workspaceCheckpointStore.ts";
-import { publishOutboxArtifacts } from "../artifactPublisher.ts";
+import { makeWorkspaceCheckpointStore, workspaceCheckpointRevision, type ProviderWorkspaceCheckpoint } from "../workspaceCheckpointStore.ts";
+import { archiveWorkspaceCheckpoint, restoreWorkspaceArchive } from "../workspaceArchive.ts";
+import { publishOutboxArtifacts, artifactApiClient } from "../artifactPublisher.ts";
 import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
 import {
   listProviderPersistenceCandidates,
@@ -108,6 +109,17 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const workspaceCheckpointStore = options.checkpointRoot && workspaceRuntime.checkpoint
       ? makeWorkspaceCheckpointStore(path.join(options.checkpointRoot, "workspaces"))
       : undefined;
+    const archiveEnabled = artifactApiClient() !== undefined;
+    const maxCachedDisks = Number(process.env.SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS ?? "64");
+    if (!Number.isInteger(maxCachedDisks) || maxCachedDisks < 1 || maxCachedDisks > 64) {
+      throw new Error("SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS must be an integer from 1 through 64.");
+    }
+    const checkpointPool = makeKeyedLock<string>();
+    const captureSlots = yield* Semaphore.make(4);
+    const diskReaders = new Map<string, number>();
+    const cachedDisks = new Map<string, ProviderWorkspaceCheckpoint>();
+    const activeCaptures = new Set<string>();
+    let diskIndexLoaded = false;
     const artifactArchive = gzipSync(options.artifact, { level: 6 });
     const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
@@ -141,14 +153,107 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         })
       : Effect.succeed(undefined);
 
-    const checkpointWorkspaceUnlocked = Effect.fn(function* (binding: ProviderWorkerRuntimeBinding) {
+    const indexDisks = Effect.gen(function* () {
+      if (diskIndexLoaded || !workspaceCheckpointStore || !archiveEnabled) return;
+      const entries = yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.list(), catch: (cause) => cause });
+      for (const entry of entries) {
+        if (entry.saved.checkpoint || entry.saved.retiredCheckpoints?.length) cachedDisks.set(entry.threadId, entry.saved);
+      }
+      diskIndexLoaded = true;
+    });
+    const saveDiskPointer = (threadId: string, saved: ProviderWorkspaceCheckpoint) => Effect.gen(function* () {
+      yield* Effect.tryPromise({ try: () => workspaceCheckpointStore!.write(threadId, saved), catch: (cause) => cause });
+      cachedDisks.delete(threadId);
+      if (saved.checkpoint || saved.retiredCheckpoints?.length) cachedDisks.set(threadId, saved);
+    });
+    const reconcileCaptures = Effect.gen(function* () {
+      if (!workspaceCheckpointStore || !workspaceRuntime.listCheckpoints || !workspaceRuntime.deleteCheckpoint) return;
+      const pending = (yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.listCaptures(), catch: (cause) => cause }))
+        .filter((capture) => !activeCaptures.has(capture.key));
+      if (!pending.length) return;
+      const inventory = yield* workspaceRuntime.listCheckpoints();
+      let unresolved = 0;
+      for (const capture of pending) {
+        const saved = yield* readWorkspaceCheckpoint(capture.threadId);
+        // A write may have renamed the pointer before its fsync failed. The file is authoritative.
+        cachedDisks.delete(capture.threadId);
+        if (saved && (saved.checkpoint || saved.retiredCheckpoints?.length)) cachedDisks.set(capture.threadId, saved);
+        const referenced = saved?.checkpoint?.key === capture.key || saved?.retiredCheckpoints?.some((old) => old.key === capture.key);
+        const disk = inventory.find((checkpoint) => checkpoint.key === capture.key);
+        if (!referenced && disk) yield* workspaceRuntime.deleteCheckpoint(disk.id);
+        if (!referenced && !disk && Date.now() - capture.createdAt < 600_000) {
+          // An interrupted API request may still be capturing. Reserve its slot until it settles.
+          unresolved += 1;
+          continue;
+        }
+        yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.finishCapture(capture.key), catch: (cause) => cause });
+      }
+      if (unresolved >= 4) return yield* provisionError("workspace.checkpoint.pending",
+        "Previous checkpoint requests have not settled; retaining the last saved disks.", undefined);
+    });
+    const cleanRetiredDisks = Effect.gen(function* () {
+      if (!workspaceRuntime.deleteCheckpoint) return;
+      for (const [threadId, saved] of cachedDisks) {
+        const remaining = [...(saved.retiredCheckpoints ?? [])];
+        for (const old of saved.retiredCheckpoints ?? []) {
+          if (diskReaders.has(old.key)) continue;
+          yield* workspaceRuntime.deleteCheckpoint(old.id);
+          remaining.splice(remaining.findIndex((item) => item.id === old.id), 1);
+        }
+        if (remaining.length !== (saved.retiredCheckpoints?.length ?? 0)) {
+          yield* saveDiskPointer(threadId, { ...saved, retiredCheckpoints: remaining });
+        }
+      }
+    });
+    const trimDiskCache = (limit: number) => Effect.gen(function* () {
+      if (!archiveEnabled || !workspaceCheckpointStore || !workspaceRuntime.deleteCheckpoint) return;
+      yield* indexDisks;
+      yield* cleanRetiredDisks;
+      const count = () => new Set(Array.from(cachedDisks.values()).flatMap((saved) =>
+        [...(saved.checkpoint ? [saved.checkpoint.id] : []), ...(saved.retiredCheckpoints ?? []).map((item) => item.id)])).size;
+      while (count() > limit) {
+        const candidate = Array.from(cachedDisks.entries()).find(([, saved]) =>
+          saved.checkpoint && !diskReaders.has(saved.checkpoint.key) &&
+          /^companies\/[a-z0-9][a-z0-9-]*$/.test(saved.binding.repositoryCheckout?.binding.path ?? ""));
+        if (!candidate) return yield* provisionError("workspace.archive.capacity",
+          "No saved workspace can be archived safely; retaining all disk snapshots.", undefined);
+        const [threadId, saved] = candidate;
+        // ponytail: serialize cold archive commits; add parallel eviction only if measured backlog requires it.
+        const archive = saved.archive ?? (yield* archiveWorkspaceCheckpoint({
+          workspaceRuntime, binding: saved.binding, checkpoint: saved.checkpoint!,
+        }));
+        // The pointer is durable before deletion. Keeping both locations makes a failed deletion retryable.
+        const verified = { ...saved, archive };
+        yield* saveDiskPointer(threadId, verified);
+        yield* workspaceRuntime.deleteCheckpoint(saved.checkpoint!.id);
+        const { checkpoint: _released, ...cold } = verified;
+        yield* saveDiskPointer(threadId, cold);
+        yield* Effect.logInfo("provider workspace archived", { threadId, revision: archive.revision, bytes: archive.sizeBytes });
+      }
+    });
+    const withSavedDisk = <A, E, R>(threadId: string, use: (saved: ProviderWorkspaceCheckpoint | undefined) => Effect.Effect<A, E, R>) =>
+      Effect.acquireUseRelease(
+        checkpointPool.withLock("pool", Effect.gen(function* () {
+          const saved = yield* readWorkspaceCheckpoint(threadId);
+          if (saved?.checkpoint && !saved.archive) {
+            const key = saved.checkpoint.key;
+            diskReaders.set(key, (diskReaders.get(key) ?? 0) + 1);
+          }
+          return saved;
+        })),
+        use,
+        (saved) => Effect.sync(() => {
+          if (!saved?.checkpoint || saved.archive) return;
+          const key = saved.checkpoint.key, count = (diskReaders.get(key) ?? 1) - 1;
+          if (count) diskReaders.set(key, count); else diskReaders.delete(key);
+        }),
+      );
+    const checkpointWorkspaceUnlocked = (binding: ProviderWorkerRuntimeBinding) => captureSlots.withPermits(1)(Effect.gen(function* () {
       if (!workspaceCheckpointStore || !workspaceRuntime.checkpoint || !binding.threadId) return;
       const active = activeByThread.get(binding.threadId);
       if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
         return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
       }
-      // Bootstrap credentials are consumed before connect; repository credentials are erased after each fetch.
-      // A disk snapshot never contains a process or a reusable bootstrap configuration.
       const flush = yield* workspaceRuntime.exec(binding.workspace, {
         command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && sync`,
         timeoutSeconds: 30,
@@ -156,23 +261,30 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       if (flush.exitCode !== 0 || flush.timedOut) {
         return yield* provisionError("workspace.checkpoint.flush", "Worker disk could not be flushed without transient credentials.", undefined, binding.workspace.runtimeId);
       }
-      const previous = yield* readWorkspaceCheckpoint(binding.threadId);
-      const checkpoint = yield* workspaceRuntime.checkpoint(binding.workspace,
-        `synara-thread-${createHash("sha256").update(binding.threadId).digest("hex").slice(0, 16)}-${randomUUID()}`);
-      yield* Effect.tryPromise({
-        try: () => workspaceCheckpointStore.write(binding.threadId!, { binding, checkpoint }),
-        catch: (cause) => provisionError("workspace.checkpoint.write", "Could not persist the worker disk checkpoint pointer.", cause, binding.workspace.runtimeId),
-      });
-      if (previous && workspaceRuntime.deleteCheckpoint) {
-        yield* workspaceRuntime.deleteCheckpoint(previous.checkpoint.id).pipe(
-          Effect.catch((cause) => Effect.logWarning("old provider disk checkpoint cleanup deferred", { checkpointId: previous.checkpoint.id, cause })),
-        );
-      }
+      const captureKey = `synara-thread-${createHash("sha256").update(binding.threadId).digest("hex").slice(0, 16)}-${randomUUID()}`;
+      yield* checkpointPool.withLock("pool", Effect.gen(function* () {
+        yield* indexDisks;
+        yield* reconcileCaptures;
+        yield* trimDiskCache(maxCachedDisks);
+        yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.beginCapture(binding.threadId!, binding, captureKey), catch: (cause) => cause });
+        activeCaptures.add(captureKey);
+      }));
+      yield* Effect.gen(function* () {
+      const checkpoint = yield* workspaceRuntime.checkpoint!(binding.workspace, captureKey);
+      yield* checkpointPool.withLock("pool", Effect.gen(function* () {
+        const previous = yield* readWorkspaceCheckpoint(binding.threadId!);
+        const retiredCheckpoints = [...(previous?.retiredCheckpoints ?? []), ...(previous?.checkpoint ? [previous.checkpoint] : [])];
+        yield* saveDiskPointer(binding.threadId!, { binding, checkpoint, retiredCheckpoints });
+        yield* Effect.tryPromise({ try: () => workspaceCheckpointStore.finishCapture(captureKey), catch: (cause) => cause });
+        yield* cleanRetiredDisks;
+        yield* trimDiskCache(maxCachedDisks);
+      }));
       yield* Effect.logInfo("provider worker disk checkpoint saved", {
         threadId: binding.threadId, sandboxId: binding.workspace.runtimeId,
         checkpointId: checkpoint.id, sourceCommit: binding.repositoryCheckout?.commit,
       });
-    });
+      }).pipe(Effect.ensuring(Effect.sync(() => activeCaptures.delete(captureKey))));
+    }));
 
     const checkpointWorkspace: NonNullable<ProviderWorkerProvisionerShape["checkpointWorkspace"]> = (binding) =>
       (binding.threadId
@@ -537,13 +649,12 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     });
 
     const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
-      Effect.gen(function* () {
-        const stored = yield* readWorkspaceCheckpoint(input.threadId);
+      withSavedDisk(input.threadId, (stored) => Effect.gen(function* () {
         const previousRepository = stored?.binding.repositoryCheckout?.binding;
         const sameRepository = input.repositoryBinding && previousRepository &&
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
         const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
-        const checkpointName = saved?.checkpoint.key ?? options.templateCheckpointName;
+        const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
         const checkout = input.repositoryBinding
           ? (saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
               binding: input.repositoryBinding,
@@ -567,7 +678,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return yield* withWorkspaceCleanup(
           workspace,
-          (saved ? prepareWorkerToolchain(workspace) : Effect.void).pipe(Effect.andThen(provisionConnectedWorker({
+          (saved?.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(
+            Effect.andThen(saved ? prepareWorkerToolchain(workspace) : Effect.void), Effect.andThen(provisionConnectedWorker({
             workspace,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
@@ -592,7 +704,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                 }),
           })), Effect.tap((binding) => saved ? Effect.void : restoreOutbox(binding))),
         );
-      }).pipe(
+      })).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
             ? cause
@@ -633,7 +745,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         if (!saved) {
           return yield* provisionError("workspace.restore", "The worker is unavailable and has no completed disk checkpoint; refusing to lose its native session.", Cause.squash(connection.cause), binding.workspace.runtimeId);
         }
-        yield* Effect.logWarning("restoring last completed provider disk checkpoint", { threadId: binding.threadId, checkpointId: saved.checkpoint.id });
+        yield* Effect.logWarning("restoring last completed provider disk checkpoint", { threadId: binding.threadId, revision: workspaceCheckpointRevision(saved) });
       }
       // Destruction is the authoritative generation barrier, including after a lost control connection.
       yield* workspaceRuntime.destroy(binding.workspace);
@@ -974,14 +1086,15 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           const file = yield* readProviderWorkspaceFile({ workspaceRuntime, binding, filePath });
           return { ...file, workspaceSource: "live" as const };
         }
-        const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+        if (!binding.threadId) return yield* provisionError("workspace.file.read", "No thread workspace is available.", undefined);
+        return yield* withSavedDisk(binding.threadId, (saved) => Effect.gen(function* () {
         const currentRepository = binding.repositoryCheckout?.binding;
         const savedRepository = saved?.binding.repositoryCheckout?.binding;
         if (!saved || !currentRepository || !savedRepository ||
             !(["origin", "owner", "repository", "ref", "path"] as const).every((key) => currentRepository[key] === savedRepository[key])) {
           return yield* provisionError("workspace.file.read", "No matching thread workspace checkpoint is available.", undefined);
         }
-        const cacheKey = `${binding.threadId}\0${saved.checkpoint.key}\0${filePath}`;
+        const cacheKey = `${binding.threadId}\0${workspaceCheckpointRevision(saved)}\0${filePath}`;
         const cached = checkpointFiles.get(cacheKey);
         if (cached) {
           checkpointFiles.delete(cacheKey);
@@ -991,9 +1104,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         // A preview needs disk bytes only. It must not launch Pi or refresh the
         // checkout, which could change the saved working copy being inspected.
         const file = yield* Effect.acquireUseRelease(
-          workspaceRuntime.create({ threadId: binding.threadId!, lifecycleGeneration: randomUUID(),
-            checkpointName: saved.checkpoint.key, environment: {}, networkIsolation: "ISOLATED" }),
-          (workspace) => readProviderWorkspaceFile({ workspaceRuntime, binding: { ...saved.binding, workspace }, filePath })
+          workspaceRuntime.create({ maintenance: true, threadId: binding.threadId!, lifecycleGeneration: randomUUID(),
+            ...((saved.archive ? options.templateCheckpointName : saved.checkpoint?.key) ? { checkpointName: saved.archive ? options.templateCheckpointName! : saved.checkpoint!.key } : {}), environment: {}, networkIsolation: "ISOLATED" }),
+          (workspace) => (saved.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(Effect.andThen(readProviderWorkspaceFile({ workspaceRuntime, binding: { ...saved.binding, workspace }, filePath })))
             .pipe(Effect.map((file) => ({ ...file, workspaceSource: "checkpoint" as const }))),
           (workspace) => workspaceRuntime.destroy(workspace).pipe(Effect.catch((cause) =>
             Effect.logError("workspace preview sandbox cleanup failed", { sandboxId: workspace.runtimeId, cause }))),
@@ -1007,6 +1120,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         checkpointFiles.set(cacheKey, file);
         checkpointFileBytes += file.sizeBytes;
         return file;
+        }));
       })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
         ? cause : provisionError("workspace.file.read", "Could not read the thread workspace.", cause)));
 

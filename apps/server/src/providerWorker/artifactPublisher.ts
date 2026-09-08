@@ -18,7 +18,7 @@ interface UploadGrant {
   headers: Record<string, string>;
 }
 
-function client() {
+export function artifactApiClient() {
   const origin = process.env.SYNARA_ARTIFACT_API_URL?.trim();
   const token = process.env.GLASSWING_ARTIFACT_SERVICE_TOKEN?.trim();
   if (!origin && !token) return undefined;
@@ -61,7 +61,7 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
   readonly broker: ProviderWorkerBrokerShape;
   readonly turnId?: string;
 }) {
-  const api = yield* Effect.try({ try: client, catch: (cause) => cause });
+  const api = yield* Effect.try({ try: artifactApiClient, catch: (cause) => cause });
   const binding = input.binding;
   if (!api || !binding.threadId || !binding.repositoryCheckout) return undefined;
   const companyPath = binding.repositoryCheckout.binding.path;

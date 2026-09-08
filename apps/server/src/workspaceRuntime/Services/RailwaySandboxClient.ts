@@ -74,6 +74,9 @@ export interface RailwaySandboxClientShape {
     name: string,
   ) => Effect.Effect<{ readonly id: string; readonly key: string }, RailwaySandboxClientFailure>;
   readonly deleteCheckpoint?: (id: string) => Effect.Effect<void, RailwaySandboxClientFailure>;
+  readonly listCheckpoints?: () => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly key: string }>, RailwaySandboxClientFailure
+  >;
   readonly connect: (
     runtimeId: string,
   ) => Effect.Effect<RailwaySandboxRecord, RailwaySandboxClientFailure>;
