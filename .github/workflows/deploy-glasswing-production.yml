@@ -17,7 +17,13 @@ on:
       - 'docker-entrypoint.sh'
       - 'railway.json'
       - '.github/workflows/deploy-glasswing-production.yml'
+      - '.github/actions/prepare-worker/**'
   workflow_dispatch:
+    inputs:
+      prepare_only:
+        description: Prepare the production worker disk without deploying the application
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-glasswing-production
@@ -25,10 +31,17 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/glasswingos/main' || (github.ref == 'refs/heads/glasswingos/dev' && inputs.prepare_only)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm install --global @railway/cli
-      - run: railway up --service synara-gitea-production --project 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0 --environment production --ci
+      - uses: ./.github/actions/prepare-worker
+        with:
+          service: synara-gitea-production
+          environment: production
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PRODUCTION }}
+      - if: ${{ !inputs.prepare_only }}
+        run: railway up --service synara-gitea-production --project 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0 --environment production --ci
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PRODUCTION }}
