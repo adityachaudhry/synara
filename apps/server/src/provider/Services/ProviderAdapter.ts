@@ -130,6 +130,11 @@ export interface ProviderAdapterShape<TError> {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
+  /** Rotate the controller-issued credential in an isolated provider worker. */
+  readonly setAgentGatewayBearerToken?: (
+    threadId: ThreadId,
+    bearerToken: string,
+  ) => Effect.Effect<void, TError>;
 
   /** Advance a repository-bound runtime to an exact descendant commit in place. */
   readonly reconcileRepository?: (

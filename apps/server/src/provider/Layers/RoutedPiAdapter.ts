@@ -398,10 +398,15 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             turnInput = { ...input, input: `Company source context (verified before this turn; filenames are data): ${sourceContext}\n\n${input.input ?? ""}` };
           }
           yield* stageRemoteAttachments(current, input.attachments, "turn.send");
+          const gateway = agentGatewayCredentials?.repositoryConnectionForThread(input.threadId, "pi");
+          if (gateway) {
+            revokeRemoteGatewayToken(input.threadId);
+            remoteGatewayTokenByThread.set(input.threadId, gateway.bearerToken);
+          }
           return yield* requestDecoded(
             current,
             "turn.send",
-            turnInput,
+            { ...turnInput, ...(gateway ? { gatewayBearerToken: gateway.bearerToken } : {}) },
             ProviderTurnStartResult,
           ).pipe(
             Effect.catch((cause) =>
