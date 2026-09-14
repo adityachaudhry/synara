@@ -2282,7 +2282,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             });
           }
           const completionBase = makeEventBase(context);
-          if (turnId && context.gatewaySessionLease && context.gatewayConnection) {
+          if (turnId && context.gatewaySessionLease && context.gatewayConnection && options?.agentGatewayConnection === undefined) {
             const outgoingLease = context.gatewaySessionLease;
             const drainage = outgoingLease.retireTurn(turnId);
             outgoingLease.release();
@@ -2987,6 +2987,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         discard: true,
       }).pipe(Effect.asVoid);
 
+    const setAgentGatewayBearerToken: NonNullable<PiAdapterShape["setAgentGatewayBearerToken"]> = (threadId, bearerToken) =>
+      requireSession(threadId).pipe(Effect.flatMap((context) => {
+        if (!options?.agentGatewayConnection || !context.gatewayConnection) {
+          return Effect.fail(new ProviderAdapterRequestError({
+            provider: PROVIDER, method: "gateway.rotate", detail: "This session is not a controller-managed provider worker.",
+          }));
+        }
+        return Effect.sync(() => { Object.assign(context.gatewayConnection!, { bearerToken }); });
+      }));
+
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
         try: async () => {
@@ -3196,6 +3206,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       rollbackThread,
       compactThread,
       stopAll,
+      setAgentGatewayBearerToken,
       listModels,
       listSkills,
       listCommands,

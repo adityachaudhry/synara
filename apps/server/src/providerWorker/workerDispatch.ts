@@ -26,8 +26,15 @@ export function dispatchProviderWorkerRequest<TError>(
       });
     case "session.start":
       return adapter.startSession(request.params);
-    case "turn.send":
-      return adapter.sendTurn(request.params);
+    case "turn.send": {
+      const { gatewayBearerToken, ...params } = request.params;
+      if (gatewayBearerToken === undefined) return adapter.sendTurn(params);
+      return adapter.setAgentGatewayBearerToken
+        ? adapter.setAgentGatewayBearerToken(params.threadId, gatewayBearerToken).pipe(
+            Effect.andThen(() => adapter.sendTurn(params)),
+          )
+        : unsupported(request.method);
+    }
     case "turn.steer":
       return adapter.steerTurn
         ? adapter.steerTurn(request.params)

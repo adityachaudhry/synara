@@ -53,6 +53,11 @@ const FenceFields = {
 
 const EmptyParams = Schema.Struct({});
 const ThreadParams = Schema.Struct({ threadId: ThreadId });
+const WorkerTurnSend = Schema.Struct({
+  ...ProviderSendTurnInput.fields,
+  // Controller-only credential; the worker strips it before invoking the provider.
+  gatewayBearerToken: Schema.optional(ProviderWorkerBoundedString),
+});
 const RollbackThreadParams = Schema.Struct({
   threadId: ThreadId,
   numTurns: PositiveInt,
@@ -84,7 +89,7 @@ const request = <Method extends ProviderWorkerMethod, Params extends Schema.Top>
 
 export const ProviderWorkerRequest = Schema.Union([
   request("session.start", ProviderSessionStartInput),
-  request("turn.send", ProviderSendTurnInput),
+  request("turn.send", WorkerTurnSend),
   request("turn.steer", ProviderSteerTurnInput),
   request("turn.interrupt", ProviderInterruptTurnInput),
   request("request.respond", ProviderRespondToRequestInput),
