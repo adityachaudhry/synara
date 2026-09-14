@@ -548,11 +548,19 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     threadId,
     commit,
     persistedFiles = [],
+    activeTurnId,
   ) =>
     Effect.gen(function* () {
       const persistedBinding = yield* requireRepositoryBinding(threadId, "repository.reconcile");
       yield* provisioner.markOutboxPromoted(persistedBinding, persistedFiles);
-      const binding = yield* requireIdleRepositoryBinding(threadId, "repository.reconcile");
+      const binding = activeTurnId === undefined
+        ? yield* requireIdleRepositoryBinding(threadId, "repository.reconcile")
+        : persistedBinding;
+      if (activeTurnId !== undefined) {
+        const sessions = yield* requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession));
+        if (sessions.find((session) => session.threadId === threadId)?.activeTurnId !== activeTurnId)
+          return yield* adapterError("repository.reconcile", "The requesting agent turn is no longer active.");
+      }
       const previousCommit = binding.repositoryCheckout.commit;
       const reconciled = yield* provisioner.reconcileRepository(
         binding,
