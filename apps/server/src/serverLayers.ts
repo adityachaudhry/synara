@@ -339,10 +339,10 @@ export function makeServerApplicationLayers() {
     providerWorkerInfrastructureLayer,
     runtimeServicesLayer: makeServerRuntimeServicesLayer({
       agentGatewayCredentialsLayer,
-    }).pipe(Layer.provide(providerWorkerInfrastructureLayer)),
+    }),
     providerLayer: makeServerProviderLayer({
       agentGatewayCredentialsLayer,
       ...(sandboxCapacity === undefined ? {} : { sandboxCapacity }),
-    }).pipe(Layer.provide(providerWorkerInfrastructureLayer)),
+    }).pipe(Layer.provideMerge(providerWorkerInfrastructureLayer)),
   } as const;
 }
