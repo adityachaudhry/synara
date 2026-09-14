@@ -20,6 +20,10 @@ on:
       - '.github/actions/prepare-worker/**'
   workflow_dispatch:
     inputs:
+      migration_new_production:
+        description: Prepare and deploy to the new production project before cutover
+        type: boolean
+        default: false
       prepare_only:
         description: Prepare the production worker disk without deploying the application
         type: boolean
@@ -29,19 +33,24 @@ concurrency:
   group: deploy-glasswing-production
   cancel-in-progress: false
 
+env:
+  RAILWAY_PROJECT_ID: ${{ inputs.migration_new_production && (vars.RAILWAY_PROJECT_ID_PRODUCTION_NEW || 'missing-RAILWAY_PROJECT_ID_PRODUCTION_NEW') || vars.RAILWAY_PROJECT_ID_PRODUCTION || '7bf8f727-f0a8-4aea-b1b4-4266aecc49f0' }}
+  RAILWAY_TOKEN: ${{ secrets[(inputs.migration_new_production || vars.RAILWAY_PROJECT_ID_PRODUCTION) && 'RAILWAY_TOKEN_PRODUCTION_NEW' || 'RAILWAY_TOKEN_PRODUCTION'] }}
+
 jobs:
   deploy:
     if: github.ref == 'refs/heads/glasswingos/main' || (github.ref == 'refs/heads/glasswingos/dev' && inputs.prepare_only)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: npm install --global @railway/cli
+      - name: Set the new production sandbox credential
+        if: ${{ inputs.migration_new_production || vars.RAILWAY_PROJECT_ID_PRODUCTION }}
+        run: printf '%s' "$RAILWAY_TOKEN" | railway variable set --stdin SYNARA_RAILWAY_SANDBOX_TOKEN --service synara-gitea-production --project "$RAILWAY_PROJECT_ID" --environment production --skip-deploys
       - uses: ./.github/actions/prepare-worker
         with:
+          project: ${{ env.RAILWAY_PROJECT_ID }}
           service: synara-gitea-production
           environment: production
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PRODUCTION }}
       - if: ${{ !inputs.prepare_only }}
-        run: railway up --service synara-gitea-production --project 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0 --environment production --ci
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PRODUCTION }}
+        run: railway up --service synara-gitea-production --project "$RAILWAY_PROJECT_ID" --environment production --ci
