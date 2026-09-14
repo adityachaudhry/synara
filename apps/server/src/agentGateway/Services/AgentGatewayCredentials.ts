@@ -79,8 +79,8 @@ export interface AgentGatewayCredentialsShape {
     threadId: ThreadId,
     provider: ProviderKind,
   ) => AgentGatewayMcpConnection;
-  /** Read-only connection suitable for an isolated remote provider runtime. */
-  readonly readOnlyConnectionForThread: (
+  /** Restricted remote access: thread reads and diligence for the caller's company. */
+  readonly repositoryConnectionForThread: (
     threadId: ThreadId,
     provider: ProviderKind,
   ) => AgentGatewayMcpConnection;

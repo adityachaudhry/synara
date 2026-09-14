@@ -82,6 +82,9 @@ import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
+import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner.ts";
+import { makeCompanyDiligenceTools } from "../companyDiligenceTool.ts";
 
 // Providers already receive the versioned host policy exactly once in their
 // private prompt. MCP clients prepend initialize.instructions to every exposed
@@ -126,6 +129,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   const providerRuntimeEvents = yield* ProviderRuntimeEventRepository;
   const diagnostics = yield* ThreadDiagnosticsQuery;
   const serverConfig = yield* ServerConfig;
+  const companyDiligenceTools = makeCompanyDiligenceTools({
+    snapshotQuery, projectionTurns,
+    directory: Option.getOrUndefined(yield* Effect.serviceOption(ProviderSessionDirectory)),
+    provisioner: Option.getOrUndefined(yield* Effect.serviceOption(ProviderWorkerProvisioner)),
+  });
   const browserAutomationHost = Option.getOrElse(
     yield* Effect.serviceOption(BrowserAutomationHost),
     () => makeBrowserAutomationHost({}),
@@ -790,6 +798,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   });
 
   const tools: ReadonlyArray<ToolEntry> = [
+    ...companyDiligenceTools,
     ...readTools,
     ...diagnosticTools,
     createThreads,
