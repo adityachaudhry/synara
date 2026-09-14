@@ -56,6 +56,7 @@ import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosti
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
+import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { artifactApiClient } from "./providerWorker/artifactPublisher.ts";
 import { ProviderWorkerBootstrapAuthorityLive } from "./providerWorker/Layers/ProviderWorkerBootstrapAuthority";
@@ -210,6 +211,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(providerHealthLayer),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(ProviderSessionDirectoryLive.pipe(Layer.provide(ProviderSessionRuntimeRepositoryLive))),
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
@@ -337,7 +339,7 @@ export function makeServerApplicationLayers() {
     providerWorkerInfrastructureLayer,
     runtimeServicesLayer: makeServerRuntimeServicesLayer({
       agentGatewayCredentialsLayer,
-    }),
+    }).pipe(Layer.provide(providerWorkerInfrastructureLayer)),
     providerLayer: makeServerProviderLayer({
       agentGatewayCredentialsLayer,
       ...(sandboxCapacity === undefined ? {} : { sandboxCapacity }),

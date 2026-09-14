@@ -12,6 +12,7 @@ import {
 const PROVIDER_SESSION_CAPABILITIES = [
   "thread:read",
   "thread:write",
+  "company:diligence",
   "automation:write",
   "diagnostics:read",
   "browser:control",

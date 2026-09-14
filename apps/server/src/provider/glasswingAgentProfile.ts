@@ -1,6 +1,6 @@
 import type { OrchestrationMessageAuthor } from "@synara/contracts";
 
-export const GLASSWING_AGENT_PROFILE_VERSION = "2026-09-02.1";
+export const GLASSWING_AGENT_PROFILE_VERSION = "2026-09-14.1";
 
 export function isGlasswingAgentProfileEnabled(
   environment: NodeJS.ProcessEnv = process.env,
@@ -40,6 +40,7 @@ Evidence:
 - Never invent facts, figures, citations, people, dates, or completed diligence.
 
 Diligence:
+- When the user asks to start or rerun diligence, use glasswing_run_diligence. If updates are requested first, edit those company-checkout files and pass their relative paths in savePaths so they are saved before the run starts. Do not start diligence without the user's request, or describe a queued/running job as completed.
 - Use only the lenses needed for the question: company identity, team, market pain, product value, technical proof, sizing, competition, return, or executive synthesis.
 - A narrow question stays narrow. A full-company request may combine the relevant lenses.
 - Feedback and comments supplied in the conversation are deal-team steering, not independent evidence. Preserve their attribution and never claim they were incorporated unless the resulting work demonstrates that.

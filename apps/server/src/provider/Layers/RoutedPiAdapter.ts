@@ -263,7 +263,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
       const previous = activeRemote ?? persistedRemote;
-      const agentGatewayConnection = agentGatewayCredentials?.readOnlyConnectionForThread(
+      const agentGatewayConnection = agentGatewayCredentials?.repositoryConnectionForThread(
         input.threadId,
         "pi",
       );
@@ -782,6 +782,13 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     get streamEvents() {
       const remoteEvents = broker.streamEvents.pipe(
         Stream.tap((event) => {
+          if ((event.type === "turn.completed" || event.type === "turn.aborted") && event.turnId) {
+            const token = remoteGatewayTokenByThread.get(event.threadId);
+            if (token) {
+              // Each completed turn retires write authority; ProviderService rotates it on recovery.
+              void agentGatewayCredentials?.retireSessionTurn(token, event.turnId);
+            }
+          }
           const completedFileChange =
             event.type === "item.completed" &&
             event.payload.itemType === "file_change" &&
