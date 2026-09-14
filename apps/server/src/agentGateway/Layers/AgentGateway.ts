@@ -85,6 +85,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner.ts";
 import { makeCompanyDiligenceTools } from "../companyDiligenceTool.ts";
+import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
 
 // Providers already receive the versioned host policy exactly once in their
 // private prompt. MCP clients prepend initialize.instructions to every exposed
@@ -133,6 +134,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     snapshotQuery, projectionTurns,
     directory: Option.getOrUndefined(yield* Effect.serviceOption(ProviderSessionDirectory)),
     provisioner: Option.getOrUndefined(yield* Effect.serviceOption(ProviderWorkerProvisioner)),
+    adapters: Option.getOrUndefined(yield* Effect.serviceOption(ProviderAdapterRegistry)),
   });
   const browserAutomationHost = Option.getOrElse(
     yield* Effect.serviceOption(BrowserAutomationHost),

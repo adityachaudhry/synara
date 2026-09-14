@@ -6,6 +6,7 @@ import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/Pro
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
 import type { ProviderSessionDirectoryShape } from "../provider/Services/ProviderSessionDirectory.ts";
 import type { ProviderWorkerProvisionerShape } from "../providerWorker/Services/ProviderWorkerProvisioner.ts";
+import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { decodeProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBinding.ts";
 import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
 import {
@@ -22,10 +23,11 @@ export function makeCompanyDiligenceTools(input: {
   projectionTurns: ProjectionTurnRepositoryShape;
   directory: ProviderSessionDirectoryShape | undefined;
   provisioner: ProviderWorkerProvisionerShape | undefined;
+  adapters: ProviderAdapterRegistryShape | undefined;
 }): ToolEntry[] {
   const api = artifactApiClient();
-  const { directory, provisioner } = input;
-  if (!api || !directory || !provisioner?.readWorkspaceFile) return [];
+  const { directory, provisioner, adapters } = input;
+  if (!api || !directory || !provisioner?.readWorkspaceFile || !adapters) return [];
   const readFile = provisioner.readWorkspaceFile;
   return [{
     requiredCapability: "company:diligence",
@@ -34,7 +36,7 @@ export function makeCompanyDiligenceTools(input: {
       name: "glasswing_run_diligence",
       description:
         "Start diligence for the company in this conversation, only when the user asks. " +
-        "If the user asks for updates first, edit the requested files in the company checkout, then include their relative paths in savePaths. " +
+        "If the user asks for updates first, finish editing the requested files in the company checkout, then include their relative paths in savePaths. " +
         "Those files are saved to the shared company repository before the run is queued. " +
         "Omit savePaths when no files need saving. Do not include unrelated changes or Outbox files. " +
         "Returns a run ID and its current status, not completed diligence. An existing run is returned without starting a duplicate or saving additional changes.",
@@ -104,13 +106,25 @@ export function makeCompanyDiligenceTools(input: {
       }
       yield* context.assertCallerTurnActive();
       const result = yield* Effect.tryPromise({
-        try: () => api(`/internal/companies/${companyId}/diligence`, {
+        try: () => api<{ run_id: string; status: string; commit_sha?: string | null; saved_paths: string[] }>(`/internal/companies/${companyId}/diligence`, {
           company_slug: companySlug, thread_id: threadId, turn_id: context.callerTurnId,
           requested_by: author.label ?? author.subject, mode, files,
         }),
         catch: (cause) => cause,
       });
-      return mcpToolResultJson(result);
+      let synchronized = files.length === 0;
+      if (result.commit_sha && result.saved_paths.length) {
+        yield* context.assertCallerTurnActive();
+        const adapter = yield* adapters.getByProvider("pi");
+        if (adapter.reconcileRepository) {
+          synchronized = yield* adapter.reconcileRepository(
+            threadId, result.commit_sha,
+            files.map((file) => ({ source: "checkout" as const, path: file.path, sha256: file.sha256 })),
+            TurnId.makeUnsafe(context.callerTurnId),
+          ).pipe(Effect.match({ onSuccess: () => true, onFailure: () => false }));
+        }
+      }
+      return mcpToolResultJson({ ...result, workspace_synchronized: synchronized });
     }).pipe(Effect.catch((cause) => Effect.succeed(mcpToolResultError(errorText(cause))))),
   }];
 }
