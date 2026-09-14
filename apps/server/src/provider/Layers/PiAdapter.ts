@@ -1487,16 +1487,6 @@ function modelRegistryFacade(
   return new piSdk.ModelRegistry(modelRuntime);
 }
 
-function extensionDisplayName(extension: {
-  readonly path: string;
-  readonly sourceInfo?: { readonly source?: string };
-}): string {
-  const source = trimToUndefined(extension.sourceInfo?.source);
-  if (source) return source;
-  const extensionPath = trimToUndefined(extension.path);
-  return extensionPath ? path.basename(extensionPath).replace(/\.(?:ts|js)$/u, "") : "extension";
-}
-
 function makePiUserInputOption(label: string): UserInputQuestion["options"][number] {
   const normalizedLabel = trimToUndefined(label) ?? "Option";
   return { label: normalizedLabel, description: normalizedLabel };
@@ -2589,27 +2579,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             }),
           ),
         );
-        const loadedExtensions = runtime.session.resourceLoader.getExtensions().extensions;
-        if (loadedExtensions.length > 0) {
-          const extensionNames = loadedExtensions.map(extensionDisplayName);
-          offerRuntimeEvent({
-            ...makeEventBase(context, { includeTurnId: false }),
-            type: "runtime.warning",
-            payload: {
-              message:
-                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
-              detail: {
-                extensionCount: loadedExtensions.length,
-                extensions: extensionNames,
-              },
-            },
-            raw: {
-              source: "pi.sdk.event",
-              method: "extension/ui-limited-warning",
-              payload: { extensionCount: loadedExtensions.length, extensions: extensionNames },
-            },
-          } satisfies ProviderRuntimeEvent);
-        }
         offerRuntimeEvent({
           ...makeEventBase(context),
           type: "session.started",
