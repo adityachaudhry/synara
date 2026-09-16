@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID_DEV || '7bf8f727-f0a8-4aea-b1b4-4266aecc49f0' }}
+  RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID_DEV || '2fb578c6-304e-4a97-abd4-38b3897d9030' }}
   RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
 jobs:

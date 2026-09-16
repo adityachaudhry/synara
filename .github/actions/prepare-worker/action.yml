@@ -2,8 +2,7 @@ name: Prepare worker disk
 description: Build and checkpoint the worker in the target Railway environment.
 inputs:
   project:
-    required: false
-    default: 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0
+    required: true
     description: Railway project
   service:
     required: true
