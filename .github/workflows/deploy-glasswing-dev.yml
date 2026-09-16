@@ -24,17 +24,25 @@ concurrency:
   group: deploy-glasswing-dev
   cancel-in-progress: false
 
+env:
+  RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID_DEV || '2fb578c6-304e-4a97-abd4-38b3897d9030' }}
+  RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: npm install --global @railway/cli
+      - name: Set the dev sandbox credential
+        run: printf '%s' "$RAILWAY_TOKEN" | railway variable set --stdin SYNARA_RAILWAY_SANDBOX_TOKEN --service synara-gitea-dev --project "$RAILWAY_PROJECT_ID" --environment dev --skip-deploys
       - uses: ./.github/actions/prepare-worker
         with:
+          project: ${{ env.RAILWAY_PROJECT_ID }}
           service: synara-gitea-dev
           environment: dev
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      - run: railway up --service synara-gitea-dev --project 7bf8f727-f0a8-4aea-b1b4-4266aecc49f0 --environment dev --ci
+      - run: railway up --service synara-gitea-dev --project "$RAILWAY_PROJECT_ID" --environment dev --ci
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
