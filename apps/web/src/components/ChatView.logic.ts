@@ -1344,7 +1344,9 @@ export function hasLiveTurnTakenOver(input: {
   if (!input.localDispatch) {
     return false;
   }
-  if (input.phase === "running" || input.phase === "connecting") {
+  // Connecting can return to ready before the provider starts the turn.
+  // Keep the local dispatch bridge until actual work or a terminal state owns it.
+  if (input.phase === "running") {
     return true;
   }
   if (input.session?.activeTurnId != null) {

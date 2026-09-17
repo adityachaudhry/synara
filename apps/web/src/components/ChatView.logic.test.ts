@@ -2323,7 +2323,7 @@ describe("hasLiveTurnTakenOver", () => {
     ).toBe(false);
   });
 
-  it("takes over once the session phase is running or connecting", () => {
+  it("takes over when running but keeps the startup bridge while connecting", () => {
     expect(
       hasLiveTurnTakenOver({
         localDispatch,
@@ -2345,7 +2345,7 @@ describe("hasLiveTurnTakenOver", () => {
         hasPendingUserInput: false,
         threadError: null,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("takes over when an active turn id appears", () => {
