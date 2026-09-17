@@ -236,7 +236,7 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
           observeProviderOperation(`worker.${method}`, {
             requestId, sandboxId: fence.sandboxId, workerId: fence.workerId,
             lifecycleGeneration: fence.lifecycleGeneration,
-            ...(typeof paramsThreadId === "string" ? { workerThreadId: paramsThreadId } : {}),
+            ...(worker.threadId ? { workerThreadId: worker.threadId } : {}),
           }),
         );
       });
