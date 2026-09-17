@@ -228,7 +228,7 @@ export function SingleChatSurface(props: {
   // chat commits the whole ChatView subtree synchronously. Defer that mount
   // behind the chat mount loader so the paint is never blocked. Opening an
   // existing thread keeps today's immediate mount (no draft -> no loader).
-  const isBrandNewDraftThread = draftThread !== null;
+  const isBrandNewDraftThread = draftThread !== null && draftThread.promotedTo === undefined;
   // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
   // worktree-backed threads resolve links against their materialized worktree.
   const workspaceRoot = resolveFilePreviewWorkspaceRoot({
