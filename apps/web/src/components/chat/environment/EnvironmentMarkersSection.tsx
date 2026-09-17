@@ -6,6 +6,7 @@ import type { MessageId, ThreadMarker, ThreadMarkerId } from "@synara/contracts"
 import { isThreadMarkerAvailable } from "@synara/shared/threadMarkers";
 
 import { cn } from "~/lib/utils";
+import { useSynaraHostSidebar } from "~/hostSidebar";
 import { deriveThreadMarkerLabel } from "~/threadMarkers";
 
 import { EnvironmentEditableChecklistRow } from "./EnvironmentEditableChecklistRow";
@@ -72,6 +73,8 @@ function MarkerRow({
   onRemove: (markerId: ThreadMarkerId) => void;
   onRename: (markerId: ThreadMarkerId, label: string | null) => void;
 }) {
+  const viewer = useSynaraHostSidebar()?.currentMessageAuthor?.subject;
+  const readOnly = marker.author?.subject !== viewer;
   const available = text !== undefined && isThreadMarkerAvailable(marker, text);
   const resolvedLabel = marker.label?.trim() || deriveThreadMarkerLabel(marker);
   const displayLabel = available ? resolvedLabel : `${resolvedLabel} (unavailable)`;
@@ -79,17 +82,18 @@ function MarkerRow({
   return (
     <EnvironmentEditableChecklistRow
       checked={marker.done}
+      readOnly={readOnly}
       available={available}
       displayLabel={displayLabel}
       initialEditLabel={marker.label ?? resolvedLabel}
       checkboxAriaLabel={marker.done ? "Mark not done" : "Mark done"}
       labelAriaLabel={
-        available
+        readOnly ? "Jump to shared marker" : available
           ? "Jump to marker. Press F2 to rename."
           : "Marker unavailable. Press Enter to rename."
       }
       labelTitle={
-        available
+        readOnly ? `Saved by ${marker.author?.label ?? "an unknown author"}` : available
           ? "Click to jump · double-click or press F2 to rename"
           : "Source text changed or is unavailable"
       }
@@ -98,7 +102,7 @@ function MarkerRow({
       leading={
         <span
           aria-hidden="true"
-          className={cn("size-2.5 shrink-0 rounded-full", MARKER_SWATCH_CLASS[marker.color])}
+          className={cn("size-2.5 shrink-0 rounded-full", viewer ? (readOnly ? "bg-[#fde68a]" : "bg-[var(--brand)]") : MARKER_SWATCH_CLASS[marker.color])}
         />
       }
       className="group/marker"

@@ -3,6 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: MessagesTimeline
 
+import { findTranscriptMarkerRange } from "./transcriptMarkerRanges";
 import {
   type MessageId,
   type ProviderMentionReference,
@@ -285,7 +286,7 @@ function getMonotonicTimeMs(): number {
 // rendered span for the marker (used both to scroll into view and to decorate the active ring).
 function collectThreadMarkerElements(
   root: ParentNode | null,
-  marker: Pick<ThreadMarker, "id" | "messageId">,
+  marker: ThreadMarker,
 ): HTMLElement[] {
   if (!root) {
     return [];
@@ -293,7 +294,12 @@ function collectThreadMarkerElements(
   const messageId = cssAttributeSelectorValue(marker.messageId);
   const markerId = cssAttributeSelectorValue(marker.id);
   const selector = `[data-assistant-message-id="${messageId}"] [data-thread-marker-id="${markerId}"]`;
-  return Array.from(root.querySelectorAll<HTMLElement>(selector));
+  const elements = Array.from(root.querySelectorAll<HTMLElement>(selector));
+  if (elements.length) return elements;
+  const message = root.querySelector<HTMLElement>(`[data-assistant-message-id="${messageId}"]`);
+  const range = message ? findTranscriptMarkerRange(message, marker) : null;
+  const element = range?.startContainer.parentElement;
+  return element ? [element] : [];
 }
 
 function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLElement | null {

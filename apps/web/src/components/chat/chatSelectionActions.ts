@@ -1,3 +1,5 @@
+import { selectedTranscriptRange } from "./transcriptMarkerRanges";
+
 // FILE: chatSelectionActions.ts
 // Purpose: Helpers for reading assistant text selections from the transcript without re-render churn.
 // Layer: Chat transcript interaction helpers
@@ -5,6 +7,7 @@
 export interface TranscriptAssistantSelection {
   assistantMessageId: string;
   text: string;
+  markerRange?: NonNullable<ReturnType<typeof selectedTranscriptRange>>;
 }
 
 export interface TranscriptSelectionActionLayout {
@@ -206,10 +209,12 @@ export function readTranscriptAssistantSelection(input: {
     return null;
   }
 
+  const markerRange = selectedTranscriptRange(anchorContainer, selection.getRangeAt(0));
   return {
     selection: {
       assistantMessageId,
       text,
+      ...(markerRange ? { markerRange } : {}),
     },
     selectionRect: getSelectionRect(selection),
   };
