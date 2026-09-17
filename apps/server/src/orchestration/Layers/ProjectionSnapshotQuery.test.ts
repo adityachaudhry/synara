@@ -1713,6 +1713,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: ThreadId.makeUnsafe("thread-shell"),
           projectId: asProjectId("project-shell"),
           title: "Shell Thread",
+          feedSummary: null,
           modelSelection: {
             provider: "codex",
             model: "gpt-5-codex",

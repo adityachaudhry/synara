@@ -1,5 +1,6 @@
 import http from "node:http";
 import type { ListenOptions, Socket } from "node:net";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { WS_FEATURE_PATH } from "@synara/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -133,6 +134,40 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
 ) {
   const scope = yield* Effect.scope;
   const server = evaluate();
+
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  loopDelay.enable();
+  let previousCpu = process.cpuUsage();
+  const loopTimer = setInterval(() => {
+    const cpu = process.cpuUsage(previousCpu);
+    previousCpu = process.cpuUsage();
+    if (loopDelay.max > 500_000_000) {
+      console.warn("server event loop delayed", {
+        maxDelayMs: Math.round(loopDelay.max / 1_000_000),
+        cpuMs: Math.round((cpu.user + cpu.system) / 1_000),
+      });
+    }
+    loopDelay.reset();
+  }, 5_000).unref();
+  // Register before the application handler, including synchronous route work.
+  const traceSetupRequest = (request: http.IncomingMessage, response: http.ServerResponse) => {
+    const route = request.url?.split("?")[0];
+    if (!route || !["/api/auth/ws-token", "/api/auth/external/session", "/api/external/projects/resolve", "/ws/negotiate"].includes(route)) return;
+    const started = performance.now();
+    response.once("finish", () => {
+      const durationMs = Math.round(performance.now() - started);
+      if (durationMs >= 500) console.warn("workspace setup request slow", {
+        route, durationMs, status: response.statusCode,
+        requestId: request.headers["x-railway-request-id"],
+      });
+    });
+  };
+  server.on("request", traceSetupRequest);
+  yield* Scope.addFinalizer(scope, Effect.sync(() => {
+    clearInterval(loopTimer);
+    loopDelay.disable();
+    server.off("request", traceSetupRequest);
+  }));
 
   // Install before `listen()`: no accepted connection may exist without a
   // permanent error boundary, including connections reset during startup.

@@ -1049,7 +1049,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           WHERE source = 'native'
             AND role IN ('user', 'assistant')
             AND is_streaming = 0
-            AND (${threadId} IS NULL OR thread_id = ${threadId})
+            ${threadId === null ? sql`` : sql`AND thread_id = ${threadId}`}
         ),
         first_user_ranks AS (
           SELECT thread_id, MIN(message_rank) AS first_user_rank

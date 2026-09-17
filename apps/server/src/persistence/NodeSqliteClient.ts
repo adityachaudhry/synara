@@ -5,6 +5,7 @@
  * @module SqliteClient
  */
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 
 import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
@@ -122,6 +123,7 @@ const makeWithDatabase = (
       ) =>
         Effect.withFiber<ReadonlyArray<any>, SqlError>((fiber) => {
           statement.setReadBigInts(Boolean(ServiceMap.get(fiber.services, Client.SafeIntegers)));
+          const started = performance.now();
           try {
             if (hasRows(statement)) {
               return Effect.succeed(statement.all(...(params as any)));
@@ -130,6 +132,13 @@ const makeWithDatabase = (
             return Effect.succeed(raw ? (result as unknown as ReadonlyArray<any>) : []);
           } catch (cause) {
             return Effect.fail(new SqlError({ cause, message: "Failed to execute statement" }));
+          } finally {
+            const durationMs = Math.round(performance.now() - started);
+            if (durationMs >= 250) console.warn("sqlite statement slow", {
+              durationMs,
+              // Identify the query without logging SQL values or user content.
+              queryHash: createHash("sha256").update(statement.sourceSQL).digest("hex"),
+            });
           }
         });
 

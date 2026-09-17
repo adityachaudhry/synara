@@ -241,7 +241,12 @@ export const makeWsStreamAdmission = (
           // Eviction ends the stream gracefully (interruptWhen completes it on
           // latch success); scope finalization then runs the lease's release,
           // which is a no-op because the takeover already removed it.
-          Effect.map((lease) => stream.pipe(Stream.interruptWhen(Deferred.await(lease.evicted)))),
+          Effect.map((lease) => stream.pipe(
+            // RPC waits for one ACK per chunk. Batch events already available
+            // after handler transforms, without delaying the first event.
+            Stream.buffer({ capacity: 16 }),
+            Stream.interruptWhen(Deferred.await(lease.evicted)),
+          )),
         ),
       );
 
