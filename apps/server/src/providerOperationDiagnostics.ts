@@ -20,7 +20,7 @@ export const observeProviderOperation = (
     const log = (event: string, result: Record<string, string | number> = {}) =>
       Effect.logInfo(JSON.stringify({
         event, operation, ...context, ...result, timestamp: new Date().toISOString(),
-      }));
+      })).pipe(Effect.provideService(References.CurrentLogAnnotations, {}));
     return yield* log("provider.operation.started").pipe(
       Effect.andThen(effect),
       Effect.onExit((exit) => log("provider.operation.finished", {
