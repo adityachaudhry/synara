@@ -45,6 +45,9 @@ async function dispatchMarkerCommand(
         readonly selectedText: string;
         readonly style: ThreadMarkerStyle;
         readonly color: ThreadMarkerColor;
+        readonly textFormat?: "rendered";
+        readonly textPrefix?: string;
+        readonly textSuffix?: string;
       }
     | {
         readonly type: "thread.marker.remove";
@@ -83,6 +86,9 @@ export function dispatchThreadMarkerAdd(input: {
   selectedText: string;
   style: ThreadMarkerStyle;
   color: ThreadMarkerColor;
+  textFormat?: "rendered";
+  textPrefix?: string;
+  textSuffix?: string;
 }): Promise<void> {
   return dispatchMarkerCommand({
     type: "thread.marker.add",

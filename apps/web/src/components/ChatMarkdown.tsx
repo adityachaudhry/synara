@@ -3,6 +3,8 @@
 // Layer: Web chat presentation component
 // Exports: ChatMarkdown
 
+import { useSynaraHostSidebar } from "../hostSidebar";
+import { useTranscriptMarkerPaint } from "./chat/transcriptMarkerRanges";
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
@@ -1131,6 +1133,8 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const markerRootRef = useRef<HTMLDivElement>(null);
+  const markerViewer = useSynaraHostSidebar()?.currentMessageAuthor?.subject;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1166,6 +1170,7 @@ function ChatMarkdown({
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  useTranscriptMarkerPaint(markerRootRef, markers, markerViewer, renderedText);
   // Marker offsets are applied against mdast positions, which come from the
   // repaired text — validate them against the same string. A marker recorded
   // after a repaired delimiter row fails its `selectedText` check and is
@@ -1173,7 +1178,7 @@ function ChatMarkdown({
   const threadMarkerRemarkPlugin = useMemo(
     () =>
       markers && markers.length > 0
-        ? createThreadMarkerRemarkPlugin({ text: repairMarkdownTableDelimiters(text), markers })
+        ? createThreadMarkerRemarkPlugin({ text: repairMarkdownTableDelimiters(text), markers: markers.filter((marker) => marker.textFormat !== "rendered") })
         : null,
     [markers, text],
   );
@@ -1392,6 +1397,7 @@ function ChatMarkdown({
 
   return (
     <div
+      ref={markerRootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
     >

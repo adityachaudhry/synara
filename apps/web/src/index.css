@@ -2999,3 +2999,29 @@ diffs-container {
   -webkit-background-clip: text;
   animation: ultrathink-rainbow 10s linear infinite;
 }
+
+/* Native text ranges survive Markdown formatting and do not rewrite the transcript DOM. */
+::highlight(synara-own-highlight) {
+  background-color: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--brand);
+}
+::highlight(synara-team-highlight) {
+  background-color: #fde68a;
+  color: #31240b;
+}
+::highlight(synara-own-underline) {
+  text-decoration: underline var(--brand) 0.14em;
+}
+::highlight(synara-team-underline) {
+  text-decoration: underline #d6a100 0.14em;
+}
+
+::highlight(synara-own-highlight-done) {
+  background-color: color-mix(in srgb, var(--brand) 8%, transparent);
+  color: color-mix(in srgb, var(--brand) 58%, currentColor);
+}
+::highlight(synara-team-highlight-done) { background-color: #fef3c7; }
+::highlight(synara-own-underline-done) {
+  text-decoration: underline color-mix(in srgb, var(--brand) 58%, transparent) 0.14em;
+}
+::highlight(synara-team-underline-done) { text-decoration: underline #d6a10088 0.14em; }

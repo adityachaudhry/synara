@@ -21,6 +21,7 @@ const JUMP_CLICK_DELAY_MS = 180;
 
 interface EnvironmentEditableChecklistRowProps {
   checked: boolean | undefined;
+  readOnly?: boolean;
   available: boolean;
   displayLabel: string;
   initialEditLabel: string;
@@ -41,6 +42,7 @@ interface EnvironmentEditableChecklistRowProps {
 
 export function EnvironmentEditableChecklistRow({
   checked,
+  readOnly,
   available,
   displayLabel,
   initialEditLabel,
@@ -79,6 +81,7 @@ export function EnvironmentEditableChecklistRow({
   useEffect(() => () => clearScheduledJump(), [clearScheduledJump]);
 
   const beginEditing = () => {
+    if (readOnly) return;
     clearScheduledJump();
     suppressNextBlurCommitRef.current = false;
     setDraft(initialEditLabel);
@@ -148,6 +151,7 @@ export function EnvironmentEditableChecklistRow({
       <Checkbox
         className="size-3.5 sm:size-3.5"
         checked={checked}
+        disabled={readOnly}
         onCheckedChange={onToggleDone}
         aria-label={checkboxAriaLabel}
       />
@@ -183,7 +187,7 @@ export function EnvironmentEditableChecklistRow({
           {displayLabel}
         </button>
       )}
-      <IconButton
+      {!readOnly && <IconButton
         label={removeLabel}
         tooltip={removeTooltip}
         size="icon-xs"
@@ -194,7 +198,7 @@ export function EnvironmentEditableChecklistRow({
         onClick={onRemove}
       >
         <XIcon className="size-3" />
-      </IconButton>
+      </IconButton>}
     </li>
   );
 }

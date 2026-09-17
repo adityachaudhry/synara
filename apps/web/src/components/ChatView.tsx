@@ -5434,7 +5434,7 @@ export default function ChatView({
         });
         return;
       }
-      const range = resolveTranscriptMarkerRange({
+      const range = pendingSelection.selection.markerRange ?? resolveTranscriptMarkerRange({
         messageText: message.text,
         selectedText: pendingSelection.selection.text,
       });
@@ -5451,6 +5451,8 @@ export default function ChatView({
       const sameStyleOverlappingMarkers = threadMarkers.filter(
         (marker) =>
           marker.messageId === messageId &&
+          marker.author?.subject === hostSidebar?.currentMessageAuthor?.subject &&
+          marker.textFormat === pendingSelection.selection.markerRange?.textFormat &&
           marker.style === style &&
           marker.startOffset < range.endOffset &&
           range.startOffset < marker.endOffset,
@@ -5473,7 +5475,8 @@ export default function ChatView({
         messageId,
         startOffset: range.startOffset,
         endOffset: range.endOffset,
-        selectedText: message.text.slice(range.startOffset, range.endOffset),
+        selectedText: pendingSelection.selection.markerRange?.selectedText ?? message.text.slice(range.startOffset, range.endOffset),
+        ...(pendingSelection.selection.markerRange ?? {}),
         style,
         color,
       }).catch((error) => {
@@ -5486,6 +5489,7 @@ export default function ChatView({
     },
     [
       activeThreadId,
+      hostSidebar?.currentMessageAuthor?.subject,
       dismissTranscriptSelectionAction,
       isPendingSetupBubbleId,
       pendingTranscriptSelectionAction,
