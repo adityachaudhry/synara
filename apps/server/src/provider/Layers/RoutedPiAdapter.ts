@@ -1,3 +1,4 @@
+import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import {
   ProviderSession,
   ProviderTurnStartResult,
@@ -332,6 +333,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           }),
         );
       return yield* launch().pipe(
+        observeProviderOperation("worker.provision", { threadId: input.threadId, lifecycleGeneration }),
         Effect.tap(() =>
           Effect.sync(() => {
             if (agentGatewayConnection !== undefined) {

@@ -1,3 +1,4 @@
+import { observeProviderOperation } from "../../providerOperationDiagnostics";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -962,8 +963,10 @@ const make = Effect.gen(function* () {
     const providerThread = yield* resolveProviderSessionThread(threadId);
     const sessionThreadId = providerThread?.id ?? threadId;
     const session = yield* providerService
-      .listSessions()
-      .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
+      .listSessions().pipe(
+        observeProviderOperation("session.lookup", { threadId }),
+        Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)),
+      );
     return session?.status === "running" ? session.activeTurnId : undefined;
   });
   const hasLiveProviderTurn = (threadId: ThreadId) =>
@@ -1225,7 +1228,9 @@ const make = Effect.gen(function* () {
     const resolvedProviderOptions = providerStartOptionsFromServerSettings(
       settingsSnapshot.settings,
     );
-    const resolvedWorkspace = yield* resolveProjectedThreadWorkspace(thread);
+    const resolvedWorkspace = yield* resolveProjectedThreadWorkspace(thread).pipe(
+      observeProviderOperation("workspace.resolve", { threadId }),
+    );
     const effectiveCwd = resolvedWorkspace.cwd;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
@@ -1251,15 +1256,17 @@ const make = Effect.gen(function* () {
 
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+        .listSessions().pipe(
+          observeProviderOperation("session.lookup", { threadId }),
+          Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)),
+        );
 
     const startProviderSession = (resumeCursor?: unknown) =>
       providerService.startSession(threadId, {
         ...providerSessionOptions,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         ...(resumeCursor !== undefined ? { resumeCursor } : {}),
-      });
+      }).pipe(observeProviderOperation("session.start", { threadId, provider: preferredProvider }));
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -1787,7 +1794,7 @@ const make = Effect.gen(function* () {
       providerService.sendTurn({
         ...providerTurnInput,
         ...(messageText ? { input: messageText } : {}),
-      });
+      }).pipe(observeProviderOperation("turn.send", { threadId: input.threadId }));
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -2516,7 +2523,9 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) =>
-    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event));
+    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event).pipe(
+      observeProviderOperation("turn.prepare", { threadId: event.payload.threadId }),
+    ));
 
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
@@ -4289,7 +4298,12 @@ const make = Effect.gen(function* () {
         const workerResult = yield* runBoundedProviderCall({
           label: `The provider command '${event.type}'`,
           timeout: commandEventTimeout,
-          call: processDomainEvent(event),
+          call: processDomainEvent(event).pipe(
+            observeProviderOperation("command", {
+              threadId, eventSequence: event.sequence, eventType: event.type,
+            }),
+            Effect.annotateLogs({ threadId, eventSequence: event.sequence }),
+          ),
         });
         if (workerResult._tag === "timeout") {
           // The delivery lock is single-permit and process-wide, so an attempt

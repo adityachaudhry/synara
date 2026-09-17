@@ -1,3 +1,4 @@
+import { observeProviderOperation } from "../../providerOperationDiagnostics";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -1666,7 +1667,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ? { resumeCursor: effectiveResumeCursor }
                   : {}),
               };
-              const start = adapter.startSession(startInput);
+              const start = adapter.startSession(startInput).pipe(
+                observeProviderOperation("adapter.start", { threadId, provider: input.provider }),
+              );
               const started = adapter.managesStartSessionTimeout?.(startInput)
                 ? Option.some(yield* start)
                 : yield* start.pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));

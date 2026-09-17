@@ -1,3 +1,4 @@
+import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { randomUUID } from "node:crypto";
 
 import { Effect, Exit, Layer } from "effect";
@@ -322,6 +323,7 @@ export function makeWorkspaceRuntimeLive(
                   }),
               });
         return acquire.pipe(
+          observeProviderOperation("capacity.acquire", { capacityKey }),
           Effect.flatMap((capacityLease) =>
             Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -370,7 +372,10 @@ export function makeWorkspaceRuntimeLive(
                         ...(enabled.region === undefined ? {} : { region: enabled.region }),
                         environment: input.environment,
                       })
-                      .pipe(Effect.mapError(toRuntimeError("create"))),
+                      .pipe(
+                        Effect.mapError(toRuntimeError("create")),
+                        observeProviderOperation("sandbox.create", { operationId, capacityKey }),
+                      ),
                   ),
                 ),
               ),

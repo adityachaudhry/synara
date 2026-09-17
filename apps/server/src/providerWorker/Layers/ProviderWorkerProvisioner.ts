@@ -1,3 +1,4 @@
+import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -675,7 +676,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ...(input.onCapacityAdmitted === undefined
             ? {}
             : { onCapacityAdmitted: input.onCapacityAdmitted }),
-        });
+        }).pipe(observeProviderOperation("workspace.create", {
+          threadId: input.threadId, lifecycleGeneration: input.lifecycleGeneration,
+        }));
         return yield* withWorkspaceCleanup(
           workspace,
           (saved?.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(
