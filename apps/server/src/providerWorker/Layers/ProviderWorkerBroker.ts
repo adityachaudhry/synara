@@ -1,3 +1,4 @@
+import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import {
   PROVIDER_WORKER_PROTOCOL_VERSION,
   type ProviderRuntimeEvent,
@@ -152,7 +153,9 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
             "Timed out waiting for the Railway provider worker to connect.",
           );
         }
-      });
+      }).pipe(observeProviderOperation("worker.connect", {
+        sandboxId: fence.sandboxId, workerId: fence.workerId,
+      }));
 
     const request: ProviderWorkerBrokerShape["request"] = (fence, method, params) =>
       Effect.gen(function* () {
@@ -230,6 +233,11 @@ export const makeProviderWorkerBroker = (options?: ProviderWorkerBrokerOptions) 
             }),
           ),
           Effect.ensuring(Effect.sync(() => pending.delete(requestId))),
+          observeProviderOperation(`worker.${method}`, {
+            requestId, sandboxId: fence.sandboxId, workerId: fence.workerId,
+            lifecycleGeneration: fence.lifecycleGeneration,
+            ...(typeof paramsThreadId === "string" ? { workerThreadId: paramsThreadId } : {}),
+          }),
         );
       });
 
