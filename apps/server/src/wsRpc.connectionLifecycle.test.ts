@@ -823,6 +823,7 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       const sessionKey = server.observedConnectionSessionKeys[0]!;
       expect(server.connectionSessions.lookup(sessionKey)).toEqual({
         role: "owner",
+        messageAuthor: { subject: "browser" },
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
       });
 

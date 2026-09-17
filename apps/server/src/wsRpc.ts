@@ -1060,7 +1060,7 @@ const makeWsRpcHandlersLayer = () =>
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
                   bufferLiveUiStream(
-                    scopeDomainEvents(stream).pipe(Stream.filter(isShellRelevantEvent)),
+                    scopeDomainEvents(stream.pipe(Stream.filter(isShellRelevantEvent))),
                     {
                       label: "orchestration.shell",
                       onDroppedEvents: failLiveUiStreamForSnapshotResync,
@@ -1084,9 +1084,8 @@ const makeWsRpcHandlersLayer = () =>
                   orchestrationEngine.readEventsThrough(
                     fromSequenceExclusive,
                     throughSequenceInclusive,
-                  ),
+                  ).pipe(Stream.filter(isShellRelevantEvent)),
                 ).pipe(
-                  Stream.filter(isShellRelevantEvent),
                   Stream.mapError((cause) =>
                     toWsRpcError(cause, "Failed to replay shell events"),
                   ),
