@@ -1,3 +1,4 @@
+import { OrchestrationCommandInvariantError } from "./orchestration/Errors.ts";
 import { execFile } from "node:child_process";
 
 import {
@@ -647,10 +648,16 @@ const makeWsRpcHandlersLayer = () =>
         Effect.gen(function* () {
           const attachmentPrincipal = yield* CurrentManagedAttachmentPrincipal;
           const messageAuthor = yield* CurrentWsMessageAuthor;
+          if (messageAuthor && command.type === "thread.meta.update" && command.threadMarkers !== undefined) {
+            return yield* new OrchestrationCommandInvariantError({ commandType: command.type, detail: "Use the author-scoped marker actions to change marks." });
+          }
           const attributedCommand =
             command.type === "thread.turn.start" && messageAuthor !== null
               ? { ...command, message: { ...command.message, author: messageAuthor } }
-              : command;
+              : command.type === "thread.marker.add" || command.type === "thread.marker.remove" ||
+                  command.type === "thread.marker.done.set" || command.type === "thread.marker.label.set"
+                ? { ...command, author: messageAuthor ?? undefined }
+                : command;
           return yield* runtimeStartup.enqueueCommand(
             orchestrationEngine.dispatch(attributedCommand, { attachmentPrincipal }),
           );

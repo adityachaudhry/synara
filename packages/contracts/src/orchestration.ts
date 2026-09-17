@@ -746,7 +746,15 @@ export const ThreadMarkerLabel = TrimmedNonEmptyString.check(
   Schema.isMaxLength(THREAD_MARKER_LABEL_MAX_CHARS),
 );
 export type ThreadMarkerLabel = typeof ThreadMarkerLabel.Type;
+const ThreadMarkerAnchor = {
+  textFormat: Schema.optional(Schema.Literals(["markdown", "rendered"])),
+  textPrefix: Schema.optional(Schema.String.check(Schema.isMaxLength(32))),
+  textSuffix: Schema.optional(Schema.String.check(Schema.isMaxLength(32))),
+};
+
 export const ThreadMarker = Schema.Struct({
+  ...ThreadMarkerAnchor,
+  author: Schema.optional(OrchestrationMessageAuthor),
   id: ThreadMarkerId,
   messageId: MessageId,
   startOffset: NonNegativeInt,
@@ -1321,6 +1329,8 @@ const ThreadPinnedMessageLabelSetCommand = Schema.Struct({
 });
 
 const ThreadMarkerAddCommand = Schema.Struct({
+  author: Schema.optional(OrchestrationMessageAuthor),
+  ...ThreadMarkerAnchor,
   type: Schema.Literal("thread.marker.add"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1336,6 +1346,7 @@ const ThreadMarkerAddCommand = Schema.Struct({
 });
 
 const ThreadMarkerRemoveCommand = Schema.Struct({
+  author: Schema.optional(OrchestrationMessageAuthor),
   type: Schema.Literal("thread.marker.remove"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1343,6 +1354,7 @@ const ThreadMarkerRemoveCommand = Schema.Struct({
 });
 
 const ThreadMarkerDoneSetCommand = Schema.Struct({
+  author: Schema.optional(OrchestrationMessageAuthor),
   type: Schema.Literal("thread.marker.done.set"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1351,6 +1363,7 @@ const ThreadMarkerDoneSetCommand = Schema.Struct({
 });
 
 const ThreadMarkerLabelSetCommand = Schema.Struct({
+  author: Schema.optional(OrchestrationMessageAuthor),
   type: Schema.Literal("thread.marker.label.set"),
   commandId: CommandId,
   threadId: ThreadId,

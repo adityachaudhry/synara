@@ -12,8 +12,14 @@ function keepExistingMarkers(markers: readonly ThreadMarker[]): ThreadMarker[] {
   return markers as ThreadMarker[];
 }
 
+export function sameThreadMarkerAuthor(left: Pick<ThreadMarker, "author">, right: Pick<ThreadMarker, "author">): boolean {
+  return left.author?.subject === right.author?.subject;
+}
+
 function isSameMarkerRange(left: ThreadMarker, right: ThreadMarker): boolean {
   return (
+    sameThreadMarkerAuthor(left, right) &&
+    (left.textFormat ?? "markdown") === (right.textFormat ?? "markdown") &&
     left.messageId === right.messageId &&
     left.startOffset === right.startOffset &&
     left.endOffset === right.endOffset &&
@@ -21,13 +27,14 @@ function isSameMarkerRange(left: ThreadMarker, right: ThreadMarker): boolean {
   );
 }
 
-type ThreadMarkerRange = Pick<ThreadMarker, "messageId" | "startOffset" | "endOffset">;
+type ThreadMarkerRange = Pick<ThreadMarker, "messageId" | "startOffset" | "endOffset" | "textFormat">;
 
 export function doThreadMarkerRangesOverlap(
   left: ThreadMarkerRange,
   right: ThreadMarkerRange,
 ): boolean {
   return (
+    (left.textFormat ?? "markdown") === (right.textFormat ?? "markdown") &&
     left.messageId === right.messageId &&
     left.startOffset < right.endOffset &&
     right.startOffset < left.endOffset
@@ -44,7 +51,7 @@ export function addThreadMarker(
     if (entry.id === marker.id || isSameMarkerRange(entry, marker)) {
       return keepExistingMarkers(existingMarkers);
     }
-    if (!doThreadMarkerRangesOverlap(entry, marker)) {
+    if (!sameThreadMarkerAuthor(entry, marker) || !doThreadMarkerRangesOverlap(entry, marker)) {
       retainedMarkers.push(entry);
     }
   }
@@ -113,6 +120,7 @@ export function setThreadMarkerLabel(
 }
 
 export function isThreadMarkerAvailable(marker: ThreadMarker, messageText: string): boolean {
+  if (marker.textFormat === "rendered") return marker.selectedText.length > 0;
   if (marker.startOffset < 0 || marker.endOffset > messageText.length) {
     return false;
   }
