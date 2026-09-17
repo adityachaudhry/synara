@@ -158,13 +158,19 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
     const edgeToHandlerMs = Number.isFinite(edgeStarted) && edgeStarted > 0
       ? Date.now() - edgeStarted
       : undefined;
-    response.once("finish", () => {
+    let recorded = false;
+    const recordDuration = () => {
+      if (recorded) return;
+      recorded = true;
       const durationMs = Math.round(performance.now() - started);
       if (durationMs >= 500 || (edgeToHandlerMs ?? 0) >= 500) console.warn("workspace setup request slow", {
         route, durationMs, edgeToHandlerMs, status: response.statusCode,
+        aborted: !response.writableFinished,
         requestId: request.headers["x-railway-request-id"],
       });
-    });
+    };
+    response.once("finish", recordDuration);
+    response.once("close", recordDuration);
   };
   server.on("request", traceSetupRequest);
   yield* Scope.addFinalizer(scope, Effect.sync(() => {
