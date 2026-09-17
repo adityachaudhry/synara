@@ -17,7 +17,7 @@ export async function prepareProviderWorkerTemplate(artifactPath: string) {
   const connection = { token, authType, environmentId };
   const artifact = await readFile(artifactPath);
   const sha256 = createHash("sha256").update(artifact).digest("hex");
-  const name = `synara-worker-tools-v2-${region ?? "default"}-${sha256}`;
+  const name = `synara-worker-tools-v3-${region ?? "default"}-${sha256}`;
   const existing = (await Sandbox.checkpoints(connection)).find(
     (checkpoint) => checkpoint.key === name,
   );
@@ -36,6 +36,9 @@ export async function prepareProviderWorkerTemplate(artifactPath: string) {
       if (installed.exitCode !== 0 || installed.timedOut)
         throw new Error("Prepared runtime tool installation failed.");
     }
+    const verifiedTools = await sandbox.exec(WORKER_TOOLCHAIN_CHECK_COMMAND, { timeoutSec: 15 });
+    if (verifiedTools.exitCode !== 0 || verifiedTools.timedOut)
+      throw new Error("Prepared runtime tool verification failed.");
     await sandbox.files.write("/opt/synara/provider-worker.mjs.gz", gzipSync(artifact), {
       mode: 0o400,
     });
