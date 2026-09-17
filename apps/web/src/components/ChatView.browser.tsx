@@ -3128,7 +3128,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("shows Loading until ack, then keeps Thinking through the post-ack gap", async () => {
+  it("shows Working immediately and keeps it through connecting and the post-ack gap", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,
@@ -3166,6 +3166,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
+          expect(document.body.textContent).toContain("Working…");
           expect(document.body.textContent).toContain("Loading");
           expect(document.body.textContent).not.toContain("Thinking");
         },
@@ -3233,6 +3234,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
+          expect(document.body.textContent).toContain("Working…");
           expect(document.body.textContent).toContain("Thinking");
           expect(document.body.textContent).not.toContain("Loading");
           expect(document.body.textContent).not.toContain("Working for");
@@ -3240,12 +3242,25 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 4_000, interval: 16 },
       );
 
+      // Connecting is transport setup, not provider turn ownership. Returning
+      // to ready must not clear the local startup indicator.
+      for (const status of ["connecting", "ready"] as const) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          session: thread.session ? { ...thread.session, status } : null,
+        }));
+        await vi.waitFor(() => {
+          expect(document.body.textContent).toContain("Working…");
+        });
+      }
+
       // Hold the gap briefly so a flicker/empty frame would be visible if the
       // bridge cleared too early.
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 400);
       });
       expect(document.body.textContent).toContain("Thinking");
+      expect(document.body.textContent).toContain("Working…");
       expect(document.body.textContent).not.toContain("Loading");
       expect(document.body.textContent).not.toContain("Working for");
 

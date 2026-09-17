@@ -2639,11 +2639,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               workSummaryLabelClassName,
             )}
           >
-            Working for{" "}
-            {nowIso ? (
-              (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
+            {row.createdAt ? (
+              <>
+                Working for{" "}
+                {nowIso ? (
+                  (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
+                ) : (
+                  <WorkingTimer createdAt={row.createdAt} />
+                )}
+              </>
             ) : (
-              <WorkingTimer createdAt={row.createdAt} />
+              "Working…"
             )}
           </div>
           <div className={cn("h-px w-full", workSummaryDividerClassName)} />

@@ -263,7 +263,7 @@ export type MessagesTimelineRow =
       // the turn is still running. Sits at the top of the active turn.
       kind: "working-header";
       id: string;
-      createdAt: string;
+      createdAt: string | null;
     }
   | {
       // Transient "Preparing worktree..." step card shown during the New
@@ -676,13 +676,9 @@ export function deriveMessagesTimelineRows(input: {
   // The live turn wears a "Working for Xs" header + divider — the counting-up
   // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
   // of the active turn (right after the user message that opened it) and needs a
-  // real start time to count from; the trailing "Thinking" shimmer covers the
-  // gap before one exists. Inserted after collapse so folding is untouched.
-  if (
-    input.isWorking &&
-    input.activeTurnStartedAt &&
-    !(input.worktreeSetup && input.worktreeSetupOpen)
-  ) {
+  // provider start time only for its clock. Show the same header during startup
+  // before that timestamp exists. Inserted after collapse so folding is untouched.
+  if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.splice(findLiveTurnHeaderInsertIndex(nextRows), 0, {
       kind: "working-header",
       id: "working-header-row",

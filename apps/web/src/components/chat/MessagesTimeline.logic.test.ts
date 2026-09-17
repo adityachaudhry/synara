@@ -1302,7 +1302,7 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
     });
 
-    expect(rows.map((row) => row.kind)).toEqual(["message", "worktree-setup", "working"]);
+    expect(rows.map((row) => row.kind)).toEqual(["message", "working-header", "worktree-setup", "working"]);
     expect(rows.find((row) => row.kind === "worktree-setup")).toMatchObject({ open: false });
   });
 
@@ -1313,7 +1313,8 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
     });
 
-    expect(rows.map((row) => row.kind)).toEqual(["message", "working"]);
+    expect(rows.map((row) => row.kind)).toEqual(["message", "working-header", "working"]);
+    expect(rows.find((row) => row.kind === "working-header")).toMatchObject({ createdAt: null });
   });
 });
 
