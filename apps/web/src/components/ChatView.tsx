@@ -598,7 +598,6 @@ import {
   runWorktreeCreationFlow,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
-  type LocalDispatchSnapshot,
   type WorktreeSetupDispatchOptions,
   type WorktreeSetupResolution,
   PullRequestDialogState,
@@ -610,6 +609,7 @@ import {
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
+import { useLocalDispatchStore, type LocalDispatchUpdate } from "../localDispatchStore";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
@@ -1469,7 +1469,12 @@ export default function ChatView({
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
   >({});
-  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
+  const localDispatch = useLocalDispatchStore((state) => state.byThreadId[threadId] ?? null);
+  const setLocalDispatch = useCallback(
+    (update: LocalDispatchUpdate) =>
+      useLocalDispatchStore.getState().set(threadId, update),
+    [threadId],
+  );
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
   // Live handle to the in-flight send's worktree preparation, resolved by the
   // setup card's Cancel / Work locally buttons. One send at a time can prepare
@@ -5829,7 +5834,6 @@ export default function ChatView({
         }
         return [];
       });
-      setLocalDispatch(null);
       setComposerHighlightedItemId(null);
       setComposerCursor(
         collapseExpandedComposerCursor(promptRef.current, promptRef.current.length),
@@ -6004,7 +6008,7 @@ export default function ChatView({
         return next;
       });
     },
-    [activeThread],
+    [activeThread, setLocalDispatch],
   );
 
   const failLocalDispatchWorktreeSetup = useCallback(() => {
@@ -6016,12 +6020,12 @@ export default function ChatView({
       failedWorktreeSetupDispatchStartedAtRef.current = current.startedAt;
       return failed === current.worktreeSetup ? current : { ...current, worktreeSetup: failed };
     });
-  }, []);
+  }, [setLocalDispatch]);
 
   const resetLocalDispatch = useCallback(() => {
     failedWorktreeSetupDispatchStartedAtRef.current = null;
     setLocalDispatch(null);
-  }, []);
+  }, [setLocalDispatch]);
 
   // Clears only the setup stepper from the dispatch marker: after "Work
   // locally" the send continues (composer stays busy, Thinking shimmer takes
@@ -6030,7 +6034,7 @@ export default function ChatView({
     setLocalDispatch((current) =>
       current?.worktreeSetup ? { ...current, worktreeSetup: null } : current,
     );
-  }, []);
+  }, [setLocalDispatch]);
 
   const onResolveWorktreeSetup = useCallback((action: WorktreeSetupResolutionAction) => {
     const resolution = worktreeSetupResolutionRef.current;
@@ -6057,6 +6061,11 @@ export default function ChatView({
   useEffect(() => {
     serverAcknowledgedLocalDispatchRef.current = serverAcknowledgedLocalDispatch;
   }, [serverAcknowledgedLocalDispatch]);
+  const localDispatchOwnerRef = useRef<ThreadId | null>(threadId);
+  useLayoutEffect(() => {
+    localDispatchOwnerRef.current = threadId;
+    return () => { localDispatchOwnerRef.current = null; };
+  }, [threadId]);
   const localDispatchAckFallbackTimeoutRef = useRef<number | null>(null);
   const armLocalDispatchAckFallback = useCallback((threadIdForSend: ThreadId) => {
     // The turn RPC has resolved, so the server provably owns a turn. Re-arm
@@ -6064,6 +6073,9 @@ export default function ChatView({
     // creation, attachment uploads) can outlive the marker's age cap, and this
     // is the moment its clock should restart.
     markPendingTurnDispatch(threadIdForSend);
+    // An old feed send can finish after navigation. Its stale refs must not
+    // arm a timer that can clear the new view's shared dispatch state.
+    if (localDispatchOwnerRef.current !== threadIdForSend) return;
     const armedStartedAt = localDispatchStartedAtRef.current;
     if (armedStartedAt === null) {
       return;
@@ -6073,7 +6085,7 @@ export default function ChatView({
     }
     localDispatchAckFallbackTimeoutRef.current = window.setTimeout(() => {
       localDispatchAckFallbackTimeoutRef.current = null;
-      if (serverAcknowledgedLocalDispatchRef.current) {
+      if (localDispatchOwnerRef.current !== threadIdForSend || serverAcknowledgedLocalDispatchRef.current) {
         return;
       }
       setLocalDispatch((current) =>
@@ -6084,14 +6096,14 @@ export default function ChatView({
           : current,
       );
     }, LOCAL_DISPATCH_ACK_TIMEOUT_MS);
-  }, []);
+  }, [setLocalDispatch]);
   useEffect(
     () => () => {
       if (localDispatchAckFallbackTimeoutRef.current !== null) {
         window.clearTimeout(localDispatchAckFallbackTimeoutRef.current);
       }
     },
-    [],
+    [threadId],
   );
 
   // Fallback cleanup for a failed worktree setup: clears the dispatch after the
@@ -6112,7 +6124,7 @@ export default function ChatView({
         return null;
       });
     }, WORKTREE_SETUP_ERROR_HOLD_MS);
-  }, []);
+  }, [setLocalDispatch]);
 
   const localDispatchWorktreeSetupFailed = worktreeSetupHasError(activeWorktreeSetup);
   useEffect(() => {
@@ -6147,6 +6159,7 @@ export default function ChatView({
     localDispatch?.startedAt,
     localDispatchWorktreeSetupFailed,
     resetLocalDispatch,
+    setLocalDispatch,
     turnTakenOver,
   ]);
 
