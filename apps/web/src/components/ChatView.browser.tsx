@@ -30,6 +30,7 @@ import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { page, userEvent } from "vitest/browser";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
+import { useLocalDispatchStore } from "../localDispatchStore";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -2086,6 +2087,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   beforeEach(async () => {
+    useLocalDispatchStore.setState({ byThreadId: {} });
     // Reset the shared fixture snapshot to a neutral, low-sequence shell before
     // disposing the old transport. Any in-flight getShellSnapshot that resolves
     // after this point will then return sequence 0, which the next test's real
@@ -2158,6 +2160,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterEach(async () => {
+    useLocalDispatchStore.setState({ byThreadId: {} });
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();

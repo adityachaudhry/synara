@@ -4,9 +4,9 @@
 // Layer: Routing
 // Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
 
-import { ProjectId, SpaceId } from "@synara/contracts";
+import { ProjectId, SpaceId, type ThreadId } from "@synara/contracts";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   RestoreOrCreateChatRoute,
@@ -48,7 +48,7 @@ function HostedProjectThreadFeedRoute({
   const { handleNewThread } = useHandleNewThread();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const brandedProjectId = ProjectId.makeUnsafe(projectId);
-  const feedDraftThreadId = useComposerDraftStore((state) => {
+  const availableDraftThreadId = useComposerDraftStore((state) => {
     const threadId =
       state.projectDraftThreadIdByProjectId[
         projectDraftThreadMappingKey(brandedProjectId, "chat")
@@ -58,6 +58,13 @@ function HostedProjectThreadFeedRoute({
       ? threadId
       : null;
   });
+  // Promotion removes the draft mapping before navigation opens its thread.
+  // Keep this feed's composer mounted on the same thread through that handoff.
+  const [retainedThreadId, setRetainedThreadId] = useState<ThreadId | null>(null);
+  const feedDraftThreadId = retainedThreadId ?? availableDraftThreadId;
+  useEffect(() => {
+    if (feedDraftThreadId) setRetainedThreadId(feedDraftThreadId);
+  }, [feedDraftThreadId]);
   const draftCreationInFlightRef = useRef(false);
   const prepareFeedDraft = useEffectEvent(() =>
     handleNewThread(
@@ -174,6 +181,7 @@ function ChatIndexRouteView() {
   const hostProject = readSynaraRuntimeConfig().project;
   return hostProject ? (
     <HostedProjectThreadFeedRoute
+      key={hostProject.projectId}
       projectId={hostProject.projectId}
       projectName={hostProject.name}
     />
