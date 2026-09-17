@@ -154,10 +154,14 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
     const route = request.url?.split("?")[0];
     if (!route || !["/api/auth/ws-token", "/api/auth/external/session", "/api/external/projects/resolve", "/ws/negotiate"].includes(route)) return;
     const started = performance.now();
+    const edgeStarted = Number(request.headers["x-request-start"]);
+    const edgeToHandlerMs = Number.isFinite(edgeStarted) && edgeStarted > 0
+      ? Date.now() - edgeStarted
+      : undefined;
     response.once("finish", () => {
       const durationMs = Math.round(performance.now() - started);
-      if (durationMs >= 500) console.warn("workspace setup request slow", {
-        route, durationMs, status: response.statusCode,
+      if (durationMs >= 500 || (edgeToHandlerMs ?? 0) >= 500) console.warn("workspace setup request slow", {
+        route, durationMs, edgeToHandlerMs, status: response.statusCode,
         requestId: request.headers["x-railway-request-id"],
       });
     });
