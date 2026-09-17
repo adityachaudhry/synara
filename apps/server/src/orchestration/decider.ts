@@ -22,7 +22,7 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
-import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
+import { doThreadMarkerRangesOverlap, sameThreadMarkerAuthor } from "@synara/shared/threadMarkers";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -1535,9 +1535,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       let existingMarker: ThreadMarker | undefined = undefined;
       let replacedMarkerCount = 0;
       for (const marker of thread.threadMarkers ?? []) {
+        if (!sameThreadMarkerAuthor(marker, command)) continue;
         if (
           marker.id === command.markerId ||
           (marker.messageId === command.messageId &&
+            (marker.textFormat ?? "markdown") === (command.textFormat ?? "markdown") &&
             marker.startOffset === command.startOffset &&
             marker.endOffset === command.endOffset &&
             marker.style === command.style)
@@ -1547,6 +1549,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (
           doThreadMarkerRangesOverlap(marker, {
             messageId: command.messageId,
+            textFormat: command.textFormat,
             startOffset: command.startOffset,
             endOffset: command.endOffset,
           })
@@ -1582,6 +1585,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             selectedText: command.selectedText,
             style: command.style,
             color: command.color,
+            ...(command.author ? { author: command.author } : {}),
+            ...(command.textFormat ? { textFormat: command.textFormat } : {}),
+            ...(command.textPrefix !== undefined ? { textPrefix: command.textPrefix } : {}),
+            ...(command.textSuffix !== undefined ? { textSuffix: command.textSuffix } : {}),
             label: null,
             done: false,
             createdAt: occurredAt,
@@ -1593,11 +1600,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.marker.remove": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const marker = thread.threadMarkers?.find((entry) => entry.id === command.markerId);
+      if (marker && !sameThreadMarkerAuthor(marker, command)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type, detail: "Only the author can change this mark.",
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -1616,11 +1629,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.marker.done.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const marker = thread.threadMarkers?.find((entry) => entry.id === command.markerId);
+      if (marker && !sameThreadMarkerAuthor(marker, command)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type, detail: "Only the author can change this mark.",
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -1640,11 +1659,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.marker.label.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const marker = thread.threadMarkers?.find((entry) => entry.id === command.markerId);
+      if (marker && !sameThreadMarkerAuthor(marker, command)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type, detail: "Only the author can change this mark.",
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
