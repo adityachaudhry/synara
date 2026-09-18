@@ -1,4 +1,4 @@
-import { makeRepositoryIsolationPlan } from "../repositoryIsolation";
+import { makeRepositoryIsolationPlan, makeVerifiedRepositoryRefreshPlan } from "../repositoryIsolation";
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -36,7 +36,6 @@ import {
   makeRepositoryCredentialConfig,
   makeRepositoryCheckoutPlan,
   makeRepositoryReconcilePlan,
-  makeRepositoryRefreshPlan,
   parseRepositoryCheckoutResult,
   parseRepositoryReconcileResult,
   parseRepositoryRefreshResult,
@@ -694,7 +693,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const companyOnly = (companyRefsEnabled && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
         const migrate = companyOnly && saved && (saved.binding.repositoryUnavailable || saved.binding.repositoryCheckout?.checkoutMode !== "company");
         const checkout = input.repositoryBinding
-          ? (migrate ? makeRepositoryIsolationPlan : saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
+          ? (migrate ? makeRepositoryIsolationPlan : saved ? makeVerifiedRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
               companyOnly,
               allowEmpty: saved?.binding.repositoryCheckout === undefined,
               verifiedCommit: saved?.binding.repositoryCheckout?.commit,
@@ -940,7 +939,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         yield* prepareWorkerToolchain(binding.workspace);
         const companyOnly = (companyRefsEnabled && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path)) || binding.repositoryCheckout?.checkoutMode === "company";
         const plan = (companyOnly && (binding.repositoryUnavailable || binding.repositoryCheckout?.checkoutMode !== "company")
-          ? makeRepositoryIsolationPlan : makeRepositoryRefreshPlan)({
+          ? makeRepositoryIsolationPlan : makeVerifiedRepositoryRefreshPlan)({
           companyOnly,
           allowEmpty: binding.repositoryCheckout === undefined,
           verifiedCommit: binding.repositoryCheckout?.commit,
