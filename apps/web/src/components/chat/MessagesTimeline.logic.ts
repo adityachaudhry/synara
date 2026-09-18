@@ -35,7 +35,7 @@ export function canSubmitUserMessageEdit(input: {
 // (preambles), so the collapsed panel keeps both in chronological order.
 export type CollapsedTurnItem =
   | { kind: "work"; id: string; entry: WorkLogEntry }
-  | { kind: "narration"; id: string; message: ChatMessage };
+  | { kind: "narration"; id: string; message: ChatMessage; segmentIndex?: number };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
 // summarizable tool rows fold into one "Ran N commands..." disclosure while
@@ -837,6 +837,7 @@ function collapseSettledTurns(
         collapsedItems.push({
           kind: "narration",
           id: folded.id,
+          segmentIndex: folded.segmentIndex,
           message: {
             ...folded.message,
             text:

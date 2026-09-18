@@ -209,7 +209,8 @@ export function readTranscriptAssistantSelection(input: {
     return null;
   }
 
-  const markerRange = selectedTranscriptRange(anchorContainer, selection.getRangeAt(0));
+  const markerRoot = anchorContainer.querySelector<HTMLElement>(".chat-markdown") ?? anchorContainer;
+  const markerRange = selectedTranscriptRange(markerRoot, selection.getRangeAt(0));
   return {
     selection: {
       assistantMessageId,

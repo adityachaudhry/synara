@@ -46,6 +46,7 @@ async function dispatchMarkerCommand(
         readonly style: ThreadMarkerStyle;
         readonly color: ThreadMarkerColor;
         readonly textFormat?: "rendered";
+        readonly segmentIndex?: number;
         readonly textPrefix?: string;
         readonly textSuffix?: string;
       }
@@ -87,6 +88,7 @@ export function dispatchThreadMarkerAdd(input: {
   style: ThreadMarkerStyle;
   color: ThreadMarkerColor;
   textFormat?: "rendered";
+  segmentIndex?: number;
   textPrefix?: string;
   textSuffix?: string;
 }): Promise<void> {

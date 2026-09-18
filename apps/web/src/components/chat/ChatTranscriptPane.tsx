@@ -60,6 +60,7 @@ interface ChatTranscriptPaneProps {
   onTogglePinMessage?: (messageId: MessageId) => void;
   onForkFromMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
+  onRemoveThreadMarker?: ((id: ThreadMarker["id"]) => Promise<void> | void) | undefined;
   goalAchievements?: ComponentProps<typeof MessagesTimeline>["goalAchievements"];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   tailAnchorMessageId?: ComponentProps<typeof MessagesTimeline>["tailAnchorMessageId"];
@@ -133,6 +134,7 @@ export function ChatTranscriptPane({
   onTogglePinMessage,
   onForkFromMessage,
   threadMarkers,
+  onRemoveThreadMarker,
   goalAchievements,
   enteringUserMessageIds,
   tailAnchorMessageId,
@@ -241,6 +243,7 @@ export function ChatTranscriptPane({
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(onForkFromMessage ? { onForkFromMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
+            onRemoveThreadMarker={onRemoveThreadMarker}
             {...(goalAchievements ? { goalAchievements } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             tailAnchorMessageId={tailAnchorMessageId ?? null}

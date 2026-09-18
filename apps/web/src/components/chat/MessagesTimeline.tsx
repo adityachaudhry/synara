@@ -296,10 +296,11 @@ function collectThreadMarkerElements(
   const selector = `[data-assistant-message-id="${messageId}"] [data-thread-marker-id="${markerId}"]`;
   const elements = Array.from(root.querySelectorAll<HTMLElement>(selector));
   if (elements.length) return elements;
-  const message = root.querySelector<HTMLElement>(`[data-assistant-message-id="${messageId}"]`);
-  const range = message ? findTranscriptMarkerRange(message, marker) : null;
-  const element = range?.startContainer.parentElement;
-  return element ? [element] : [];
+  return Array.from(root.querySelectorAll<HTMLElement>(`[data-assistant-message-id="${messageId}"]`))
+    .flatMap((message) => {
+      const element = findTranscriptMarkerRange(message, marker)?.startContainer.parentElement;
+      return element ? [element] : [];
+    });
 }
 
 function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLElement | null {
@@ -446,6 +447,7 @@ interface MessagesTimelineProps {
   onForkFromMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
+  onRemoveThreadMarker?: ((id: ThreadMarker["id"]) => Promise<void> | void) | undefined;
   /** Recorded goal achievements; each renders a footer badge on its turn's terminal assistant message. */
   goalAchievements?: readonly ThreadGoalAchievement[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
@@ -543,6 +545,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   canPinMessage,
   onTogglePinMessage,
   threadMarkers: threadMarkersProp,
+  onRemoveThreadMarker,
   goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
   tailAnchorMessageId: tailAnchorMessageIdProp,
@@ -1531,10 +1534,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
+            <div data-assistant-message-id={row.message.id} className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
               <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
                 <ChatMarkdown
                   text={segmentText}
+                  markers={threadMarkersByMessageId.get(row.message.id)}
+                  markerSegmentIndex={row.segmentIndex}
+                  includeLegacyMarkers={false}
+                  onRemoveMarker={onRemoveThreadMarker}
                   cwd={markdownCwd}
                   isStreaming={false}
                   style={chatTypographyStyle}
@@ -2182,10 +2189,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ) : (
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
+                data-assistant-message-id={item.message.id}
                 className={MUTED_LABEL_TEXT_CLASS_NAME}
               >
                 <ChatMarkdown
                   text={item.message.text}
+                  markers={threadMarkersByMessageId.get(item.message.id)}
+                  markerSegmentIndex={item.segmentIndex ?? (item.message.textSegments?.length ? item.message.textSegments.length - 1 : undefined)}
+                  includeLegacyMarkers={item.segmentIndex === undefined}
+                  onRemoveMarker={onRemoveThreadMarker}
                   cwd={markdownCwd}
                   isStreaming={false}
                   style={chatTypographyStyle}
@@ -2314,6 +2326,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         style={chatTypographyStyle}
                         onImageExpand={onImageExpand}
                         markers={messageMarkers}
+                        markerSegmentIndex={row.message.textSegments?.length ? row.message.textSegments.length - 1 : undefined}
+                        onRemoveMarker={onRemoveThreadMarker}
                         knownAbsoluteFilePaths={knownAbsoluteFilePaths}
                       />
                     </div>

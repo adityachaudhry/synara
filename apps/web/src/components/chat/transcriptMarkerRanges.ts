@@ -4,7 +4,7 @@ import type { ThreadMarker } from "@synara/contracts";
 // Both selection and painting use the displayed text, not the provider's merged Markdown.
 function textNodes(root: HTMLElement) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => node.parentElement?.closest('button, [aria-hidden="true"]')
+    acceptNode: (node) => node.parentElement?.closest('button, [aria-hidden="true"], [data-transcript-marker-actions]')
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
   });
   const nodes: Array<{ node: Text; start: number; end: number }> = [];
@@ -29,13 +29,17 @@ export function selectedTranscriptRange(root: HTMLElement, range: Range) {
   startOffset += raw.length - raw.trimStart().length;
   endOffset -= raw.length - raw.trimEnd().length;
   if (endOffset <= startOffset) return null;
-  return { startOffset, endOffset, selectedText: text.slice(startOffset, endOffset),
+  const segmentIndex = root.dataset.transcriptSegmentIndex;
+  return { ...(segmentIndex !== undefined ? { segmentIndex: Number(segmentIndex) } : {}), startOffset, endOffset, selectedText: text.slice(startOffset, endOffset),
     textFormat: "rendered" as const, textPrefix: text.slice(Math.max(0, startOffset - 32), startOffset),
     textSuffix: text.slice(endOffset, endOffset + 32) };
 }
 
 export function findTranscriptMarkerRange(root: HTMLElement, marker: ThreadMarker): Range | null {
-  const { nodes, text } = textNodes(root);
+  const content = root.matches(".chat-markdown") ? root : root.querySelector<HTMLElement>(".chat-markdown") ?? root;
+  if (marker.segmentIndex !== undefined && String(marker.segmentIndex) !== content.dataset.transcriptSegmentIndex) return null;
+  if (marker.segmentIndex === undefined && content.dataset.transcriptLegacyMarkers === "false") return null;
+  const { nodes, text } = textNodes(content);
   let start = marker.textFormat === "rendered" &&
     text.slice(marker.startOffset, marker.endOffset) === marker.selectedText ? marker.startOffset : -1;
   let quote = marker.selectedText;
