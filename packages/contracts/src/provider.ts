@@ -68,6 +68,7 @@ export const ProviderSessionStartInput = Schema.Struct({
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
+  repositoryUnavailable: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
   author: Schema.optional(OrchestrationMessageAuthor),
   input: Schema.optional(

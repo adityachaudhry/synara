@@ -142,6 +142,7 @@ export interface ProviderAdapterShape<TError> {
     commit: string,
     persistedFiles?: ReadonlyArray<ProviderPersistenceCandidateSelection>,
     activeTurnId?: TurnId,
+    workspaceCommit?: string,
   ) => Effect.Effect<ProviderRepositoryReconcileResult, TError>;
 
   /** List complete, user-reviewable files in a repository-bound provider sandbox. */

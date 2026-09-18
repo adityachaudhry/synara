@@ -28,7 +28,7 @@ const attemptSync = <T>(run: () => T) => Effect.try({ try: run, catch: (cause) =
 const attempt = <T>(run: () => Promise<T>) => Effect.tryPromise({ try: run, catch: (cause) => cause });
 
 function scope(binding: ProviderWorkerRuntimeBinding, revision: string) {
-  const companyPath = binding.repositoryCheckout?.binding.path;
+  const companyPath = (binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding)?.path;
   if (!binding.threadId || !companyPath || !/^companies\/[a-z0-9][a-z0-9-]*$/u.test(companyPath) || !revision) {
     throw new Error("Workspace archive requires a company, thread, and immutable revision.");
   }

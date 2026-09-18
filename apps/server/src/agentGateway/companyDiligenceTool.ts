@@ -86,7 +86,7 @@ export function makeCompanyDiligenceTools(input: {
           ? payload.distributedPiRuntime : undefined,
       );
       const checkout = binding?.repositoryCheckout?.binding;
-      if (!binding || binding.threadId !== threadId ||
+      if (!binding || binding.repositoryUnavailable || binding.threadId !== threadId ||
           binding.fence.lifecycleGeneration !== runtime?.lifecycleGeneration ||
           !checkout || checkout.kind !== repository.kind || checkout.origin !== repository.origin ||
           checkout.owner !== repository.owner || checkout.repository !== repository.repository ||
@@ -106,7 +106,7 @@ export function makeCompanyDiligenceTools(input: {
       }
       yield* context.assertCallerTurnActive();
       const result = yield* Effect.tryPromise({
-        try: () => api<{ run_id: string; status: string; commit_sha?: string | null; saved_paths: string[] }>(`/internal/companies/${companyId}/diligence`, {
+        try: () => api<{ run_id: string; status: string; commit_sha?: string | null; workspace_commit_sha?: string | null; saved_paths: string[] }>(`/internal/companies/${companyId}/diligence`, {
           company_slug: companySlug, thread_id: threadId, turn_id: context.callerTurnId,
           requested_by: author.label ?? author.subject, mode, files,
         }),
@@ -121,6 +121,7 @@ export function makeCompanyDiligenceTools(input: {
             threadId, result.commit_sha,
             files.map((file) => ({ source: "checkout" as const, path: file.path, sha256: file.sha256 })),
             TurnId.makeUnsafe(context.callerTurnId),
+            result.workspace_commit_sha ?? undefined,
           ).pipe(Effect.match({ onSuccess: () => true, onFailure: () => false }));
         }
       }

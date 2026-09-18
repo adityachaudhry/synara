@@ -37,10 +37,12 @@ export function makeRepositoryCheckoutPlan(input: {
   readonly credentialConfigPath?: string;
   readonly checkoutRoot?: string;
   readonly repositoryOrigin?: string;
+  readonly companyOnly?: boolean;
 }) {
   const checkoutRoot = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
   const cwd = path.posix.join(checkoutRoot, input.binding.path);
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
+  const executionRef = input.companyOnly ? `workspaces/${input.binding.path.split("/").at(-1)}` : input.binding.ref;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
     ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git}`
@@ -50,10 +52,10 @@ export function makeRepositoryCheckoutPlan(input: {
   const command = [
     "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
     `mkdir -p ${shellQuote(checkoutRoot)}`,
-    `${input.credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ` : ""}GIT_TERMINAL_PROMPT=0 git clone --no-checkout --depth=1 --filter=blob:none --config core.sparseCheckout=true --config core.sparseCheckoutCone=true ${shellQuote(repositoryUrl)} ${shellQuote(checkoutRoot)}`,
+    `${input.credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ` : ""}GIT_TERMINAL_PROMPT=0 git clone ${input.companyOnly ? `--single-branch --branch ${shellQuote(executionRef)} ` : ""}--no-checkout --depth=1 --filter=blob:none --config core.sparseCheckout=true --config core.sparseCheckoutCone=true ${shellQuote(repositoryUrl)} ${shellQuote(checkoutRoot)}`,
     `mkdir -p ${shellQuote(path.posix.dirname(sparsePath))}`,
     `printf '%s' ${shellQuote(sparseCheckoutPattern(input.binding.path))} > ${shellQuote(sparsePath)}`,
-    `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none origin ${shellQuote(input.binding.ref)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags origin ${shellQuote(input.binding.ref)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
+    `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none origin ${shellQuote(executionRef)}; then printf '${CHECKOUT_MODE_MARKER}${input.companyOnly ? "company" : "partial"}\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags origin ${shellQuote(executionRef)} && printf '${CHECKOUT_MODE_MARKER}${input.companyOnly ? "company" : "shallow"}\\n'; fi`,
     `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
     `${sparseGit} checkout --detach FETCH_HEAD`,
     `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
@@ -135,9 +137,11 @@ export function makeRepositoryRefreshPlan(input: {
   readonly credentialConfigPath?: string;
   readonly checkoutRoot?: string;
   readonly repositoryOrigin?: string;
+  readonly companyOnly?: boolean;
 }) {
   const checkoutRoot = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
+  const executionRef = input.companyOnly ? `workspaces/${input.binding.path.split("/").at(-1)}` : input.binding.ref;
   const git = `git -C ${shellQuote(checkoutRoot)}`;
   const authenticatedGit = input.credentialConfigPath
     ? `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ${git} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true -c remote.origin.url=${shellQuote(repositoryUrl)} -c remote.origin.promisor=true`
@@ -149,14 +153,14 @@ export function makeRepositoryRefreshPlan(input: {
       "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
       `previous="$(${git} rev-parse HEAD)"`,
       `if ${git} remote get-url origin >/dev/null 2>&1; then ${git} remote set-url origin ${shellQuote(repositoryUrl)}; fi`,
-      `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.binding.ref)}`,
+      `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(executionRef)}`,
       `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
       `${authenticatedGit} merge --ff-only --no-edit "$source_commit"`,
       `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
       hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
       `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
       `printf '${COMMIT_MARKER}%s\\n' "$source_commit"`,
-      `printf '${CHECKOUT_MODE_MARKER}partial\\n'`,
+      `printf '${CHECKOUT_MODE_MARKER}${input.companyOnly ? "company" : "partial"}\\n'`,
       `node -e ${shellQuote(changed)} "$previous" "$source_commit"`,
     ].join(" && "),
   };
@@ -171,15 +175,15 @@ export function parseRepositoryRefreshResult(stdout: string) {
 
 export function parseRepositoryCheckoutResult(stdout: string): {
   readonly commit: string;
-  readonly checkoutMode: "partial" | "shallow";
+  readonly checkoutMode: "partial" | "shallow" | "company";
 } {
   const commit = stdout.match(
     new RegExp(`(?:^|\\n)${COMMIT_MARKER}([0-9a-f]{40})(?:\\n|$)`, "u"),
   )?.[1];
   const checkoutMode = stdout.match(
-    new RegExp(`(?:^|\\n)${CHECKOUT_MODE_MARKER}(partial|shallow)(?:\\n|$)`, "u"),
+    new RegExp(`(?:^|\\n)${CHECKOUT_MODE_MARKER}(partial|shallow|company)(?:\\n|$)`, "u"),
   )?.[1];
-  if (!commit || (checkoutMode !== "partial" && checkoutMode !== "shallow")) {
+  if (!commit || (checkoutMode !== "partial" && checkoutMode !== "shallow" && checkoutMode !== "company")) {
     throw new Error("Repository checkout output did not contain a verified commit and mode.");
   }
   return { commit, checkoutMode };
