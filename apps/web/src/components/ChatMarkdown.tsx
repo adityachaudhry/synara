@@ -4,6 +4,7 @@
 // Exports: ChatMarkdown
 
 import { useSynaraHostSidebar } from "../hostSidebar";
+import { TranscriptMarkerActions } from "./chat/TranscriptMarkerActions";
 import { useTranscriptMarkerPaint } from "./chat/transcriptMarkerRanges";
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
@@ -116,6 +117,9 @@ interface ChatMarkdownProps {
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
+  markerSegmentIndex?: number | undefined;
+  includeLegacyMarkers?: boolean | undefined;
+  onRemoveMarker?: ((id: ThreadMarker["id"]) => Promise<void> | void) | undefined;
   /**
    * "user" renders a sent prompt: GFM plus hard line breaks (single newlines
    * survive the way they were typed), no math/KaTeX and no literal-dollar
@@ -1120,7 +1124,10 @@ function ChatMarkdown({
   className: classNameProp,
   style,
   onImageExpand,
-  markers,
+  markers: allMarkers,
+  markerSegmentIndex,
+  includeLegacyMarkers,
+  onRemoveMarker,
   onTaskToggle,
   knownAbsoluteFilePaths: knownAbsoluteFilePathsProp,
   variant: variantProp,
@@ -1134,6 +1141,10 @@ function ChatMarkdown({
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
   const markerRootRef = useRef<HTMLDivElement>(null);
+  const markers = useMemo(() => allMarkers?.filter((marker) =>
+    marker.segmentIndex === markerSegmentIndex ||
+    (marker.segmentIndex === undefined && includeLegacyMarkers !== false)),
+    [allMarkers, markerSegmentIndex, includeLegacyMarkers]);
   const markerViewer = useSynaraHostSidebar()?.currentMessageAuthor?.subject;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -1398,7 +1409,9 @@ function ChatMarkdown({
   return (
     <div
       ref={markerRootRef}
-      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      data-transcript-segment-index={markerSegmentIndex}
+      data-transcript-legacy-markers={includeLegacyMarkers !== false ? "true" : "false"}
+      className={`chat-markdown relative ${markers?.length && onRemoveMarker ? "pr-7" : ""} ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
     >
       <ReactMarkdown
@@ -1409,6 +1422,7 @@ function ChatMarkdown({
       >
         {renderedText}
       </ReactMarkdown>
+      {markers?.length && onRemoveMarker ? <TranscriptMarkerActions rootRef={markerRootRef} markers={markers} viewerSubject={markerViewer} onRemove={onRemoveMarker} renderedText={renderedText} /> : null}
     </div>
   );
 }

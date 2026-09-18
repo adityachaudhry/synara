@@ -3566,7 +3566,7 @@ export default function ChatView({
       if (!activeThreadId) {
         return;
       }
-      void dispatchThreadMarkerRemove(activeThreadId, markerId).catch((error) => {
+      return dispatchThreadMarkerRemove(activeThreadId, markerId).catch((error) => {
         console.error("Failed to remove thread marker", error);
         toastManager.add({
           type: "error",
@@ -5458,6 +5458,7 @@ export default function ChatView({
           marker.messageId === messageId &&
           marker.author?.subject === hostSidebar?.currentMessageAuthor?.subject &&
           marker.textFormat === pendingSelection.selection.markerRange?.textFormat &&
+          marker.segmentIndex === pendingSelection.selection.markerRange?.segmentIndex &&
           marker.style === style &&
           marker.startOffset < range.endOffset &&
           range.startOffset < marker.endOffset,
@@ -12406,6 +12407,7 @@ export default function ChatView({
                       : {})}
                     onForkFromMessage={handleForkFromMessage}
                     threadMarkers={threadMarkers}
+                    onRemoveThreadMarker={handleRemoveThreadMarker}
                     goalAchievements={goalAchievements}
                     enteringUserMessageIds={enteringUserMessageIds}
                     tailAnchorMessageId={
