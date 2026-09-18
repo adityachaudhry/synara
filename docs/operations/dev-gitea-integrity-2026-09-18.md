@@ -136,3 +136,17 @@ Source references:
 - Git 2.54 default maintenance implementation: https://github.com/git/git/blob/v2.54.0/builtin/gc.c
 - Trace write-failure handling: https://github.com/git/git/blob/v2.54.0/trace2/tr2_dst.c#L340-L369
 - Gitea 1.27 native integrity checks: https://github.com/go-gitea/gitea/blob/v1.27.0/services/repository/check.go
+
+Final verification: Synara `01c33902b0a3bfc484d0fa2c35c4f126283fce9a`
+(deploy run `35391485860`) also recognizes the exact `bad tree object <hash>`
+diagnostic from this incident. The final browser trial created another sandbox,
+used the Read tool on `analysis/company_snapshot.md`, and returned ChipSage's
+product summary. Post-deployment authenticated clone and temporary branch
+create/delete passed; receive-pack exits were captured as 0 in the new telemetry.
+
+The stock `gitea/gitea:1.27.0` Railway image source was detached after deploying the
+custom image so later configuration updates do not silently restore the stock
+image without telemetry. Current dev Gitea deployment:
+`a94b0d89-173c-481a-9d23-3d426cf80ad3` (SUCCESS). Application/image code continues
+through `.github/workflows/deploy.yml`; no application code was shipped locally.
+The temporary repair SSH key was revoked and its local files removed.
