@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ThreadMarker } from "@synara/contracts";
 import { PencilIcon, TextWrapIcon } from "~/lib/icons";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
@@ -23,7 +23,7 @@ export function TranscriptMarkerActions({ rootRef, markers, viewerSubject, onRem
     closeTimer.current = setTimeout(() => setOpenId(null), 180);
   };
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const measure = () => {
