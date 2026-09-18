@@ -40,6 +40,11 @@ describe("threadMarkers", () => {
     expect(removeThreadMarker(added, markerId("a")).map((entry) => entry.id)).toEqual([
       markerId("b"),
     ]);
+    const firstSegment = marker("segment-0", { textFormat: "rendered", segmentIndex: 0 });
+    const secondSegment = marker("segment-1", { textFormat: "rendered", segmentIndex: 1 });
+    const segmented = addThreadMarker([firstSegment], secondSegment);
+    expect(segmented).toEqual([firstSegment, secondSegment]);
+    expect(removeThreadMarker(segmented, firstSegment.id)).toEqual([secondSegment]);
   });
 
   it("replaces overlapping markers so only one marker owns a text range", () => {
