@@ -514,7 +514,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                 Effect.tap((result) => {
                   if (result.exitCode === 0 && !result.timedOut) return Effect.void;
                   const missingObject = result.stderr.match(
-                    /(?:bad (?:tree|object)|Could not read) ([a-f0-9]{40,64})\b/,
+                    /(?:bad (?:(?:tree|commit|blob) )?object|Could not read) ([a-f0-9]{40,64})\b/,
                   )?.[1];
                   return Effect.logError("provider repository checkout failed", {
                     ...fence,
