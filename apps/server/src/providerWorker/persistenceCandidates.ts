@@ -68,7 +68,7 @@ const listCheckoutChangedPaths = Effect.fnUntraced(function* (input: {
   const root = REPOSITORY_CHECKOUT_ROOT;
   const scopedPath = repositoryBinding.path;
   const command = [
-    `git -C ${shellQuote(root)} diff --name-only -z --diff-filter=ACMRTUXB HEAD -- ${shellQuote(scopedPath)}`,
+    `git -C ${shellQuote(root)} diff --name-only -z --diff-filter=ACMRTUXB ${shellQuote(input.binding.repositoryCheckout!.commit)} -- ${shellQuote(scopedPath)}`,
     `git -C ${shellQuote(root)} ls-files --others --exclude-standard -z -- ${shellQuote(scopedPath)}`,
   ].join(" && ");
   const result = yield* input.workspaceRuntime.exec(input.binding.workspace, {

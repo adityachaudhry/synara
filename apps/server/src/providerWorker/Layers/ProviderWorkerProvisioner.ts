@@ -697,6 +697,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ? (migrate ? makeRepositoryIsolationPlan : saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
               companyOnly,
               allowEmpty: saved?.binding.repositoryCheckout === undefined,
+              verifiedCommit: saved?.binding.repositoryCheckout?.commit,
               binding: input.repositoryBinding,
               repositoryOrigin: repositoryOrigin(input.repositoryBinding),
               ...(options.repositoryAuthorization
@@ -942,6 +943,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           ? makeRepositoryIsolationPlan : makeRepositoryRefreshPlan)({
           companyOnly,
           allowEmpty: binding.repositoryCheckout === undefined,
+          verifiedCommit: binding.repositoryCheckout?.commit,
           binding: repository,
           repositoryOrigin: repositoryOrigin(repository),
           ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
@@ -951,11 +953,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             path: REPOSITORY_CREDENTIAL_CONFIG_PATH,
             data: makeRepositoryCredentialConfig(repository, options.repositoryAuthorization, repositoryOrigin(repository)),
             mode: 0o600,
-          });
+          }).pipe(Effect.mapError((cause) => provisionError("repository.refresh.credentials", "Repository credentials could not be prepared safely.", cause, binding.workspace.runtimeId)));
         }
         const result = yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
           const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: companyOnly ? `timeout --kill-after=5s 30s sh -c ${shellQuote(plan.command)}` : plan.command, timeoutSeconds: companyOnly ? 45 : 300 })));
-          const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 });
+          const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 }).pipe(
+            Effect.mapError((cause) => provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", cause, binding.workspace.runtimeId)),
+          );
           if (cleanup.exitCode !== 0 || cleanup.timedOut) return yield* provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", undefined, binding.workspace.runtimeId);
           if (Exit.isFailure(refreshed)) return yield* Effect.failCause(refreshed.cause);
           return refreshed.value;
