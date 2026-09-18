@@ -44,7 +44,7 @@ finally:
 `;
 
 export function isWorkspaceFilePathAllowed(binding: ProviderWorkerRuntimeBinding, filePath: string): boolean {
-  const companyRoot = binding.repositoryCheckout
+  const companyRoot = binding.repositoryCheckout && !binding.repositoryUnavailable
     ? `/workspace/repository/${binding.repositoryCheckout.binding.path}/` : null;
   const root = filePath.startsWith("/workspace/repository/") ? companyRoot : "/workspace/";
   return !!root && filePath.startsWith(root) &&

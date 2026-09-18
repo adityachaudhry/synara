@@ -1663,6 +1663,10 @@ export const chatPersistenceReconcileEffectRouteLayer = HttpRouter.add(
       typeof payload === "object" && payload !== null && "commit" in payload
         ? String(payload.commit)
         : "";
+    const workspaceCommit = typeof payload === "object" && payload !== null && "workspaceCommit" in payload
+      ? String(payload.workspaceCommit) : undefined;
+    if (workspaceCommit !== undefined && !/^[a-f0-9]{40}$/.test(workspaceCommit))
+      return HttpServerResponse.jsonUnsafe({ error: "Invalid company snapshot commit" }, { status: 400 });
     const persistedFiles =
       typeof payload === "object" &&
       payload !== null &&
@@ -1692,6 +1696,8 @@ export const chatPersistenceReconcileEffectRouteLayer = HttpRouter.add(
         ThreadId.makeUnsafe(threadId),
         commit,
         persistedFiles as ProviderPersistenceCandidateSelection[],
+        undefined,
+        workspaceCommit,
       )
       .pipe(
         Effect.map((result) => HttpServerResponse.jsonUnsafe({ synchronized: true, ...result })),

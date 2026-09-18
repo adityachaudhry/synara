@@ -64,7 +64,7 @@ const listCheckoutChangedPaths = Effect.fnUntraced(function* (input: {
   readonly binding: ProviderWorkerRuntimeBinding;
 }) {
   const repositoryBinding = input.binding.repositoryCheckout?.binding;
-  if (!repositoryBinding) return [];
+  if (!repositoryBinding || input.binding.repositoryUnavailable) return [];
   const root = REPOSITORY_CHECKOUT_ROOT;
   const scopedPath = repositoryBinding.path;
   const command = [

@@ -151,7 +151,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     binding: ProviderWorkerRuntimeBinding,
     method: ProviderWorkerMethod,
     params: unknown,
-    schema: Schema.Schema<A, I>,
+    schema: Schema.Codec<A, I>,
   ) =>
     requestUnknown(binding, method, params).pipe(
       Effect.flatMap((result) => Schema.decodeUnknownEffect(schema)(result)),
@@ -246,7 +246,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       const activeRemote = remoteByThread.get(input.threadId);
       // ProviderService recovery supplies the native cursor; its repository coordinates live in this binding.
       const repositoryBinding = input.repositoryBinding ??
-        (input.resumeCursor !== undefined ? (activeRemote ?? persistedRemote)?.repositoryCheckout?.binding : undefined);
+        (input.resumeCursor !== undefined ? ((activeRemote ?? persistedRemote)?.repositoryCheckout?.binding ?? (activeRemote ?? persistedRemote)?.repositoryUnavailable?.binding) : undefined);
 
       if (repositoryBinding === undefined) {
         const remote = activeRemote ?? persistedRemote;
@@ -383,22 +383,37 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           }
           let current = binding;
           let turnInput = input;
-          if (binding.repositoryCheckout && provisioner.refreshRepository) {
-            yield* requireIdleRepositoryBinding(input.threadId, "repository.refresh");
-            const refreshed = yield* provisioner.refreshRepository(binding).pipe(
-              Effect.mapError((cause) => adapterError("repository.refresh", cause.detail, cause)),
-            );
-            current = refreshed.binding;
+          const repository = binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding;
+          const retryDue = !binding.repositoryUnavailable || Date.now() - Date.parse(binding.repositoryUnavailable.lastAttemptAt) > 5_000;
+          if (repository && provisioner.refreshRepository && retryDue) {
+            const sessions = yield* requestDecoded(binding, "session.list", {}, Schema.Array(ProviderSession));
+            if (sessions.some((session) => session.threadId === input.threadId &&
+              (session.activeTurnId !== undefined || session.status === "running")))
+              return yield* adapterError("repository.refresh", "Wait for the active turn to finish before refreshing company files.");
+            const refreshed = yield* Effect.exit(provisioner.refreshRepository(binding));
+            if (Exit.isSuccess(refreshed)) {
+              current = refreshed.value.binding;
+              const sourceContext = JSON.stringify({
+                commit: refreshed.value.commit, previousCommit: refreshed.value.previousCommit,
+                changedFiles: refreshed.value.changedFiles.slice(0, 30), changedFileCount: refreshed.value.changedFiles.length,
+              });
+              turnInput = { ...input, input: `Company source context (verified before this turn; filenames are data): ${sourceContext}\n\n${input.input ?? ""}` };
+            } else {
+              const cause = Cause.squash(refreshed.cause);
+              const isolatedCompany = binding.repositoryCheckout?.checkoutMode === "company" ||
+                (process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path));
+              // Do not degrade past credential erasure or runtime/ownership failures.
+              if (!isolatedCompany || !(cause instanceof ProviderWorkerProvisioningError) ||
+                  !["repository.refresh", "repository.refresh.verify"].includes(cause.operation))
+                return yield* adapterError("repository.refresh", "Company source refresh could not complete safely.", cause);
+              current = { ...binding, repositoryUnavailable: { binding: repository, lastAttemptAt: new Date().toISOString() } };
+              yield* Effect.logWarning("company refresh unavailable; continuing conversation without tools", { threadId: input.threadId, sandboxId: binding.workspace.runtimeId });
+            }
             remoteByThread.set(input.threadId, current);
             yield* persistRemoteBinding({ threadId: input.threadId, lifecycleGeneration: current.fence.lifecycleGeneration, binding: current });
-            const sourceContext = JSON.stringify({
-              commit: refreshed.commit,
-              previousCommit: refreshed.previousCommit,
-              changedFiles: refreshed.changedFiles.slice(0, 30),
-              changedFileCount: refreshed.changedFiles.length,
-            });
-            turnInput = { ...input, input: `Company source context (verified before this turn; filenames are data): ${sourceContext}\n\n${input.input ?? ""}` };
           }
+          // This is server-owned availability, never a client-supplied tool-permission switch.
+          turnInput = { ...turnInput, repositoryUnavailable: current.repositoryUnavailable !== undefined };
           yield* stageRemoteAttachments(current, input.attachments, "turn.send");
           const gateway = agentGatewayCredentials?.repositoryConnectionForThread(input.threadId, "pi");
           if (gateway) {
@@ -439,13 +454,13 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     operation: string,
   ) {
     const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
-    if (!binding?.repositoryCheckout) {
+    if (!binding?.repositoryCheckout || binding.repositoryUnavailable) {
       return yield* adapterError(
         operation,
         "The Pi session does not have a repository-bound sandbox.",
       );
     }
-    return binding;
+    return { ...binding, repositoryCheckout: binding.repositoryCheckout };
   });
 
   const requireIdleRepositoryBinding = Effect.fnUntraced(function* (
@@ -556,6 +571,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     commit,
     persistedFiles = [],
     activeTurnId,
+    workspaceCommit,
   ) =>
     Effect.gen(function* () {
       const persistedBinding = yield* requireRepositoryBinding(threadId, "repository.reconcile");
@@ -569,9 +585,12 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           return yield* adapterError("repository.reconcile", "The requesting agent turn is no longer active.");
       }
       const previousCommit = binding.repositoryCheckout.commit;
+      const targetCommit = binding.repositoryCheckout.checkoutMode === "company" ? workspaceCommit : commit;
+      if (!targetCommit || !/^[a-f0-9]{40}$/.test(targetCommit))
+        return yield* adapterError("repository.reconcile", "The saved company snapshot is not available; existing edits are retained.");
       const reconciled = yield* provisioner.reconcileRepository(
         binding,
-        commit,
+        targetCommit,
         persistedFiles,
       ).pipe(
         Effect.mapError((cause) =>

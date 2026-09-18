@@ -1,3 +1,4 @@
+import { makeRepositoryIsolationPlan } from "../repositoryIsolation";
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -125,6 +126,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
+    const companyRefsEnabled = process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true";
     const repositoryOrigin = (binding: { readonly origin: string }) =>
       options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
         ? options.repositoryOriginOverride.origin : binding.origin;
@@ -215,7 +217,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       while (count() > limit) {
         const candidate = Array.from(cachedDisks.entries()).find(([, saved]) =>
           saved.checkpoint && !diskReaders.has(saved.checkpoint.key) &&
-          /^companies\/[a-z0-9][a-z0-9-]*$/.test(saved.binding.repositoryCheckout?.binding.path ?? ""));
+          /^companies\/[a-z0-9][a-z0-9-]*$/.test((saved.binding.repositoryCheckout?.binding ?? saved.binding.repositoryUnavailable?.binding)?.path ?? ""));
         if (!candidate) return yield* provisionError("workspace.archive.capacity",
           "No saved workspace can be archived safely; retaining all disk snapshots.", undefined);
         const [threadId, saved] = candidate;
@@ -440,6 +442,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         Parameters<ProviderWorkerProvisionerShape["start"]>[0]["agentGatewayConnection"]
       >;
       readonly checkoutCommand?: string;
+      readonly allowUnavailable?: boolean;
+      readonly previousCheckout?: ProviderWorkerRuntimeBinding["repositoryCheckout"];
       readonly repositoryCredential?: string;
     }) {
       const fence: ProviderWorkerFence = {
@@ -457,6 +461,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       let durableSessionName: string | undefined;
 
       const launch = Effect.gen(function* () {
+        let repositoryUnavailable = false;
         const repositoryCheckout =
           input.repositoryBinding === undefined || input.checkoutCommand === undefined
             ? undefined
@@ -495,8 +500,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                     const checkoutExit = yield* Effect.exit(
                       restore(
                         workspaceRuntime.exec(input.workspace, {
-                          command: input.checkoutCommand,
-                          timeoutSeconds: 120,
+                          command: input.allowUnavailable ? `timeout --kill-after=5s 30s sh -c ${shellQuote(input.checkoutCommand!)}` : input.checkoutCommand!,
+                          timeoutSeconds: input.allowUnavailable ? 45 : 120,
                         }),
                       ),
                     );
@@ -547,6 +552,18 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                       ),
                 ),
                 observeProviderOperation("repository.checkout", { ...fence }),
+                Effect.catch((cause) => {
+                  // Credential cleanup failures remain fatal. Do not expose secrets to a live agent.
+                  if (!input.allowUnavailable || !(cause instanceof ProviderWorkerProvisioningError) ||
+                      !["checkout.exec", "checkout.verify"].includes(cause.operation)) return Effect.fail(cause);
+                  repositoryUnavailable = true;
+                  return Effect.logWarning("company files unavailable; starting conversation without tools", { ...fence, operation: cause.operation }).pipe(
+                    Effect.andThen(workspaceRuntime.exec(input.workspace, { command: `mkdir -p ${shellQuote(input.cwd)}`, timeoutSeconds: 10 })),
+                    Effect.flatMap((result) => result.exitCode === 0 && !result.timedOut
+                      ? Effect.succeed(input.previousCheckout)
+                      : Effect.fail(provisionError("workspace.directory", "Could not prepare the chat workspace.", undefined, fence.sandboxId))),
+                  );
+                }),
               );
         const artifactProbe = yield* workspaceRuntime.exec(input.workspace, {
           command: `test -f ${shellQuote(WORKER_ARTIFACT_PATH)} && printf '%s  %s\\n' ${shellQuote(artifactDigest)} ${shellQuote(WORKER_ARTIFACT_PATH)} | sha256sum --check --status`,
@@ -611,6 +628,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           processSupervision: durable.supervision,
           cwd: input.cwd,
           homeDir: input.homeDir,
+          ...(repositoryUnavailable && input.repositoryBinding ? {
+            repositoryUnavailable: { binding: input.repositoryBinding, lastAttemptAt: new Date().toISOString() },
+          } : {}),
           ...(input.repositoryBinding === undefined || repositoryCheckout === undefined
             ? {}
             : {
@@ -666,13 +686,17 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
 
     const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
       withSavedDisk(input.threadId, (stored) => Effect.gen(function* () {
-        const previousRepository = stored?.binding.repositoryCheckout?.binding;
+        const previousRepository = stored?.binding.repositoryCheckout?.binding ?? stored?.binding.repositoryUnavailable?.binding;
         const sameRepository = input.repositoryBinding && previousRepository &&
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
         const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
         const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
+        const companyOnly = (companyRefsEnabled && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
+        const migrate = companyOnly && saved && (saved.binding.repositoryUnavailable || saved.binding.repositoryCheckout?.checkoutMode !== "company");
         const checkout = input.repositoryBinding
-          ? (saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
+          ? (migrate ? makeRepositoryIsolationPlan : saved ? makeRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
+              companyOnly,
+              allowEmpty: saved?.binding.repositoryCheckout === undefined,
               binding: input.repositoryBinding,
               repositoryOrigin: repositoryOrigin(input.repositoryBinding),
               ...(options.repositoryAuthorization
@@ -703,6 +727,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             lifecycleGeneration: input.lifecycleGeneration,
             cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
             homeDir: saved?.binding.homeDir ?? DEFAULT_HOME_DIR,
+            allowUnavailable: companyOnly,
+            ...(saved?.binding.repositoryCheckout ? { previousCheckout: saved.binding.repositoryCheckout } : {}),
             ...(input.repositoryBinding === undefined
               ? {}
               : { repositoryBinding: input.repositoryBinding }),
@@ -776,7 +802,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           return yield* provisionError("workspace.restore", "Cannot restore another thread's writable worker disk.", undefined, binding.workspace.runtimeId);
         }
         yield* retireWorkspace(binding, "worker generation replaced");
-        const repositoryBinding = input.repositoryBinding ?? binding.repositoryCheckout?.binding;
+        const repositoryBinding = input.repositoryBinding ?? binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding;
         return yield* createBinding({ ...input, ...(repositoryBinding ? { repositoryBinding } : {}) });
       }).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
         ? cause : provisionError("restart", "Failed to restore the provider worker disk.", cause, binding.workspace.runtimeId)));
@@ -904,14 +930,18 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
 
     const refreshRepository: NonNullable<ProviderWorkerProvisionerShape["refreshRepository"]> = (binding) =>
       lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
-        const repository = binding.repositoryCheckout?.binding;
+        const repository = binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding;
         if (!repository) return yield* provisionError("repository.refresh", "Worker has no company source binding.", undefined, binding.workspace.runtimeId);
         const active = binding.threadId ? activeByThread.get(binding.threadId) : undefined;
         if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
           return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
         }
         yield* prepareWorkerToolchain(binding.workspace);
-        const plan = makeRepositoryRefreshPlan({
+        const companyOnly = (companyRefsEnabled && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path)) || binding.repositoryCheckout?.checkoutMode === "company";
+        const plan = (companyOnly && (binding.repositoryUnavailable || binding.repositoryCheckout?.checkoutMode !== "company")
+          ? makeRepositoryIsolationPlan : makeRepositoryRefreshPlan)({
+          companyOnly,
+          allowEmpty: binding.repositoryCheckout === undefined,
           binding: repository,
           repositoryOrigin: repositoryOrigin(repository),
           ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
@@ -924,7 +954,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           });
         }
         const result = yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
-          const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: plan.command, timeoutSeconds: 300 })));
+          const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: companyOnly ? `timeout --kill-after=5s 30s sh -c ${shellQuote(plan.command)}` : plan.command, timeoutSeconds: companyOnly ? 45 : 300 })));
           const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 });
           if (cleanup.exitCode !== 0 || cleanup.timedOut) return yield* provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", undefined, binding.workspace.runtimeId);
           if (Exit.isFailure(refreshed)) return yield* Effect.failCause(refreshed.cause);
@@ -935,7 +965,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           try: () => parseRepositoryRefreshResult(result.stdout),
           catch: (cause) => provisionError("repository.refresh.verify", "Company refresh did not report its source commit.", cause, binding.workspace.runtimeId),
         });
-        const updated = { ...binding, repositoryCheckout: { ...binding.repositoryCheckout!, commit: refreshed.commit } };
+        const { repositoryUnavailable: _unavailable, ...readyBinding } = binding;
+        const updated = { ...readyBinding, repositoryCheckout: { binding: repository, commit: refreshed.commit,
+          checkoutMode: companyOnly ? "company" as const : binding.repositoryCheckout!.checkoutMode } };
         if (binding.threadId) activeByThread.set(binding.threadId, updated);
         yield* Effect.logInfo("provider company sources refreshed", { threadId: binding.threadId, sandboxId: binding.workspace.runtimeId, ...refreshed });
         return { binding: updated, ...refreshed };

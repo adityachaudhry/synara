@@ -431,6 +431,7 @@ async function createPiAgentSessionServices(
 }
 
 interface PiSessionContext {
+  suspendedToolNames?: string[];
   harnessPolicyDelivered?: boolean;
   readonly glasswingProfileEnabled: boolean;
   readonly gatewayControlAvailable: boolean;
@@ -2758,12 +2759,25 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             resumeCursor: getSessionFile(context.runtime.session),
           };
         }
+        if (input.repositoryUnavailable) {
+          context.suspendedToolNames ??= context.runtime.session.getActiveToolNames();
+          context.runtime.session.setActiveToolsByName([]);
+          offerRuntimeEvent({
+            ...makeEventBase(context), type: "runtime.warning",
+            payload: { message: "Company files are temporarily unavailable. Chat is available; file actions will resume after recovery.",
+              detail: { code: "company_files_unavailable", activeToolCount: context.runtime.session.getActiveToolNames().length } },
+          } satisfies ProviderRuntimeEvent);
+        } else if (context.suspendedToolNames) {
+          context.runtime.session.setActiveToolsByName(context.suspendedToolNames);
+          delete context.suspendedToolNames;
+        }
         const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
           provider: PROVIDER,
           scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
         });
         const providerText = [
           harnessPolicy,
+          input.repositoryUnavailable ? "Company files are currently unavailable and all tools are disabled for this turn. Continue conversation using only the messages provided. Do not claim to have read, verified, edited or saved company files, or started diligence. If the request needs those operations, explain the limitation; do not invent file contents." : null,
           context.glasswingProfileEnabled
             ? renderGlasswingMessageAuthorContext(input.author)
             : null,
