@@ -105,3 +105,34 @@ checkout command arguments.
 
 Investigation artifacts are in the local Glasswing checkout's
 `.tmp/dev-pi-failure-20260918/` (private; includes recovery object payloads).
+
+## Maintenance telemetry gap closed
+
+Glasswing dev commit `68d7659466a1fc225ab02a229dedcf8bfbd34bc9`, deployed by
+Actions run `35391117633`, adds `ops/gitea` with the same pinned Gitea 1.27.0
+image and Git 2.54.0. A supervised standard-library collector records Git
+maintenance, pack, receive, and fsck command starts/exits. IDs are hashed; raw
+arguments, credentials, and arbitrary Trace2 payloads are never emitted to logs.
+
+Native traces go to a git-owned mode-700 directory on `/dev/shm` (verified bounded
+to 61 MiB), not the data volume. Git caps trace creation at 128 files. Completed
+files are removed; abandoned files expire. Raw traces exist transiently in RAM.
+The receiver uses no socket/pipe backpressure on Git; a first socket-based design
+was replaced after independent review identified a blocking-write hazard.
+
+Live Git 2.54 verification: a full trace destination (`/dev/full`) did not fail
+Git; twelve invocations with a non-draining trace directory all succeeded and
+hit the native file cap. Local protocol trials also verified cap-sentinel recovery
+and credential-canary filtering. Live logs recorded fsck exit 0 after deployment.
+
+Remaining limitation: historical deletion provenance cannot be reconstructed from
+logs that were never recorded. New lifecycle evidence improves attribution but
+is not a filesystem audit of arbitrary administrator deletions. No claim is made
+that logging, or Git configuration, can guarantee zero future infrastructure
+failures.
+
+Source references:
+- Git 2.54 automatic-maintenance gate: https://github.com/git/git/blob/v2.54.0/run-command.c#L1838-L1860
+- Git 2.54 default maintenance implementation: https://github.com/git/git/blob/v2.54.0/builtin/gc.c
+- Trace write-failure handling: https://github.com/git/git/blob/v2.54.0/trace2/tr2_dst.c#L340-L369
+- Gitea 1.27 native integrity checks: https://github.com/go-gitea/gitea/blob/v1.27.0/services/repository/check.go
