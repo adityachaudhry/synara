@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ThreadMarker } from "@synara/contracts";
-import { PencilIcon, TextWrapIcon } from "~/lib/icons";
+import { PencilIcon, TextWrapIcon, XIcon } from "~/lib/icons";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { findTranscriptMarkerRange } from "./transcriptMarkerRanges";
 
@@ -16,6 +16,7 @@ export function TranscriptMarkerActions({ rootRef, markers, viewerSubject, onRem
   const [groups, setGroups] = useState<MarkGroup[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const pointerType = useRef("mouse");
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelClose = () => { if (closeTimer.current) clearTimeout(closeTimer.current); };
   const closeSoon = () => {
@@ -51,27 +52,48 @@ export function TranscriptMarkerActions({ rootRef, markers, viewerSubject, onRem
     return () => observer.disconnect();
   }, [markers, rootRef, renderedText]);
 
+  const removeMarker = (marker: ThreadMarker) => {
+    cancelClose();
+    setOpenId(null);
+    setRemovingId(marker.id);
+    void Promise.resolve(onRemove(marker.id)).finally(() => setRemovingId(null));
+  };
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
+    const groupAtPoint = (event: PointerEvent) => groups.find(({ ranges }) => ranges.some((range) =>
+      [...range.getClientRects()].some((rect) => event.clientX >= rect.left && event.clientX <= rect.right &&
+        event.clientY >= rect.top && event.clientY <= rect.bottom)));
     const move = (event: PointerEvent) => {
       if (window.getSelection()?.toString() || event.buttons) return;
       if (event.target instanceof Element && event.target.closest('[data-transcript-marker-actions]')) return;
-      const group = groups.find(({ ranges }) => ranges.some((range) => [...range.getClientRects()].some((rect) =>
-        event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom)));
+      const group = groupAtPoint(event);
       if (group) { cancelClose(); setOpenId(group.markers[0]!.id); }
       else closeSoon();
+    };
+    const tap = (event: PointerEvent) => {
+      if (event.pointerType !== "touch" || window.getSelection()?.toString()) return;
+      if (event.target instanceof Element && event.target.closest('[data-transcript-marker-actions]')) return;
+      const group = groupAtPoint(event);
+      if (group) { cancelClose(); setOpenId(group.markers[0]!.id); }
+    };
+    const leave = (event: PointerEvent) => {
+      // Touch emits pointerleave on release, even when the finger just opened details.
+      if (event.pointerType !== "touch") closeSoon();
     };
     const close = (event: Event) => {
       if (event.target instanceof Element && event.target.closest('[data-transcript-marker-actions]')) return;
       setOpenId(null);
     };
     root.addEventListener("pointermove", move);
-    root.addEventListener("pointerleave", closeSoon);
+    root.addEventListener("pointerup", tap);
+    root.addEventListener("pointerleave", leave);
     window.addEventListener("scroll", close, true);
     return () => {
       root.removeEventListener("pointermove", move);
-      root.removeEventListener("pointerleave", closeSoon);
+      root.removeEventListener("pointerup", tap);
+      root.removeEventListener("pointerleave", leave);
       window.removeEventListener("scroll", close, true);
       cancelClose();
     };
@@ -83,14 +105,29 @@ export function TranscriptMarkerActions({ rootRef, markers, viewerSubject, onRem
       const first = current[0];
       if (!first) return null;
       const ownGroup = current.some((marker) => viewerSubject && marker.author?.subject === viewerSubject);
+      const directRemove = current.length === 1 && ownGroup;
       const Icon = first.style === "underline" ? TextWrapIcon : PencilIcon;
       const groupLabel = current.length > 1 ? `${current.length} text marks` :
         `${first.style === "underline" ? "Underline" : "Highlight"} by ${first.author?.label ?? "team member"}`;
       return <Popover key={first.id} open={openId === first.id} onOpenChange={(open) => setOpenId(open ? first.id : null)}>
-        <PopoverTrigger openOnHover delay={80} closeDelay={180} aria-label={groupLabel}
-          className={`pointer-events-auto absolute right-0 flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 ${ownGroup ? "border-[var(--brand)]/40 bg-[var(--brand)]/10 text-[var(--brand)]" : "border-amber-400 bg-amber-100 text-amber-900"}`}
-          style={{ top: group.top }} onMouseEnter={cancelClose}>
-          <Icon className="size-3" />
+        <PopoverTrigger openOnHover={!directRemove} delay={80} closeDelay={180}
+          aria-label={directRemove ? `Remove ${first.style}` : groupLabel}
+          disabled={removingId !== null}
+          onPointerDown={(event) => { pointerType.current = event.pointerType; }}
+          onClick={(event) => {
+            // Touch opens the existing explicit-action panel. Mouse and keyboard
+            // activate the cross directly; keyboard clicks have detail === 0.
+            if (!directRemove || (pointerType.current === "touch" && event.detail > 0)) return;
+            event.preventBaseUIHandler();
+            removeMarker(first);
+          }}
+          className={`group/mark pointer-events-auto absolute right-0 flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 ${ownGroup ? "border-[var(--brand)]/40 bg-[var(--brand)]/10 text-[var(--brand)]" : "border-amber-400 bg-amber-100 text-amber-900"}`}
+          style={{ top: group.top }} onMouseEnter={() => {
+            cancelClose();
+            if (directRemove) setOpenId(null);
+          }}>
+          <Icon className={`size-3 ${directRemove ? "group-hover/mark:hidden group-focus-visible/mark:hidden" : ""}`} />
+          {directRemove && <XIcon className="hidden size-3 group-hover/mark:block group-focus-visible/mark:block" />}
           {current.length > 1 && <span className="text-[9px] leading-none">{current.length}</span>}
         </PopoverTrigger>
         <PopoverPopup side="left" align="start" initialFocus={false} className="w-72 rounded-lg" aria-label="Text mark details"
@@ -108,10 +145,7 @@ export function TranscriptMarkerActions({ rootRef, markers, viewerSubject, onRem
                 <p className="max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">{marker.selectedText}</p>
                 {owned && <button type="button" aria-label={`Delete ${marker.style}`} disabled={removingId === marker.id}
                   className="font-medium text-muted-foreground hover:text-[var(--brand)] disabled:opacity-50"
-                  onClick={() => {
-                    setRemovingId(marker.id);
-                    void Promise.resolve(onRemove(marker.id)).finally(() => setRemovingId(null));
-                  }}>{removingId === marker.id ? "Deleting…" : "Delete"}</button>}
+                  onClick={() => removeMarker(marker)}>{removingId === marker.id ? "Deleting…" : "Delete"}</button>}
               </div>;
             })}
           </div>
