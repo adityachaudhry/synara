@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { makeRepositoryCheckoutPlan, makeRepositoryRefreshPlan } from "../../apps/server/src/providerWorker/repositoryCheckout";
-import { makeRepositoryIsolationPlan } from "../../apps/server/src/providerWorker/repositoryIsolation";
+import { makeRepositoryIsolationPlan, makeVerifiedRepositoryRefreshPlan } from "../../apps/server/src/providerWorker/repositoryIsolation";
 
 const root = mkdtempSync(path.join(tmpdir(), "company-checkout-"));
 const env = { ...process.env, GIT_AUTHOR_NAME: "QA", GIT_AUTHOR_EMAIL: "qa@invalid", GIT_COMMITTER_NAME: "QA", GIT_COMMITTER_EMAIL: "qa@invalid" };
@@ -48,5 +48,10 @@ try {
   assert.equal(readFileSync(path.join(legacy, binding.path, "untracked.md"), "utf8"), "Untracked after local commit\n");
   run(makeRepositoryRefreshPlan({ ...input, checkoutRoot: legacy, companyOnly: true }).command);
   assert.equal(readFileSync(path.join(legacy, binding.path, "analysis/overview.md"), "utf8"), "Unpublished analyst draft\n");
+  const verifiedCompany = git(["-C", legacy, "rev-parse", "HEAD"]);
+  git(["-C", legacy, "add", "."]); git(["-C", legacy, "commit", "-m", "Local commit on isolated checkout"]);
+  run(makeVerifiedRepositoryRefreshPlan({ ...input, checkoutRoot: legacy, companyOnly: true, verifiedCommit: verifiedCompany }).command);
+  assert.equal(readFileSync(path.join(legacy, binding.path, "analysis/overview.md"), "utf8"), "Unpublished analyst draft\n");
+  assert.equal(git(["-C", legacy, "rev-parse", "HEAD"]), verifiedCompany);
   console.log("PASS: missing sibling cannot block isolated checkout; legacy draft/untracked preservation; subsequent refresh");
 } finally { rmSync(root, { recursive: true, force: true }); }

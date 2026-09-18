@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { makeRepositoryCheckoutPlan, REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout";
+import { makeRepositoryCheckoutPlan, makeRepositoryRefreshPlan, REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout";
 
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
@@ -55,4 +55,15 @@ try {
   // The initial checkout emits its own markers; retain only the conversion's verified result.
   const cleanup = `require("node:fs").rmSync(${JSON.stringify(staging)},{recursive:true,force:true})`;
   return { cwd: `${root}/${input.binding.path}`, command: `if ! ( ${checkout.command} ) >/dev/null; then node -e ${quote(cleanup)}; exit 1; fi; node -e ${quote(script)}` };
+}
+
+/** Local commits are still unpublished drafts; move their delta onto the verified company base. */
+export function makeVerifiedRepositoryRefreshPlan(input: Parameters<typeof makeRepositoryRefreshPlan>[0] & {
+  readonly verifiedCommit?: string | undefined;
+}) {
+  const refresh = makeRepositoryRefreshPlan(input);
+  if (!input.companyOnly || !input.verifiedCommit) return refresh;
+  const migrate = makeRepositoryIsolationPlan(input);
+  const root = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
+  return { cwd: refresh.cwd, command: `if [ "$(git -C ${quote(root)} rev-parse HEAD)" != ${quote(input.verifiedCommit)} ]; then ${migrate.command}; else ${refresh.command}; fi` };
 }
