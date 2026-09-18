@@ -511,6 +511,20 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   }),
                 );
               }).pipe(
+                Effect.tap((result) => {
+                  if (result.exitCode === 0 && !result.timedOut) return Effect.void;
+                  const missingObject = result.stderr.match(
+                    /(?:bad (?:tree|object)|Could not read) ([a-f0-9]{40,64})\b/,
+                  )?.[1];
+                  return Effect.logError("provider repository checkout failed", {
+                    ...fence,
+                    exitCode: result.exitCode,
+                    timedOut: result.timedOut,
+                    failureKind: missingObject ? "repository_integrity" :
+                      result.timedOut ? "timeout" : "git_checkout",
+                    ...(missingObject ? { missingObject } : {}),
+                  });
+                }),
                 Effect.flatMap((result) =>
                   result.exitCode === 0 && !result.timedOut
                     ? Effect.try({
@@ -532,6 +546,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                         ),
                       ),
                 ),
+                observeProviderOperation("repository.checkout", { ...fence }),
               );
         const artifactProbe = yield* workspaceRuntime.exec(input.workspace, {
           command: `test -f ${shellQuote(WORKER_ARTIFACT_PATH)} && printf '%s  %s\\n' ${shellQuote(artifactDigest)} ${shellQuote(WORKER_ARTIFACT_PATH)} | sha256sum --check --status`,
