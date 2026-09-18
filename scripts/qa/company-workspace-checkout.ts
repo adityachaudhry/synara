@@ -29,8 +29,11 @@ try {
   file("chipsage", "analysis/overview.md", "Original overview\n"); file("wonder", "analysis/overview.md", "Other company\n"); save(); project();
   git(["-C", source, "config", "uploadpack.allowFilter", "true"]);
   const legacy = path.join(root, "legacy"); run(makeRepositoryCheckoutPlan({ ...input, checkoutRoot: legacy }).command);
+  const verifiedCommit = git(["-C", legacy, "rev-parse", "HEAD"]);
   writeFileSync(path.join(legacy, binding.path, "analysis/overview.md"), "Unpublished analyst draft\n");
   writeFileSync(path.join(legacy, binding.path, "notes.md"), "Untracked analyst notes\n");
+  git(["-C", legacy, "add", "."]); git(["-C", legacy, "commit", "-m", "Unpublished local analyst commit"]);
+  writeFileSync(path.join(legacy, binding.path, "untracked.md"), "Untracked after local commit\n");
   file("chipsage", "analysis/new-source.md", "New verified source\n"); save(); project();
   const missing = git(["-C", source, "rev-parse", "HEAD:companies/wonder"]);
   rmSync(path.join(source, ".git", "objects", missing.slice(0, 2), missing.slice(2)));
@@ -38,10 +41,11 @@ try {
   assert.notEqual(globalAttempt.status, 0);
   const fresh = path.join(root, "fresh"); run(makeRepositoryCheckoutPlan({ ...input, checkoutRoot: fresh, companyOnly: true }).command);
   assert.equal(readFileSync(path.join(fresh, binding.path, "analysis/new-source.md"), "utf8"), "New verified source\n");
-  run(makeRepositoryIsolationPlan({ ...input, checkoutRoot: legacy }).command);
+  run(makeRepositoryIsolationPlan({ ...input, checkoutRoot: legacy, verifiedCommit }).command);
   assert.equal(readFileSync(path.join(legacy, binding.path, "analysis/overview.md"), "utf8"), "Unpublished analyst draft\n");
   assert.equal(readFileSync(path.join(legacy, binding.path, "notes.md"), "utf8"), "Untracked analyst notes\n");
   assert.equal(readFileSync(path.join(legacy, binding.path, "analysis/new-source.md"), "utf8"), "New verified source\n");
+  assert.equal(readFileSync(path.join(legacy, binding.path, "untracked.md"), "utf8"), "Untracked after local commit\n");
   run(makeRepositoryRefreshPlan({ ...input, checkoutRoot: legacy, companyOnly: true }).command);
   assert.equal(readFileSync(path.join(legacy, binding.path, "analysis/overview.md"), "utf8"), "Unpublished analyst draft\n");
   console.log("PASS: missing sibling cannot block isolated checkout; legacy draft/untracked preservation; subsequent refresh");
