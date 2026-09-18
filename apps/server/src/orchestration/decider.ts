@@ -1539,6 +1539,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (
           marker.id === command.markerId ||
           (marker.messageId === command.messageId &&
+            marker.segmentIndex === command.segmentIndex &&
             (marker.textFormat ?? "markdown") === (command.textFormat ?? "markdown") &&
             marker.startOffset === command.startOffset &&
             marker.endOffset === command.endOffset &&
@@ -1550,6 +1551,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           doThreadMarkerRangesOverlap(marker, {
             messageId: command.messageId,
             textFormat: command.textFormat,
+            segmentIndex: command.segmentIndex,
             startOffset: command.startOffset,
             endOffset: command.endOffset,
           })
@@ -1587,6 +1589,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             color: command.color,
             ...(command.author ? { author: command.author } : {}),
             ...(command.textFormat ? { textFormat: command.textFormat } : {}),
+            ...(command.segmentIndex !== undefined ? { segmentIndex: command.segmentIndex } : {}),
             ...(command.textPrefix !== undefined ? { textPrefix: command.textPrefix } : {}),
             ...(command.textSuffix !== undefined ? { textSuffix: command.textSuffix } : {}),
             label: null,

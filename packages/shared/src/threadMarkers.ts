@@ -21,13 +21,14 @@ function isSameMarkerRange(left: ThreadMarker, right: ThreadMarker): boolean {
     sameThreadMarkerAuthor(left, right) &&
     (left.textFormat ?? "markdown") === (right.textFormat ?? "markdown") &&
     left.messageId === right.messageId &&
+    left.segmentIndex === right.segmentIndex &&
     left.startOffset === right.startOffset &&
     left.endOffset === right.endOffset &&
     left.style === right.style
   );
 }
 
-type ThreadMarkerRange = Pick<ThreadMarker, "messageId" | "startOffset" | "endOffset" | "textFormat">;
+type ThreadMarkerRange = Pick<ThreadMarker, "messageId" | "startOffset" | "endOffset" | "textFormat" | "segmentIndex">;
 
 export function doThreadMarkerRangesOverlap(
   left: ThreadMarkerRange,
@@ -36,6 +37,7 @@ export function doThreadMarkerRangesOverlap(
   return (
     (left.textFormat ?? "markdown") === (right.textFormat ?? "markdown") &&
     left.messageId === right.messageId &&
+    left.segmentIndex === right.segmentIndex &&
     left.startOffset < right.endOffset &&
     right.startOffset < left.endOffset
   );

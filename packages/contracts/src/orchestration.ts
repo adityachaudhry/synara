@@ -747,6 +747,7 @@ export const ThreadMarkerLabel = TrimmedNonEmptyString.check(
 );
 export type ThreadMarkerLabel = typeof ThreadMarkerLabel.Type;
 const ThreadMarkerAnchor = {
+  segmentIndex: Schema.optional(NonNegativeInt),
   textFormat: Schema.optional(Schema.Literals(["markdown", "rendered"])),
   textPrefix: Schema.optional(Schema.String.check(Schema.isMaxLength(32))),
   textSuffix: Schema.optional(Schema.String.check(Schema.isMaxLength(32))),
