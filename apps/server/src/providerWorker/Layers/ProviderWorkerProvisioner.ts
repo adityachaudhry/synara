@@ -690,7 +690,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
         const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
         const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
-        const companyOnly = (companyRefsEnabled && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
+        const companyOnly = (companyRefsEnabled && input.repositoryBinding?.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
         const migrate = companyOnly && saved && (saved.binding.repositoryUnavailable || saved.binding.repositoryCheckout?.checkoutMode !== "company");
         const checkout = input.repositoryBinding
           ? (migrate ? makeRepositoryIsolationPlan : saved ? makeVerifiedRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
@@ -937,7 +937,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
         }
         yield* prepareWorkerToolchain(binding.workspace);
-        const companyOnly = (companyRefsEnabled && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path)) || binding.repositoryCheckout?.checkoutMode === "company";
+        const companyOnly = (companyRefsEnabled && repository.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path)) || binding.repositoryCheckout?.checkoutMode === "company";
         const plan = (companyOnly && (binding.repositoryUnavailable || binding.repositoryCheckout?.checkoutMode !== "company")
           ? makeRepositoryIsolationPlan : makeVerifiedRepositoryRefreshPlan)({
           companyOnly,

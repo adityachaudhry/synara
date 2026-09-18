@@ -401,7 +401,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             } else {
               const cause = Cause.squash(refreshed.cause);
               const isolatedCompany = binding.repositoryCheckout?.checkoutMode === "company" ||
-                (process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path));
+                (process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true" && repository.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path));
               // Do not degrade past credential erasure or runtime/ownership failures.
               if (!isolatedCompany || !(cause instanceof ProviderWorkerProvisioningError) ||
                   !["repository.refresh", "repository.refresh.verify"].includes(cause.operation))
