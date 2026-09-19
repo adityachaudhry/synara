@@ -1,5 +1,6 @@
 /** Native failure-path check. Creates and destroys one isolated Railway dev sandbox. */
 import assert from 'node:assert/strict';
+import { gzipSync } from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { Effect, Layer } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -18,6 +19,7 @@ const checkpoint = vars.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT;
 assert(checkpoint, 'Dev worker template must be configured');
 const sandbox = await Sandbox.create(checkpoint, { ...connection, networkIsolation: 'ISOLATED', idleTimeoutMinutes: 5 });
 const binding = { runtimeKind: 'railway-sandbox', runtimeId: sandbox.id, lifecycleGeneration: 'diagnostic-qa', status: 'running', region: sandbox.region } as const;
+const bootstrapFailure = process.argv.includes('--bootstrap-failure');
 const calls: string[] = [];
 let processHandle: ReturnType<typeof sandbox.exec> | undefined;
 const remote = <A>(run: () => PromiseLike<A>) => Effect.tryPromise(() => Promise.resolve(run()));
@@ -25,10 +27,10 @@ const runtime = {
   create: () => Effect.succeed(binding),
   exec: (_: unknown, input: {command: string; timeoutSeconds: number}) => remote(async () => {
     const result = await sandbox.exec(input.command, { timeoutSec: input.timeoutSeconds });
-    if (input.command.startsWith('tail -c')) { calls.push('diagnostics'); assert(result.stdout.includes('NATIVE_STARTUP_FAILURE')); }
+    if (input.command.startsWith('tail -c')) { calls.push('diagnostics'); assert(result.stdout.includes(bootstrapFailure ? 'Worker artifact digest mismatch' : 'NATIVE_STARTUP_FAILURE')); }
     return result;
   }),
-  writeFile: (_: unknown, input: {path: string; data: Uint8Array; mode: number}) => remote(() => sandbox.files.write(input.path, input.data, { mode: input.mode })),
+  writeFile: (_: unknown, input: {path: string; data: Uint8Array; mode: number}) => remote(() => sandbox.files.write(input.path, bootstrapFailure && input.path.endsWith('.mjs.gz') ? gzipSync('intentionally wrong QA artifact') : input.data, { mode: input.mode })),
   startDurableProcess: (_: unknown, input: {command: string}) => remote(async () => {
     processHandle = sandbox.exec(input.command); const sessionName = await processHandle.sessionName; await processHandle.detach();
     return { sessionName, supervision: 'durable' };
