@@ -63,7 +63,7 @@ function workerLaunchCommand(homeDir: string, artifactDigest: string) {
     "fs.rmSync(source,{force:true})",
     `if(require("node:crypto").createHash("sha256").update(fs.readFileSync(target)).digest("hex")!==${JSON.stringify(artifactDigest)})throw Error("Worker artifact digest mismatch")`,
   ].join(";");
-  return `mkdir -p ${shellQuote(logsDir)} && node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)} >> ${shellQuote(workerLogPath)} 2>&1`;
+  return `mkdir -p ${shellQuote(logsDir)} && { node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)}; } >> ${shellQuote(workerLogPath)} 2>&1`;
 }
 
 function agentGatewayUrl(controlUrl: string): string {
