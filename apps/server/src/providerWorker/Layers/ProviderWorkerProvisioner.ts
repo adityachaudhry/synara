@@ -1,5 +1,6 @@
 import { makeRepositoryIsolationPlan, makeVerifiedRepositoryRefreshPlan } from "../repositoryIsolation";
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
+import { sanitizeUnmappedProviderData } from "../../provider/unmappedProviderEvents";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -611,7 +612,31 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
           supervision: durable.supervision,
         });
-        yield* broker.waitForConnection(fence);
+        yield* broker.waitForConnection(fence).pipe(
+          Effect.onError(() => workspaceRuntime.exec(input.workspace, {
+            command: `tail -c 12000 ${shellQuote(`${input.homeDir}/state/logs/worker.log`)} 2>/dev/null`,
+            timeoutSeconds: 3,
+          }).pipe(
+            Effect.timeout(Duration.seconds(5)),
+            Effect.flatMap((result) => Effect.logWarning(JSON.stringify({
+              event: "provider.worker.startup-diagnostics",
+              threadId: input.threadId,
+              sandboxId: fence.sandboxId,
+              workerId: fence.workerId,
+              lifecycleGeneration: fence.lifecycleGeneration,
+              exitCode: result.exitCode,
+              timedOut: result.timedOut,
+              log: sanitizeUnmappedProviderData(result.stdout
+                .replaceAll(credential, "[REDACTED]")
+                .replaceAll(input.agentGatewayConnection?.bearerToken || credential, "[REDACTED]")),
+            }))),
+            Effect.catch(() => Effect.logWarning(JSON.stringify({
+              event: "provider.worker.startup-diagnostics-unavailable",
+              threadId: input.threadId,
+              sandboxId: fence.sandboxId,
+            }))),
+          )),
+        );
         yield* Effect.logInfo("provider worker connected", {
           sandboxId: fence.sandboxId,
           workerId: fence.workerId,
