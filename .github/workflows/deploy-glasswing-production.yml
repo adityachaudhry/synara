@@ -42,6 +42,8 @@ jobs:
       - run: npm install --global @railway/cli
       - name: Set the production sandbox credential
         run: printf '%s' "$RAILWAY_TOKEN" | railway variable set --stdin SYNARA_RAILWAY_SANDBOX_TOKEN --service synara-gitea-production --project "$RAILWAY_PROJECT_ID" --environment production --skip-deploys
+      - name: Record the deployed source revision
+        run: railway variable set "SYNARA_COMMIT=$GITHUB_SHA" --service synara-gitea-production --project "$RAILWAY_PROJECT_ID" --environment production --skip-deploys
       - uses: ./.github/actions/prepare-worker
         with:
           project: ${{ env.RAILWAY_PROJECT_ID }}
