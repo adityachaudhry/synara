@@ -2,7 +2,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Duration, Effect, FileSystem, Layer, Stream } from "effect";
 import { inspect } from "node:util";
-import { sanitizeUnmappedProviderDetail } from "../provider/unmappedProviderEvents";
+import { sanitizeUnmappedProviderData } from "../provider/unmappedProviderEvents";
 import { Socket } from "effect/unstable/socket";
 import WebSocket from "ws";
 
@@ -166,7 +166,7 @@ const main = Effect.gen(function* () {
       delayMs,
       result: result._tag,
       ...(result._tag === "Failure" ? {
-        detail: sanitizeUnmappedProviderDetail(inspect(result.failure, { depth: 4 })
+        detail: sanitizeUnmappedProviderData(inspect(result.failure, { depth: 4 })
           .replaceAll(config.bootstrapCredential, "[REDACTED]")),
       } : {}),
     });
