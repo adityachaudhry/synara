@@ -150,6 +150,24 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       if (Exit.isFailure(mounted) || mounted.value.exitCode !== 0 || mounted.value.timedOut)
         return yield* provisionError("repository.mount", "Company S3 files could not be mounted.", Exit.isFailure(mounted) ? Cause.squash(mounted.cause) : undefined, workspace.runtimeId);
     });
+    const runRepositoryPlan = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"], command: string,
+      timeoutSeconds: number, shellTimeout?: number) {
+      const script = `/root/.synara-repository-plan-${randomUUID()}.sh`;
+      yield* workspaceRuntime.writeFile(workspace, { path: script, data: command, mode: 0o700 });
+      return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+        const executed = yield* Effect.exit(restore(workspaceRuntime.exec(workspace, {
+          command: shellTimeout ? `timeout --kill-after=5s ${shellTimeout}s sh ${shellQuote(script)}` : `sh ${shellQuote(script)}`,
+          timeoutSeconds,
+        })));
+        const cleanup = yield* workspaceRuntime.exec(workspace, {
+          command: `rm -f ${shellQuote(script)} && test ! -e ${shellQuote(script)}`, timeoutSeconds: 10,
+        });
+        if (cleanup.exitCode !== 0 || cleanup.timedOut)
+          return yield* provisionError("repository.plan.cleanup", "Repository command cleanup could not be confirmed.", undefined, workspace.runtimeId);
+        if (Exit.isFailure(executed)) return yield* Effect.failCause(executed.cause);
+        return executed.value;
+      }));
+    });
     const repositoryOrigin = (binding: { readonly origin: string }) =>
       options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
         ? options.repositoryOriginOverride.origin : binding.origin;
@@ -531,10 +549,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   Effect.gen(function* () {
                     const checkoutExit = yield* Effect.exit(
                       restore(
-                        workspaceRuntime.exec(input.workspace, {
-                          command: input.allowUnavailable ? `timeout --kill-after=5s 30s sh -c ${shellQuote(input.checkoutCommand!)}` : input.checkoutCommand!,
-                          timeoutSeconds: input.allowUnavailable ? 45 : 120,
-                        }),
+                        runRepositoryPlan(input.workspace, input.checkoutCommand!, input.allowUnavailable ? 45 : 120,
+                          input.allowUnavailable ? 30 : undefined),
                       ),
                     );
                     const cleanupExit = yield* Effect.exit(cleanupCredential);
@@ -1040,7 +1056,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           }).pipe(Effect.mapError((cause) => provisionError("repository.refresh.credentials", "Repository credentials could not be prepared safely.", cause, binding.workspace.runtimeId)));
         }
         const result = yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
-          const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: companyOnly ? `timeout --kill-after=5s 30s sh -c ${shellQuote(plan.command)}` : plan.command, timeoutSeconds: companyOnly ? 45 : 300 })));
+          const refreshed = yield* Effect.exit(restore(runRepositoryPlan(binding.workspace, plan.command,
+            companyOnly ? 45 : 300, companyOnly ? 30 : undefined)));
           const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 }).pipe(
             Effect.mapError((cause) => provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", cause, binding.workspace.runtimeId)),
           );
@@ -1129,10 +1146,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           Effect.gen(function* () {
             const reconcileExit = yield* Effect.exit(
               restore(
-                workspaceRuntime.exec(binding.workspace, {
-                  command: plan.command,
-                  timeoutSeconds: 120,
-                }),
+                runRepositoryPlan(binding.workspace, plan.command, 120),
               ),
             );
             const cleanupExit = yield* Effect.exit(cleanupCredential);
