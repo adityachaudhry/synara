@@ -12,6 +12,7 @@ export interface ProviderWorkerConfigInput {
   readonly lifecycleGeneration?: string;
   readonly cwd?: string;
   readonly homeDir?: string;
+  readonly runAsUid?: string;
   readonly agentGatewayUrl?: string;
   readonly agentGatewayBearerToken?: string;
 }
@@ -37,6 +38,7 @@ export function parseProviderWorkerConfigFile(raw: string): ProviderWorkerConfig
     "lifecycleGeneration",
     "cwd",
     "homeDir",
+    "runAsUid",
     "agentGatewayUrl",
     "agentGatewayBearerToken",
   ] as const) {
@@ -80,6 +82,9 @@ export function resolveProviderWorkerConfig(input: ProviderWorkerConfigInput) {
   const bootstrapCredential = required(input, "bootstrapCredential");
   const cwd = input.cwd?.trim() || "/workspace";
   const homeDir = input.homeDir?.trim() || "/tmp/synara-provider-worker";
+  if (input.runAsUid !== undefined && input.runAsUid !== "10001") {
+    throw new Error("Provider worker runAsUid must be 10001.");
+  }
   const agentGatewayUrl = input.agentGatewayUrl?.trim();
   const agentGatewayBearerToken = input.agentGatewayBearerToken?.trim();
   if ((agentGatewayUrl === undefined) !== (agentGatewayBearerToken === undefined)) {
@@ -102,6 +107,7 @@ export function resolveProviderWorkerConfig(input: ProviderWorkerConfigInput) {
     lifecycleGeneration,
     cwd,
     homeDir,
+    ...(input.runAsUid ? { runAsUid: 10001 } : {}),
     ...(agentGatewayUrl === undefined || agentGatewayBearerToken === undefined
       ? {}
       : {

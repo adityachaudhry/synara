@@ -1,5 +1,5 @@
 import path from "node:path";
-import { repositoryLfsScript } from "./repositoryLfs.ts";
+import { repositoryLfsScript, repositoryS3LfsUnmountScript } from "./repositoryLfs.ts";
 
 import type { ProjectRepositoryBinding } from "@synara/contracts";
 import {
@@ -8,7 +8,7 @@ import {
 } from "../providerPersistence.ts";
 
 export const REPOSITORY_CHECKOUT_ROOT = "/workspace/repository";
-export const REPOSITORY_CREDENTIAL_CONFIG_PATH = "/tmp/synara-repository-credential.gitconfig";
+export const REPOSITORY_CREDENTIAL_CONFIG_PATH = "/root/.synara-repository-credential.gitconfig";
 
 const COMMIT_MARKER = "__SYNARA_CHECKOUT_COMMIT__=";
 const CHECKOUT_MODE_MARKER = "__SYNARA_CHECKOUT_MODE__=";
@@ -16,9 +16,14 @@ const PREVIOUS_COMMIT_MARKER = "__SYNARA_PREVIOUS_COMMIT__=";
 const CHANGED_FILES_MARKER = "__SYNARA_CHANGED_FILES__=";
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, sourceOrigin: string, credentialConfigPath?: string): string {
-  const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, sourceOrigin, ...(credentialConfigPath ? { credentialConfigPath } : {}) });
+export function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, sourceOrigin: string, credentialConfigPath?: string, mountRoot?: string): string {
+  const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, sourceOrigin,
+    ...(credentialConfigPath ? { credentialConfigPath } : {}), ...(mountRoot ? { mountRoot } : {}) });
   return `GIT_TERMINAL_PROMPT=0 ${credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(credentialConfigPath)} ` : ""}node -e ${shellQuote(script)}`;
+}
+
+export function uncoverLfs(checkoutRoot: string, companyPath: string, mountRoot?: string): string {
+  return mountRoot ? `node -e ${shellQuote(repositoryS3LfsUnmountScript(checkoutRoot, companyPath))}` : ":";
 }
 
 function sparseCheckoutPattern(bindingPath: string): string {
@@ -38,6 +43,7 @@ export function makeRepositoryCheckoutPlan(input: {
   readonly checkoutRoot?: string;
   readonly repositoryOrigin?: string;
   readonly companyOnly?: boolean;
+  readonly mountRoot?: string;
 }) {
   const checkoutRoot = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
   const cwd = path.posix.join(checkoutRoot, input.binding.path);
@@ -59,7 +65,7 @@ export function makeRepositoryCheckoutPlan(input: {
     `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
     `${sparseGit} checkout --detach FETCH_HEAD`,
     `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
-    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
+    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath, input.mountRoot),
     `test -d ${shellQuote(cwd)}`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
   ].join(" && ");
@@ -78,6 +84,7 @@ export function makeRepositoryReconcilePlan(input: {
   readonly credentialConfigPath?: string;
   readonly checkoutRoot?: string;
   readonly repositoryOrigin?: string;
+  readonly mountRoot?: string;
 }) {
   if (!/^[0-9a-f]{40}$/u.test(input.commit)) {
     throw new Error("Repository reconciliation requires a full commit SHA.");
@@ -110,10 +117,11 @@ export function makeRepositoryReconcilePlan(input: {
     "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
     `previous="$(${git} rev-parse HEAD)"`,
     `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.commit)}`,
+    uncoverLfs(checkoutRoot, input.binding.path, input.mountRoot),
     stashSelected,
     `if ! ${authenticatedGit} merge --ff-only --no-edit FETCH_HEAD; then ${restoreSelectedOnFailure}; exit 1; fi`,
     `test "$(${git} rev-parse HEAD)" = ${shellQuote(input.commit)}`,
-    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
+    hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath, input.mountRoot),
     discardSelectedOnSuccess,
     `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
     `printf '${COMMIT_MARKER}%s\\n' "$(${git} rev-parse HEAD)"`,
@@ -138,6 +146,7 @@ export function makeRepositoryRefreshPlan(input: {
   readonly checkoutRoot?: string;
   readonly repositoryOrigin?: string;
   readonly companyOnly?: boolean;
+  readonly mountRoot?: string;
 }) {
   const checkoutRoot = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
   const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
@@ -155,9 +164,10 @@ export function makeRepositoryRefreshPlan(input: {
       `if ${git} remote get-url origin >/dev/null 2>&1; then ${git} remote set-url origin ${shellQuote(repositoryUrl)}; fi`,
       `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(executionRef)}`,
       `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
+      uncoverLfs(checkoutRoot, input.binding.path, input.mountRoot),
       `${authenticatedGit} merge --ff-only --no-edit "$source_commit"`,
       `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
-      hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath),
+      hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath, input.mountRoot),
       `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,
       `printf '${COMMIT_MARKER}%s\\n' "$source_commit"`,
       `printf '${CHECKOUT_MODE_MARKER}${input.companyOnly ? "company" : "partial"}\\n'`,

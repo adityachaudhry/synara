@@ -23,6 +23,7 @@ import { makeWorkspaceCheckpointStore, workspaceCheckpointRevision, type Provide
 import { archiveWorkspaceCheckpoint, restoreWorkspaceArchive } from "../workspaceArchive.ts";
 import { publishOutboxArtifacts, artifactApiClient } from "../artifactPublisher.ts";
 import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
+import { S3_LFS_AGENT_UID, S3_LFS_MOUNT_ROOT, S3_LFS_PASSWORD_PATH, s3LfsMountCommand, s3LfsMountConfig } from "../s3LfsMount.ts";
 import {
   listProviderPersistenceCandidates,
   readProviderPersistenceCandidate,
@@ -127,6 +128,28 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
     const companyRefsEnabled = process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true";
+    const s3Lfs = s3LfsMountConfig(process.env);
+    const mountS3Lfs = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"]) {
+      if (!s3Lfs) return;
+      const ready = yield* workspaceRuntime.exec(workspace, {
+        command: `mountpoint -q ${shellQuote(S3_LFS_MOUNT_ROOT)}`, timeoutSeconds: 10,
+      });
+      if (ready.exitCode === 0 && !ready.timedOut) return;
+      yield* workspaceRuntime.writeFile(workspace, {
+        path: S3_LFS_PASSWORD_PATH, data: `${s3Lfs.accessKey}:${s3Lfs.secretKey}`, mode: 0o600,
+      }).pipe(Effect.mapError((cause) => provisionError("repository.mount.credentials", "Could not prepare the S3 mount credential.", cause, workspace.runtimeId)));
+      const mounted = yield* Effect.exit(workspaceRuntime.exec(workspace, {
+        command: s3LfsMountCommand(s3Lfs), timeoutSeconds: 45,
+      }));
+      const cleanup = yield* workspaceRuntime.exec(workspace, {
+        command: `rm -f ${shellQuote(S3_LFS_PASSWORD_PATH)} && test ! -e ${shellQuote(S3_LFS_PASSWORD_PATH)}`,
+        timeoutSeconds: 10,
+      });
+      if (cleanup.exitCode !== 0 || cleanup.timedOut)
+        return yield* provisionError("repository.mount.cleanup", "S3 mount credential erasure could not be confirmed.", undefined, workspace.runtimeId);
+      if (Exit.isFailure(mounted) || mounted.value.exitCode !== 0 || mounted.value.timedOut)
+        return yield* provisionError("repository.mount", "Company S3 files could not be mounted.", Exit.isFailure(mounted) ? Cause.squash(mounted.cause) : undefined, workspace.runtimeId);
+    });
     const repositoryOrigin = (binding: { readonly origin: string }) =>
       options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
         ? options.repositoryOriginOverride.origin : binding.origin;
@@ -258,7 +281,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
       }
       const flush = yield* workspaceRuntime.exec(binding.workspace, {
-        command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && sync`,
+        command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && test ! -e ${shellQuote(S3_LFS_PASSWORD_PATH)} && sync`,
         timeoutSeconds: 30,
       });
       if (flush.exitCode !== 0 || flush.timedOut) {
@@ -389,6 +412,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           }),
         { concurrency: 2, discard: true },
       );
+      if (s3Lfs && binding.cwd.startsWith("/workspace/repository/companies/")) {
+        const ownership = yield* workspaceRuntime.exec(binding.workspace, {
+          command: `chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)}`,
+          timeoutSeconds: 30,
+        });
+        if (ownership.exitCode !== 0 || ownership.timedOut)
+          return yield* provisionError("persistence.checkpoint.owner", "Restored Outbox files are not readable to the company worker.", undefined, binding.workspace.runtimeId);
+      }
     });
 
     const markOutboxPromoted: ProviderWorkerProvisionerShape["markOutboxPromoted"] = (
@@ -445,6 +476,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly allowUnavailable?: boolean;
       readonly previousCheckout?: ProviderWorkerRuntimeBinding["repositoryCheckout"];
       readonly repositoryCredential?: string;
+      readonly unprivileged?: boolean;
     }) {
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
@@ -582,6 +614,19 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           reused: artifactProbe.exitCode === 0 && !artifactProbe.timedOut,
           uploadBytes: artifactProbe.exitCode === 0 && !artifactProbe.timedOut ? 0 : artifactArchive.byteLength,
         });
+        if (input.unprivileged) {
+          const prepared = yield* workspaceRuntime.exec(input.workspace, {
+            command: `mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi/agent/sessions && if [ -d /root/.pi/agent/sessions ]; then cp -an /root/.pi/agent/sessions/. /workspace/.pi/agent/sessions/; fi && chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi`,
+            timeoutSeconds: 60,
+          });
+          if (prepared.exitCode !== 0 || prepared.timedOut)
+            return yield* provisionError("workspace.user", "Could not prepare the unprivileged company worker.", undefined, fence.sandboxId);
+          yield* workspaceRuntime.writeFile(input.workspace, {
+            path: "/opt/synara/agent-gitconfig",
+            data: "[safe]\n\tdirectory = /workspace/repository\n[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
+            mode: 0o644,
+          });
+        }
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_CONFIG_PATH,
           data: JSON.stringify({
@@ -592,6 +637,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             lifecycleGeneration: fence.lifecycleGeneration,
             cwd: input.cwd,
             homeDir: input.homeDir,
+            ...(input.unprivileged ? { runAsUid: String(S3_LFS_AGENT_UID) } : {}),
             ...(input.agentGatewayConnection === undefined
               ? {}
               : {
@@ -716,6 +762,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
         const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
         const companyOnly = (companyRefsEnabled && input.repositoryBinding?.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
+        const mountedCompany = !!s3Lfs && companyOnly;
         const migrate = companyOnly && saved && (saved.binding.repositoryUnavailable || saved.binding.repositoryCheckout?.checkoutMode !== "company");
         const checkout = input.repositoryBinding
           ? (migrate ? makeRepositoryIsolationPlan : saved ? makeVerifiedRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
@@ -724,6 +771,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
               verifiedCommit: saved?.binding.repositoryCheckout?.commit,
               binding: input.repositoryBinding,
               repositoryOrigin: repositoryOrigin(input.repositoryBinding),
+              ...(mountedCompany ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
               ...(options.repositoryAuthorization
                 ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
                 : {}),
@@ -746,13 +794,16 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         return yield* withWorkspaceCleanup(
           workspace,
           (saved?.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(
-            Effect.andThen(saved ? prepareWorkerToolchain(workspace) : Effect.void), Effect.andThen(provisionConnectedWorker({
+            Effect.andThen(saved ? prepareWorkerToolchain(workspace) : Effect.void),
+            Effect.andThen(mountedCompany ? mountS3Lfs(workspace) : Effect.void),
+            Effect.andThen(provisionConnectedWorker({
             workspace,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
             cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
             homeDir: saved?.binding.homeDir ?? DEFAULT_HOME_DIR,
             allowUnavailable: companyOnly,
+            unprivileged: mountedCompany,
             ...(saved?.binding.repositoryCheckout ? { previousCheckout: saved.binding.repositoryCheckout } : {}),
             ...(input.repositoryBinding === undefined
               ? {}
@@ -939,6 +990,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                 mode: 0o600,
               }),
             ),
+            Effect.flatMap(() => s3Lfs && binding.cwd.startsWith("/workspace/repository/companies/")
+              ? workspaceRuntime.exec(binding.workspace, {
+                  command: `chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(path.posix.join(binding.homeDir, "state", "attachments", attachmentRelativePath(attachment)))}`,
+                  timeoutSeconds: 10,
+                }).pipe(Effect.flatMap((result) => result.exitCode === 0 && !result.timedOut
+                  ? Effect.void : Effect.fail(provisionError("attachment.owner", "Could not make the attachment readable to the company worker.", undefined, binding.workspace.runtimeId))))
+              : Effect.void),
             Effect.mapError((cause) =>
               cause instanceof ProviderWorkerProvisioningError
                 ? cause
@@ -963,6 +1021,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         }
         yield* prepareWorkerToolchain(binding.workspace);
         const companyOnly = (companyRefsEnabled && repository.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path)) || binding.repositoryCheckout?.checkoutMode === "company";
+        if (s3Lfs && companyOnly) yield* mountS3Lfs(binding.workspace);
         const plan = (companyOnly && (binding.repositoryUnavailable || binding.repositoryCheckout?.checkoutMode !== "company")
           ? makeRepositoryIsolationPlan : makeVerifiedRepositoryRefreshPlan)({
           companyOnly,
@@ -970,6 +1029,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           verifiedCommit: binding.repositoryCheckout?.commit,
           binding: repository,
           repositoryOrigin: repositoryOrigin(repository),
+          ...(s3Lfs && companyOnly ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
           ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
         });
         if (options.repositoryAuthorization) {
@@ -1022,6 +1082,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           (selection) => readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
           { concurrency: 1, discard: true },
         );
+        if (s3Lfs && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repositoryBinding.path)) yield* mountS3Lfs(binding.workspace);
         const plan = yield* Effect.try({
           try: () =>
             makeRepositoryReconcilePlan({
@@ -1030,6 +1091,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
               commit,
               persistedFiles,
               credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+              ...(s3Lfs && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repositoryBinding.path) ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
             }),
           catch: (cause) =>
             provisionError(

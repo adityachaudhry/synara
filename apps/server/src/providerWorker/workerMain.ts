@@ -177,6 +177,14 @@ const main = Effect.gen(function* () {
 const configPath =
   process.env.SYNARA_PROVIDER_WORKER_CONFIG_PATH?.trim() || PROVIDER_WORKER_CONFIG_PATH;
 const config = readAndConsumeProviderWorkerConfigFile(configPath);
+if (config.runAsUid) {
+  if (!process.setgroups || !process.setgid || !process.setuid) throw new Error("Unprivileged workers require POSIX user IDs.");
+  process.env.HOME = "/workspace";
+  process.env.GIT_CONFIG_GLOBAL = "/opt/synara/agent-gitconfig";
+  process.setgroups([config.runAsUid]);
+  process.setgid(config.runAsUid);
+  process.setuid(config.runAsUid);
+}
 const workerConfigLayer = Layer.succeed(ServerConfig, makeWorkerServerConfig(config));
 const piLayer = makePiAdapterLive({
   ...(config.agentGatewayConnection === undefined

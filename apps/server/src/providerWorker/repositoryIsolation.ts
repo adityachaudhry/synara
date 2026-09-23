@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { makeRepositoryCheckoutPlan, makeRepositoryRefreshPlan, REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout";
+import { hydrateLfs, makeRepositoryCheckoutPlan, makeRepositoryRefreshPlan, REPOSITORY_CHECKOUT_ROOT, uncoverLfs } from "./repositoryCheckout";
 
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
@@ -7,7 +7,8 @@ const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 export function makeRepositoryIsolationPlan(input: Parameters<typeof makeRepositoryCheckoutPlan>[0] & { readonly allowEmpty?: boolean; readonly verifiedCommit?: string | undefined }) {
   const root = input.checkoutRoot ?? REPOSITORY_CHECKOUT_ROOT;
   const staging = `${root}.company-${randomUUID()}`;
-  const checkout = makeRepositoryCheckoutPlan({ ...input, checkoutRoot: staging, companyOnly: true });
+  const { mountRoot: _mountRoot, ...checkoutInput } = input;
+  const checkout = makeRepositoryCheckoutPlan({ ...checkoutInput, checkoutRoot: staging, companyOnly: true });
   const script = `
 const fs = require('node:fs'), cp = require('node:child_process'), path = require('node:path');
 const root = ${JSON.stringify(root)}, staging = ${JSON.stringify(staging)}, scope = ${JSON.stringify(input.binding.path)};
@@ -54,7 +55,9 @@ try {
 `;
   // The initial checkout emits its own markers; retain only the conversion's verified result.
   const cleanup = `require("node:fs").rmSync(${JSON.stringify(staging)},{recursive:true,force:true})`;
-  return { cwd: `${root}/${input.binding.path}`, command: `if ! ( ${checkout.command} ) >/dev/null; then node -e ${quote(cleanup)}; exit 1; fi; node -e ${quote(script)}` };
+  const repositoryUrl = `${input.repositoryOrigin ?? input.binding.origin}/${input.binding.owner}/${input.binding.repository}.git`;
+  const remount = hydrateLfs(root, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath, input.mountRoot);
+  return { cwd: `${root}/${input.binding.path}`, command: `if ! ( ${checkout.command} ) >/dev/null; then node -e ${quote(cleanup)}; exit 1; fi; ${uncoverLfs(root, input.binding.path, input.mountRoot)}; if ! node -e ${quote(script)}; then ${input.mountRoot ? `${remount} >/dev/null 2>&1 || true;` : ""} exit 1; fi; ${input.mountRoot ? remount : ":"}` };
 }
 
 /** Local commits are still unpublished drafts; move their delta onto the verified company base. */

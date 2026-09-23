@@ -5,6 +5,7 @@ export function repositoryLfsScript(input: {
   readonly repositoryUrl: string;
   readonly sourceOrigin: string;
   readonly credentialConfigPath?: string;
+  readonly mountRoot?: string;
 }) {
   return `
 const fs = require("node:fs"), cp = require("node:child_process"), path = require("node:path"), crypto = require("node:crypto");
@@ -40,6 +41,43 @@ async function matches(target, file) {
   } catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
 (async () => {
+  if (config.mountRoot) {
+    // The Gitea LFS pointer remains under each bind mount. The bytes stay in
+    // Gitea's native S3 backend and are read through the root-owned FUSE mount.
+    cp.execFileSync("chown", ["-R", "10001:10001", path.join(config.checkoutRoot, config.companyPath)]);
+    for (const file of files) {
+      const source = path.join(config.mountRoot, file.oid.slice(0, 2), file.oid.slice(2, 4), file.oid.slice(4));
+      const sourceStat = fs.statSync(source);
+      if (!sourceStat.isFile() || sourceStat.size !== file.size) throw Error("Gitea S3 LFS object unavailable: " + file.name);
+      const target = path.join(config.checkoutRoot, file.name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (fs.existsSync(target)) {
+        const stat = fs.lstatSync(target);
+        if (!stat.isFile()) throw Error("Company LFS path is not a regular file: " + file.name);
+        if (stat.size > 1024) {
+          if (!await matches(target, file)) throw Error("Local company binary edits preserved without overwrite: " + file.name);
+          fs.writeFileSync(target, file.pointer);
+        } else if (fs.readFileSync(target, "utf8") !== file.pointer) {
+          throw Error("Local company binary edits preserved without overwrite: " + file.name);
+        }
+      } else {
+        fs.writeFileSync(target, file.pointer);
+      }
+      cp.execFileSync("mount", ["--bind", source, target]);
+      cp.execFileSync("mount", ["-o", "remount,bind,ro", target]);
+    }
+    const attributes = files.map(file => {
+      const pattern = "/" + file.name.split("").map(char => ["*", "?", "["].includes(char) ? "[" + char + "]" : char).join("");
+      return JSON.stringify(pattern) + " filter=lfs diff=lfs merge=lfs -text";
+    });
+    const attributesPath = path.join(config.checkoutRoot, ".git", "info", "attributes");
+    fs.writeFileSync(attributesPath, attributes.join("\\n") + "\\n");
+    for (let index = 0; index < files.length; index += 100) {
+      run(["update-index", "--assume-unchanged", "--", ...files.slice(index, index + 100).map(file => file.name)]);
+    }
+    process.stdout.write("__SYNARA_LFS_VERIFIED__=" + files.length + "\\n");
+    return;
+  }
   const pending = [];
   for (const file of files) {
     const target = path.join(config.checkoutRoot, file.name);
@@ -111,5 +149,21 @@ async function matches(target, file) {
   }
   process.stdout.write("__SYNARA_LFS_VERIFIED__=" + files.length + "\\n");
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
+`;
+}
+
+/** Uncover local pointers before Git changes the tree. The S3 FUSE mount stays up. */
+export function repositoryS3LfsUnmountScript(checkoutRoot: string, companyPath: string) {
+  return `
+const fs=require("node:fs"),cp=require("node:child_process");
+const root=${JSON.stringify(checkoutRoot)}, scope=${JSON.stringify(companyPath)};
+const prefix=root+"/"+scope+"/";
+const targets=fs.readFileSync("/proc/self/mountinfo","utf8").split("\\n").filter(Boolean)
+  .map(line=>line.split(" ")[4].replace(/\\\\([0-7]{3})/g,(_,code)=>String.fromCharCode(parseInt(code,8))))
+  .filter(target=>target.startsWith(prefix)).sort((a,b)=>b.length-a.length);
+for(const target of targets) cp.execFileSync("umount",[target]);
+if(targets.length){
+  cp.execFileSync("git",["-C",root,"update-index","--no-assume-unchanged","--",...targets.map(path=>path.slice(root.length+1))]);
+}
 `;
 }
