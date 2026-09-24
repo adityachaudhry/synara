@@ -56,4 +56,4 @@ Keep recent threads warm for **30 minutes**, use a **45-minute provider idle bac
 
 Do not buy or build around unavailable optional features. US Linux VM and warm-pool access are still pending on support ticket #19388; they are not prerequisites for this dev architecture. Daytona volumes would duplicate our canonical S3 store. Memory-preserving resume should be evaluated only when the actual US VM class is available. [Persistence semantics](https://www.daytona.io/docs/en/persistence/).
 
-The current equivalent bootstrap key expires September 30, 2026. A longer-lived restricted dev credential still needs the browser-required access-duration approval. This does not prevent the completed dev trials, but must be resolved before that expiry. No new payment or production change was made.
+After explicit user approval, the non-expiring `glasswing-dev-daytona-runtime` key replaced the six-day bootstrap credential in dev. Its only explicit permissions are write/delete sandboxes and write/delete snapshots; implicit organization-level runtime access still applies. No new payment or production configuration change was made.
