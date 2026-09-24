@@ -291,7 +291,8 @@ function RootRouteView() {
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
           <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
+          {/* Release announcements belong to standalone Synara, never embedded hosts. */}
+          {import.meta.env.VITE_SYNARA_EMBEDDED !== "true" && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
           <AppSnapWelcomeDialog />
