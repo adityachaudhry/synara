@@ -1185,6 +1185,20 @@ function textFromToolResult(result: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
+function toolResultForDisplay(result: unknown): unknown {
+  const record = toolRecord(result);
+  if (!record || !Array.isArray(record.content)) return result;
+  const content = record.content.map((block) => {
+    const image = toolRecord(block);
+    return image?.type === "image" && typeof image.data === "string"
+      ? { type: "text", text: "[Image provided to the agent; preview omitted from activity.]" }
+      : block;
+  });
+  return content.some((block, index) => block !== record.content[index])
+    ? { ...record, content }
+    : result;
+}
+
 function toolExitCode(result: unknown): number | null | undefined {
   const record = toolRecord(result);
   if (!record) return undefined;
@@ -1439,7 +1453,7 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
       pendingTools.delete(message.toolCallId);
       const toolName = pending?.toolName ?? message.toolName;
       const args = pending?.args;
-      const result = { content: message.content };
+      const result = toolResultForDisplay({ content: message.content });
       items.push({
         type: "tool_call",
         status: message.isError ? "failed" : "completed",
@@ -1447,7 +1461,7 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
         toolName,
         itemType: toolItemType(toolName),
         title: toolTitle(toolName, args),
-        output: textFromContent(message.content),
+        output: textFromToolResult(result),
         isError: message.isError,
         data: toolLifecycleData({
           toolCallId: message.toolCallId,
@@ -2130,7 +2144,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         case "tool_execution_update": {
           const tracked = context.activeToolItems.get(event.toolCallId);
           if (!tracked) return;
-          const detail = textFromToolResult(event.partialResult);
+          const partialResult = toolResultForDisplay(event.partialResult);
+          const detail = textFromToolResult(partialResult);
           recordItem(context, {
             type: "tool_call",
             status: "updated",
@@ -2151,10 +2166,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
                 args: tracked.args,
-                partialResult: event.partialResult,
+                partialResult,
               }),
             },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: { ...event, partialResult } },
           } satisfies ProviderRuntimeEvent);
           return;
         }
@@ -2167,13 +2182,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             itemType: toolItemType(event.toolName),
           };
           context.activeToolItems.delete(event.toolCallId);
-          const detail = textFromToolResult(event.result);
+          const result = toolResultForDisplay(event.result);
+          const detail = textFromToolResult(result);
           recordItem(context, {
             type: "tool_call",
             status: event.isError ? "failed" : "completed",
             toolName: event.toolName,
             output: detail,
-            result: event.result,
+            result,
           });
           offerRuntimeEvent({
             ...makeEventBase(context),
@@ -2189,11 +2205,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
                 args: tracked.args,
-                result: event.result,
+                result,
                 isError: event.isError,
               }),
             },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: { ...event, result } },
           } satisfies ProviderRuntimeEvent);
           return;
         }
