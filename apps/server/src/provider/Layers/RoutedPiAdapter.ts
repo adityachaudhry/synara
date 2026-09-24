@@ -264,6 +264,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
       const previous = activeRemote ?? persistedRemote;
+      const migratingToDaytona = process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
+        previous?.workspace.runtimeKind === "railway-sandbox";
       const agentGatewayConnection = agentGatewayCredentials?.repositoryConnectionForThread(
         input.threadId,
         "pi",
@@ -274,7 +276,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           Effect.gen(function* () {
             const provisionExit = yield* Effect.exit(
               restore(
-                previous
+                previous && !migratingToDaytona
                   ? provisioner.restart(previous, {
                       threadId: input.threadId,
                       lifecycleGeneration,

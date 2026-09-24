@@ -473,7 +473,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           if (Exit.isFailure(cleanupExit)) {
             return yield* provisionError(
               "workspace.cleanup",
-              "Failed to destroy the Railway provider workspace after provisioning failed.",
+              "Failed to destroy the provider workspace after provisioning failed.",
               Cause.squash(cleanupExit.cause),
               workspace.runtimeId,
             );
@@ -722,8 +722,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return {
           schemaVersion: 1,
-          runtimeKind:
-            input.workspace.runtimeKind === "docker-container" ? "docker-pi" : "railway-sandbox-pi",
+          runtimeKind: input.workspace.runtimeKind === "docker-container" ? "docker-pi"
+            : input.workspace.runtimeKind === "daytona-sandbox" ? "daytona-pi" : "railway-sandbox-pi",
           threadId: input.threadId,
           workspace: input.workspace,
           fence,
@@ -749,7 +749,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         Effect.mapError((cause) =>
           provisionError(
             "launch",
-            "Failed to launch and connect the Railway provider worker.",
+            "Failed to launch and connect the provider worker.",
             cause,
             input.workspace.runtimeId,
           ),
@@ -793,6 +793,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const sameRepository = input.repositoryBinding && previousRepository &&
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
         const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
+        if (process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
+            saved?.binding.workspace.runtimeKind === "railway-sandbox" && !saved.archive) {
+          return yield* provisionError("workspace.migrate", "Archive the Railway worker disk before Daytona restores this thread.", undefined);
+        }
         const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
         const companyOnly = (companyRefsEnabled && input.repositoryBinding?.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
         const mountedCompany = !!s3Lfs && companyOnly;
@@ -861,7 +865,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
             ? cause
-            : provisionError("start", "Failed to create the Railway provider workspace.", cause),
+            : provisionError("start", "Failed to create the provider workspace.", cause),
         ),
       );
 
@@ -988,7 +992,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           Effect.mapError((cause) =>
             provisionError(
               "adopt",
-              "Failed to commit the durable Railway provider workspace binding.",
+              "Failed to commit the durable provider workspace binding.",
               cause,
               binding.workspace.runtimeId,
             ),

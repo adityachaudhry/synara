@@ -21,7 +21,6 @@ import {
   type WorkspaceRuntimeShape,
 } from "../Services/WorkspaceRuntime";
 import type { RailwaySandboxClientShape } from "../Services/RailwaySandboxClient";
-import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 import {
   SandboxCapacity,
   reconcileSandboxCapacityInventory,
@@ -51,23 +50,27 @@ function toRuntimeError(operation: string, runtimeId?: string) {
   return (cause: unknown) =>
     new WorkspaceRuntimeError({
       operation,
-      detail: `Railway workspace runtime ${operation} failed.`,
+      detail: `Sandbox workspace runtime ${operation} failed.`,
       ...(runtimeId === undefined ? {} : { runtimeId }),
       ...(cause instanceof RailwaySandboxNotFoundError ? { unavailable: true } : {}),
       cause,
     });
 }
 
+export type WorkspaceSandboxRuntimeSettings =
+  | { readonly enabled: false }
+  | { readonly enabled: true; readonly region?: string; readonly idleTimeoutMinutes: number; readonly maxActiveSandboxes: number };
+
 function requireEnabled(
-  config: RailwaySandboxRuntimeConfig,
+  config: WorkspaceSandboxRuntimeSettings,
   operation: string,
-): Effect.Effect<Extract<RailwaySandboxRuntimeConfig, { readonly enabled: true }>, WorkspaceRuntimeError> {
+): Effect.Effect<Extract<WorkspaceSandboxRuntimeSettings, { readonly enabled: true }>, WorkspaceRuntimeError> {
   return config.enabled
     ? Effect.succeed(config)
     : Effect.fail(
         new WorkspaceRuntimeError({
           operation,
-          detail: "Railway Sandbox runtime is not configured.",
+          detail: "Sandbox runtime is not configured.",
         }),
       );
 }
@@ -76,6 +79,7 @@ export interface WorkspaceRuntimeOptions {
   readonly createOperationId?: () => string;
   readonly reconcileIntervalMs?: number;
   readonly capacity?: SandboxCapacity;
+  readonly runtimeKind?: "railway-sandbox" | "daytona-sandbox";
 }
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 10_000;
@@ -156,7 +160,7 @@ export function reconcileSandboxCapacityAtStartup(input: {
       ) {
         return yield* new WorkspaceRuntimeError({
           operation: "capacity.reconcile",
-          detail: `Persisted Railway capacity key for thread '${runtime.threadId}' does not match lifecycle generation '${runtime.lifecycleGeneration}'.`,
+          detail: `Persisted sandbox capacity key for thread '${runtime.threadId}' does not match lifecycle generation '${runtime.lifecycleGeneration}'.`,
           runtimeId: binding.workspace.runtimeId,
         });
       }
@@ -178,7 +182,7 @@ export function reconcileSandboxCapacityAtStartup(input: {
 }
 
 export function makeWorkspaceRuntimeLive(
-  config: RailwaySandboxRuntimeConfig,
+  config: WorkspaceSandboxRuntimeSettings,
   options: WorkspaceRuntimeOptions = {},
 ) {
   return Layer.effect(
@@ -243,7 +247,7 @@ export function makeWorkspaceRuntimeLive(
               Effect.tap((report) =>
                 report.orphanRuntimeIds.length === 0
                   ? Effect.void
-                  : Effect.logWarning("unowned Railway sandbox inventory detected", {
+                  : Effect.logWarning("unowned sandbox inventory detected", {
                       runtimeIds: report.orphanRuntimeIds,
                     }),
               ),
@@ -318,7 +322,7 @@ export function makeWorkspaceRuntimeLive(
                 catch: (cause) =>
                   new WorkspaceRuntimeError({
                     operation: "capacity.acquire",
-                    detail: "Railway workspace capacity acquisition failed.",
+                    detail: "Sandbox workspace capacity acquisition failed.",
                     cause,
                   }),
               });
@@ -423,13 +427,13 @@ export function makeWorkspaceRuntimeLive(
               yield* releaseCapacity({ operationId, capacityKey });
               return yield* new WorkspaceRuntimeError({
                 operation: "create",
-                detail: `Created Railway Sandbox entered unexpected status ${record.status}.`,
+                detail: `Created sandbox entered unexpected status ${record.status}.`,
                 runtimeId: record.id,
               });
             }
 
             return {
-              runtimeKind: "railway-sandbox",
+              runtimeKind: options.runtimeKind ?? "railway-sandbox",
               runtimeId: record.id,
               creationOperationId: operationId,
               ...(capacityLease === undefined ? {} : { capacityKey }),
@@ -452,7 +456,7 @@ export function makeWorkspaceRuntimeLive(
           if (record.status !== "RUNNING") {
             return yield* new WorkspaceRuntimeError({
               operation: "connect",
-              detail: `Railway Sandbox is ${record.status}, not RUNNING.`,
+              detail: `Sandbox is ${record.status}, not RUNNING.`,
               runtimeId: binding.runtimeId,
               unavailable: record.status !== "CREATING",
             });
@@ -489,7 +493,7 @@ export function makeWorkspaceRuntimeLive(
               : Effect.fail(
                   new WorkspaceRuntimeError({
                     operation: "keepAlive",
-                    detail: `Railway Sandbox keepalive exited with ${String(result.exitCode)}.`,
+                    detail: `Sandbox keepalive exited with ${String(result.exitCode)}.`,
                     runtimeId: binding.runtimeId,
                   }),
                 ),
@@ -509,7 +513,7 @@ export function makeWorkspaceRuntimeLive(
               return Effect.fail(
                 new WorkspaceRuntimeError({
                   operation: "readFile",
-                  detail: "Railway file reads are unavailable.",
+                  detail: "Sandbox file reads are unavailable.",
                   runtimeId: binding.runtimeId,
                 }),
               );
@@ -527,7 +531,7 @@ export function makeWorkspaceRuntimeLive(
               return Effect.fail(
                 new WorkspaceRuntimeError({
                   operation: "listFiles",
-                  detail: "Railway directory listing is unavailable.",
+                  detail: "Sandbox directory listing is unavailable.",
                   runtimeId: binding.runtimeId,
                 }),
               );
@@ -545,7 +549,7 @@ export function makeWorkspaceRuntimeLive(
               return Effect.fail(
                 new WorkspaceRuntimeError({
                   operation: "statFile",
-                  detail: "Railway file stat is unavailable.",
+                  detail: "Sandbox file stat is unavailable.",
                   runtimeId: binding.runtimeId,
                 }),
               );
@@ -608,7 +612,7 @@ export function makeWorkspaceRuntimeLive(
         Effect.map((records) =>
           records.map(
             (record): WorkspaceRuntimeInventoryRecord => ({
-              runtimeKind: "railway-sandbox",
+              runtimeKind: options.runtimeKind ?? "railway-sandbox",
               runtimeId: record.id,
               status: runtimeStatus(record.status),
               region: record.region,
