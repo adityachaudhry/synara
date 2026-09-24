@@ -3,7 +3,10 @@ import path from "node:path";
 import { Effect } from "effect";
 import type { WorkspaceRuntimeBinding, WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import { artifactApiClient } from "./artifactPublisher.ts";
+import { REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
+import { S3_LFS_MOUNT_ROOT } from "./s3LfsMount.ts";
+export type WorkspaceArchiveRuntime = Pick<WorkspaceRuntimeShape, "create" | "exec" | "writeFile" | "destroy">;
 
 export const WORKSPACE_ARCHIVE_ROOTS = ["workspace", "root/.pi/agent/sessions"] as const;
 export interface WorkspaceArchive {
@@ -51,10 +54,11 @@ function signedUrl(value: string) {
   return value;
 }
 
-// Executed only inside the isolated reader/fresh destination. The coordinator handles metadata.
+// Executed inside the idle live workspace, isolated reader, or fresh destination.
+// The coordinator holds the lifecycle lock and handles archive metadata.
 // Use stdlib tar parsing and explicit extraction so validation is independent of Python versions.
 const transferScript = String.raw`
-import os,sys,json,tarfile,gzip,hashlib,shutil,posixpath,stat,urllib.request
+import os,sys,json,tarfile,gzip,hashlib,shutil,posixpath,stat,urllib.request,subprocess,re,io
 cfg=json.load(open(sys.argv[1])); action=sys.argv[2]; folder=os.path.dirname(sys.argv[1])
 archive=folder+'/workspace.tar.gz'; decoded=folder+'/workspace.tar'
 roots=['workspace','root/.pi/agent/sessions']; max_gzip=2*1024**3; max_decoded=8*1024**3
@@ -79,6 +83,82 @@ def check_member(member):
  if not (member.isfile() or member.isdir() or member.issym() or member.islnk()) or member.size<0 or member.size>max_decoded or member.sparse is not None: raise ValueError('unsupported archive entry')
  if member.issym() or member.islnk(): link_target(member)
  return member
+
+def workspace_mounts():
+ # Read the kernel's mount table, never infer a canonical file from its size alone.
+ def unescape(value): return re.sub(r'\\([0-7]{3})',lambda m:chr(int(m[1],8)),value)
+ mounts=[]
+ with open('/proc/self/mountinfo') as source:
+  for line in source:
+   fields=line.rstrip('\n').split(' '); split=fields.index('-')
+   mounts.append({'id':fields[0],'device':fields[2],'root':unescape(fields[3]),'target':unescape(fields[4]),
+    'options':fields[5].split(','),'type':fields[split+1],'source':unescape(fields[split+2]),'super':fields[split+3].split(',')})
+ bases=[m for m in mounts if m['target']==cfg['mountRoot']]
+ base=bases[0] if len(bases)==1 else None
+ targets={}
+ for mount in mounts:
+  name=mount['target'].lstrip('/')
+  if not allowed(name): continue
+  if name in targets: raise ValueError('stacked workspace mounts cannot be archived')
+  if not base or (base['type'],base['source']) not in (('fuse.s3fs','s3fs'),('fuse','mountpoint-s3')) or \
+     'ro' not in base['options'] or 'user_id=0' not in base['super'] or mount['type']!=base['type'] or \
+     'ro' not in mount['options'] or mount['device']!=base['device'] or mount['source']!=base['source']:
+   raise ValueError('unknown workspace mount cannot be archived')
+  targets[name]=mount
+ return base,targets
+
+def mounted_pointers(base,mounts):
+ if not mounts: return {}
+ root=cfg['checkoutRoot']; company=cfg['companyPath']; prefix=root+'/'+company+'/'
+ if any(not ('/'+name).startswith(prefix) for name in mounts): raise ValueError('LFS mount outside company checkout')
+ def git(args,data=None):
+  return subprocess.run(['git','-c','safe.directory='+root,'-C',root,*args],input=data,stdout=subprocess.PIPE,
+   stderr=subprocess.PIPE,check=True,env={**os.environ,'GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_GLOBAL':'/dev/null'}).stdout
+ entries={}
+ for entry in git(['ls-tree','-r','-z','HEAD','--',company]).split(b'\0'):
+  if not entry: continue
+  header,name=entry.split(b'\t',1); mode,kind,oid=header.split(b' ')
+  archive_name=(root+'/'+os.fsdecode(name)).lstrip('/')
+  if archive_name in mounts:
+   if kind!=b'blob' or mode not in (b'100644',b'100755'): raise ValueError('LFS mount has no regular Git pointer')
+   entries[archive_name]=oid
+ if set(entries)!=set(mounts): raise ValueError('LFS mount has no tracked Git pointer')
+ request=b''.join(oid+b'\n' for oid in entries.values())
+ sizes=git(['cat-file','--batch-check=%(objectsize)'],request).splitlines()
+ if len(sizes)!=len(entries) or any(not value.isdigit() or int(value)>1024 for value in sizes): raise ValueError('LFS mount has no small Git pointer')
+ blobs=io.BytesIO(git(['cat-file','--batch'],request)); pointers={}
+ for name,oid in entries.items():
+  header=blobs.readline().rstrip(b'\n').split(b' ')
+  if len(header)!=3 or header[0]!=oid or header[1]!=b'blob': raise ValueError('invalid LFS pointer object')
+  pointer=blobs.read(int(header[2]))
+  if blobs.read(1)!=b'\n' or not pointer.startswith(b'version https://git-lfs.github.com/spec/v1\n'): raise ValueError('invalid LFS pointer')
+  digest=re.search(rb'^oid sha256:([0-9a-f]{64})$',pointer,re.M); length=re.search(rb'^size ([0-9]+)$',pointer,re.M)
+  if not digest or not length: raise ValueError('invalid LFS pointer')
+  sha=digest[1].decode(); expected=posixpath.join(base['root'],sha[:2],sha[2:4],sha[4:])
+  if mounts[name]['root']!=expected: raise ValueError('LFS mount does not match its Git pointer')
+  pointers[name]=pointer
+ return pointers
+
+def inventory(mounts):
+ entries={}
+ def visit(name):
+  if not allowed(name): return
+  clean(name)
+  if len(entries)>=max_entries: raise ValueError('excessive archive entries')
+  # The kernel mount identity is stable; avoid even getattr against canonical S3 objects.
+  if name in mounts:
+   entries[name]=('canonical-mount',)
+   return
+  info=os.lstat('/'+name)
+  entries[name]=(info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_gid,info.st_nlink,info.st_size,
+   info.st_mtime_ns,info.st_ctime_ns,os.readlink('/'+name) if stat.S_ISLNK(info.st_mode) else None)
+  if stat.S_ISDIR(info.st_mode):
+   for child in sorted(os.listdir('/'+name)): visit(name+'/'+child)
+ for root in roots:
+  if os.path.lexists('/'+root):
+   if os.path.islink('/'+root) or not os.path.isdir('/'+root): raise ValueError('archive root must be a directory')
+   visit(root)
+ return entries
 
 def unpack_checked(extract):
  with gzip.open(archive,'rb') as source, open(decoded,'xb') as target:
@@ -145,6 +225,7 @@ def digest():
  return {'sha256':h.hexdigest(),'sizeBytes':size}
 
 if action=='pack':
+ mounts=workspace_mounts(); before=inventory(mounts[1]); pointers=mounted_pointers(*mounts)
  count=0; payload=0
  def selected(member):
   global count,payload
@@ -163,10 +244,14 @@ if action=='pack':
  with open(archive,'xb') as target:
   with gzip.GzipFile(fileobj=LimitedWriter(target,max_gzip),mode='wb',compresslevel=1,mtime=0) as zipped:
    with tarfile.open(fileobj=LimitedWriter(zipped,max_decoded),mode='w|',dereference=False) as tar:
-    for root in roots:
-     if os.path.lexists('/'+root):
-      if os.path.islink('/'+root) or not os.path.isdir('/'+root): raise ValueError('archive root must be a directory')
-      tar.add('/'+root,arcname=root,filter=selected)
+    for name in before:
+     if name in pointers:
+      # Preserve the underlying Git pointer without opening the mounted S3 binary.
+      member=tarfile.TarInfo(name); member.size=len(pointers[name]); member.mode=0o644
+      member.uid=member.gid=10001; member.mtime=0
+      tar.addfile(selected(member),io.BytesIO(pointers[name]))
+     else: tar.add('/'+name,arcname=name,filter=selected,recursive=False)
+ if workspace_mounts()!=mounts or inventory(mounts[1])!=before: raise ValueError('workspace changed during archive capture')
  metadata=digest(); unpack_checked(False); print(json.dumps(metadata))
 elif action=='upload':
  metadata=digest()
@@ -189,12 +274,14 @@ elif action=='restore':
 else: raise ValueError('unknown transfer action')
 `;
 
-const run = Effect.fn(function* (runtime: WorkspaceRuntimeShape, workspace: WorkspaceRuntimeBinding,
+const run = Effect.fn(function* (runtime: WorkspaceArchiveRuntime, workspace: WorkspaceRuntimeBinding,
   folder: string, binding: ProviderWorkerRuntimeBinding, action: string, extra: Record<string, unknown> = {}) {
   const excluded = ["opt/synara/provider-worker.json", "tmp/synara-repository-credential.gitconfig",
     path.posix.join(binding.homeDir, "state/secrets").replace(/^\//u, "")];
+  if (action === "pack") excluded.push(path.posix.join(binding.homeDir, "state/logs").replace(/^\//u, ""));
   yield* runtime.writeFile(workspace, { path: `${folder}/config.json`, mode: 0o600,
-    data: JSON.stringify({ excluded, ...extra }) });
+    data: JSON.stringify({ excluded, checkoutRoot: REPOSITORY_CHECKOUT_ROOT, mountRoot: S3_LFS_MOUNT_ROOT,
+      companyPath: (binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding)?.path, ...extra }) });
   const result = yield* runtime.exec(workspace, {
     command: `python3 ${quote(`${folder}/transfer.py`)} ${quote(`${folder}/config.json`)} ${quote(action)}`,
     timeoutSeconds: 600,
@@ -205,51 +292,69 @@ const run = Effect.fn(function* (runtime: WorkspaceRuntimeShape, workspace: Work
   }
   return result.stdout;
 });
-const prepare = Effect.fn(function* (runtime: WorkspaceRuntimeShape, workspace: WorkspaceRuntimeBinding, folder: string) {
+const prepare = Effect.fn(function* (runtime: WorkspaceArchiveRuntime, workspace: WorkspaceRuntimeBinding, folder: string) {
   const created = yield* runtime.exec(workspace, { command: `mkdir -m 700 ${quote(folder)}`, timeoutSeconds: 10 });
   if (created.exitCode !== 0) return yield* Effect.fail(new Error("Cannot prepare workspace archive transfer."));
   yield* runtime.writeFile(workspace, { path: `${folder}/transfer.py`, data: transferScript, mode: 0o600 });
 });
 
-export const archiveWorkspaceCheckpoint = Effect.fn(function* (input: {
-  readonly workspaceRuntime: WorkspaceRuntimeShape;
+/** Hold the lifecycle lock and settle/stop the worker first; concurrent disk writes fail capture. */
+export const archiveWorkspace = Effect.fn(function* (input: {
+  readonly workspaceRuntime: WorkspaceArchiveRuntime;
   readonly binding: ProviderWorkerRuntimeBinding;
-  readonly checkpoint: { readonly id: string; readonly key: string };
+  readonly revision: string;
 }) {
   const api = yield* attemptSync(() => artifactApiClient());
   if (!api) return yield* Effect.fail(new Error("Workspace archive API is not configured."));
-  const identity = yield* attemptSync(() => scope(input.binding, input.checkpoint.key));
+  const identity = yield* attemptSync(() => scope(input.binding, input.revision));
+  const runtime = input.workspaceRuntime;
+  const reader = input.binding.workspace;
+  const folder = `/tmp/synara-workspace-archive-${randomUUID()}`;
+  return yield* Effect.gen(function* () {
+    yield* prepare(runtime, reader, folder);
+    const output = yield* run(runtime, reader, folder, input.binding, "pack");
+    const metadata = yield* attemptSync(() => {
+      const value = JSON.parse(output) as { sha256: string; sizeBytes: number };
+      if (!/^[0-9a-f]{64}$/u.test(value.sha256) || !Number.isSafeInteger(value.sizeBytes) || value.sizeBytes < 1 || value.sizeBytes > 2 * 1024 ** 3) throw new Error("Invalid archive manifest.");
+      return value;
+    });
+    const grant = yield* attempt(() => api<{ archive_id: string; upload_url: string; headers: Record<string, string> }>(
+      "/internal/workspace-archives/grants", { ...identity, sha256: metadata.sha256, size_bytes: metadata.sizeBytes,
+        format: "tar-gzip-v1", roots: WORKSPACE_ARCHIVE_ROOTS }));
+    const url = yield* attemptSync(() => signedUrl(grant.upload_url));
+    yield* run(runtime, reader, folder, input.binding, "upload", { metadata, url, headers: grant.headers });
+    const archive: WorkspaceArchive = { archiveId: grant.archive_id, ...metadata, revision: input.revision,
+      format: "tar-gzip-v1", roots: WORKSPACE_ARCHIVE_ROOTS };
+    const record = yield* attempt(() => api<ArchiveRecord>(`/internal/workspace-archives/${encodeURIComponent(archive.archiveId)}/complete`, identity));
+    yield* attemptSync(() => verified(record, archive));
+    return archive;
+  }).pipe(Effect.ensuring(runtime.exec(reader, {
+    command: `rm -rf -- ${quote(folder)}`, timeoutSeconds: 10,
+  }).pipe(Effect.ignore)));
+});
+
+/** Retained for importing a Railway checkpoint through an isolated reader. */
+export const archiveWorkspaceCheckpoint = Effect.fn(function* (input: {
+  readonly workspaceRuntime: WorkspaceArchiveRuntime;
+  readonly binding: ProviderWorkerRuntimeBinding;
+  readonly checkpoint: { readonly id: string; readonly key: string };
+}) {
+  yield* attemptSync(() => {
+    if (!artifactApiClient()) throw new Error("Workspace archive API is not configured.");
+    scope(input.binding, input.checkpoint.key);
+  });
   const runtime = input.workspaceRuntime;
   return yield* Effect.acquireUseRelease(
     runtime.create({ lifecycleGeneration: randomUUID(), checkpointName: input.checkpoint.key,
       environment: {}, networkIsolation: "ISOLATED", maintenance: true }),
-    (reader) => Effect.gen(function* () {
-      const folder = `/tmp/synara-workspace-archive-${randomUUID()}`;
-      yield* prepare(runtime, reader, folder);
-      const output = yield* run(runtime, reader, folder, input.binding, "pack");
-      const metadata = yield* attemptSync(() => {
-        const value = JSON.parse(output) as { sha256: string; sizeBytes: number };
-        if (!/^[0-9a-f]{64}$/u.test(value.sha256) || !Number.isSafeInteger(value.sizeBytes) || value.sizeBytes < 1 || value.sizeBytes > 2 * 1024 ** 3) throw new Error("Invalid archive manifest.");
-        return value;
-      });
-      const grant = yield* attempt(() => api<{ archive_id: string; upload_url: string; headers: Record<string, string> }>(
-        "/internal/workspace-archives/grants", { ...identity, sha256: metadata.sha256, size_bytes: metadata.sizeBytes,
-          format: "tar-gzip-v1", roots: WORKSPACE_ARCHIVE_ROOTS }));
-      const url = yield* attemptSync(() => signedUrl(grant.upload_url));
-      yield* run(runtime, reader, folder, input.binding, "upload", { metadata, url, headers: grant.headers });
-      const archive: WorkspaceArchive = { archiveId: grant.archive_id, ...metadata, revision: input.checkpoint.key,
-        format: "tar-gzip-v1", roots: WORKSPACE_ARCHIVE_ROOTS };
-      const record = yield* attempt(() => api<ArchiveRecord>(`/internal/workspace-archives/${encodeURIComponent(archive.archiveId)}/complete`, identity));
-      yield* attemptSync(() => verified(record, archive));
-      return archive;
-    }),
+    (reader) => archiveWorkspace({ workspaceRuntime: runtime, binding: { ...input.binding, workspace: reader }, revision: input.checkpoint.key }),
     (reader) => runtime.destroy(reader).pipe(Effect.catch((cause) => Effect.logWarning("workspace archive reader cleanup failed", { runtimeId: reader.runtimeId, cause }))),
   );
 });
 
 /** Only call before provisioning or launching any worker in a fresh prepared sandbox. */
 export const restoreWorkspaceArchive = Effect.fn(function* (input: {
-  readonly workspaceRuntime: WorkspaceRuntimeShape;
+  readonly workspaceRuntime: WorkspaceArchiveRuntime;
   readonly workspace: WorkspaceRuntimeBinding;
   readonly binding: ProviderWorkerRuntimeBinding;
   readonly archive: WorkspaceArchive;

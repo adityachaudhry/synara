@@ -1,7 +1,7 @@
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { randomUUID } from "node:crypto";
 
-import { Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 
 import {
   WorkspaceCreationIntentRepository,
@@ -21,7 +21,6 @@ import {
   type WorkspaceRuntimeShape,
 } from "../Services/WorkspaceRuntime";
 import type { RailwaySandboxClientShape } from "../Services/RailwaySandboxClient";
-import type { RailwaySandboxRuntimeConfig } from "../railwaySandboxConfig";
 import {
   SandboxCapacity,
   reconcileSandboxCapacityInventory,
@@ -51,23 +50,27 @@ function toRuntimeError(operation: string, runtimeId?: string) {
   return (cause: unknown) =>
     new WorkspaceRuntimeError({
       operation,
-      detail: `Railway workspace runtime ${operation} failed.`,
+      detail: `Sandbox workspace runtime ${operation} failed.`,
       ...(runtimeId === undefined ? {} : { runtimeId }),
       ...(cause instanceof RailwaySandboxNotFoundError ? { unavailable: true } : {}),
       cause,
     });
 }
 
+export type WorkspaceSandboxRuntimeSettings =
+  | { readonly enabled: false }
+  | { readonly enabled: true; readonly region?: string; readonly idleTimeoutMinutes: number; readonly maxActiveSandboxes: number };
+
 function requireEnabled(
-  config: RailwaySandboxRuntimeConfig,
+  config: WorkspaceSandboxRuntimeSettings,
   operation: string,
-): Effect.Effect<Extract<RailwaySandboxRuntimeConfig, { readonly enabled: true }>, WorkspaceRuntimeError> {
+): Effect.Effect<Extract<WorkspaceSandboxRuntimeSettings, { readonly enabled: true }>, WorkspaceRuntimeError> {
   return config.enabled
     ? Effect.succeed(config)
     : Effect.fail(
         new WorkspaceRuntimeError({
           operation,
-          detail: "Railway Sandbox runtime is not configured.",
+          detail: "Sandbox runtime is not configured.",
         }),
       );
 }
@@ -76,6 +79,7 @@ export interface WorkspaceRuntimeOptions {
   readonly createOperationId?: () => string;
   readonly reconcileIntervalMs?: number;
   readonly capacity?: SandboxCapacity;
+  readonly runtimeKind?: "railway-sandbox" | "daytona-sandbox";
 }
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 10_000;
@@ -85,7 +89,9 @@ export function reconcileWorkspaceCreationIntents(input: {
   readonly client: RailwaySandboxClientShape;
   readonly intents: WorkspaceCreationIntentRepositoryShape;
   readonly ownedOperationIds: ReadonlySet<string>;
+  readonly runtimes?: ProviderSessionRuntimeRepositoryShape;
   readonly onIntentCleaned?: (operationId: string) => Effect.Effect<void>;
+  readonly onIntentAdopted?: (operationId: string, binding: ReturnType<typeof decodeProviderWorkerRuntimeBinding> & {}) => Effect.Effect<void>;
 }) {
   return input.intents.list().pipe(
     Effect.flatMap(
@@ -98,6 +104,17 @@ export function reconcileWorkspaceCreationIntents(input: {
           if (runtimeId === null) return;
           if (intent.runtimeId === null) {
             yield* input.intents.bindRuntime({ operationId: intent.operationId, runtimeId });
+          }
+          if (input.runtimes) {
+            const persisted = yield* input.runtimes.list();
+            const owner = persisted.map((record) => decodeProviderWorkerRuntimeBinding(
+              (record.runtimePayload as { distributedPiRuntime?: unknown } | null)?.distributedPiRuntime,
+            )).find((binding) => binding?.workspace.runtimeId === runtimeId);
+            if (owner) {
+              yield* input.onIntentAdopted?.(intent.operationId, owner) ?? Effect.void;
+              yield* input.intents.remove(intent.operationId);
+              return;
+            }
           }
           yield* input.client
             .destroy(runtimeId)
@@ -116,6 +133,7 @@ export function reconcileSandboxCapacityAtStartup(input: {
   readonly intents: WorkspaceCreationIntentRepositoryShape;
   readonly runtimes: ProviderSessionRuntimeRepositoryShape;
   readonly capacity: SandboxCapacity;
+  readonly runningOnly?: boolean;
 }) {
   return Effect.gen(function* () {
     const [inventory, pendingCreationIntents, persistedRuntimes] = yield* Effect.all([
@@ -156,7 +174,7 @@ export function reconcileSandboxCapacityAtStartup(input: {
       ) {
         return yield* new WorkspaceRuntimeError({
           operation: "capacity.reconcile",
-          detail: `Persisted Railway capacity key for thread '${runtime.threadId}' does not match lifecycle generation '${runtime.lifecycleGeneration}'.`,
+          detail: `Persisted sandbox capacity key for thread '${runtime.threadId}' does not match lifecycle generation '${runtime.lifecycleGeneration}'.`,
           runtimeId: binding.workspace.runtimeId,
         });
       }
@@ -168,17 +186,20 @@ export function reconcileSandboxCapacityAtStartup(input: {
       });
     }
     const report = reconcileSandboxCapacityInventory({
-      inventoryRuntimeIds: inventory.map((record) => record.id),
+      inventoryRuntimeIds: inventory.filter((record) => !input.runningOnly || record.status === "RUNNING")
+        .map((record) => record.id),
       liveBindings,
       pendingCreationIntents: resolvedIntents,
     });
-    input.capacity.reconcile(report.reservations);
+    input.capacity.reconcile([...report.reservations, ...(input.runningOnly ? report.orphanRuntimeIds.map((runtimeId) => ({
+      key: `orphan:${runtimeId}`, threadId: `orphan:${runtimeId}`, lifecycleGeneration: "unbound",
+    })) : [])]);
     return report;
   });
 }
 
 export function makeWorkspaceRuntimeLive(
-  config: RailwaySandboxRuntimeConfig,
+  config: WorkspaceSandboxRuntimeSettings,
   options: WorkspaceRuntimeOptions = {},
 ) {
   return Layer.effect(
@@ -191,6 +212,7 @@ export function makeWorkspaceRuntimeLive(
         : undefined;
       const ownedOperationIds = new Set<string>();
       const capacityLeaseByOperationId = new Map<string, SandboxCapacityLease>();
+      const capacityKeyByRuntimeId = new Map<string, string>();
       const reconcileIntervalMs =
         options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
 
@@ -199,6 +221,7 @@ export function makeWorkspaceRuntimeLive(
           client,
           intents,
           ownedOperationIds,
+          ...(runtimes ? { runtimes } : {}),
           ...(options.capacity === undefined
             ? {}
             : {
@@ -212,6 +235,13 @@ export function makeWorkspaceRuntimeLive(
                       options.capacity!.release(`create-intent:${operationId}`);
                     }
                   }),
+                onIntentAdopted: (operationId, binding) => Effect.sync(() => {
+                  if (!binding.threadId || !binding.workspace.capacityKey) return;
+                  options.capacity!.reassign(`create-intent:${operationId}`, {
+                    key: binding.workspace.capacityKey, threadId: binding.threadId,
+                    lifecycleGeneration: binding.fence.lifecycleGeneration,
+                  });
+                }),
               }),
         }).pipe(
           Effect.matchEffect({
@@ -239,11 +269,12 @@ export function makeWorkspaceRuntimeLive(
               intents,
               runtimes,
               capacity: options.capacity,
+              runningOnly: options.runtimeKind === "daytona-sandbox",
             }).pipe(
               Effect.tap((report) =>
                 report.orphanRuntimeIds.length === 0
                   ? Effect.void
-                  : Effect.logWarning("unowned Railway sandbox inventory detected", {
+                  : Effect.logWarning("unowned sandbox inventory detected", {
                       runtimeIds: report.orphanRuntimeIds,
                     }),
               ),
@@ -318,7 +349,7 @@ export function makeWorkspaceRuntimeLive(
                 catch: (cause) =>
                   new WorkspaceRuntimeError({
                     operation: "capacity.acquire",
-                    detail: "Railway workspace capacity acquisition failed.",
+                    detail: "Sandbox workspace capacity acquisition failed.",
                     cause,
                   }),
               });
@@ -423,13 +454,14 @@ export function makeWorkspaceRuntimeLive(
               yield* releaseCapacity({ operationId, capacityKey });
               return yield* new WorkspaceRuntimeError({
                 operation: "create",
-                detail: `Created Railway Sandbox entered unexpected status ${record.status}.`,
+                detail: `Created sandbox entered unexpected status ${record.status}.`,
                 runtimeId: record.id,
               });
             }
 
+            if (capacityLease) capacityKeyByRuntimeId.set(record.id, capacityKey);
             return {
-              runtimeKind: "railway-sandbox",
+              runtimeKind: options.runtimeKind ?? "railway-sandbox",
               runtimeId: record.id,
               creationOperationId: operationId,
               ...(capacityLease === undefined ? {} : { capacityKey }),
@@ -452,7 +484,8 @@ export function makeWorkspaceRuntimeLive(
           if (record.status !== "RUNNING") {
             return yield* new WorkspaceRuntimeError({
               operation: "connect",
-              detail: `Railway Sandbox is ${record.status}, not RUNNING.`,
+              detail: `Sandbox is ${record.status}, not RUNNING.`,
+              status: runtimeStatus(record.status),
               runtimeId: binding.runtimeId,
               unavailable: record.status !== "CREATING",
             });
@@ -463,6 +496,68 @@ export function makeWorkspaceRuntimeLive(
             region: record.region,
           };
         });
+
+      const park: NonNullable<WorkspaceRuntimeShape["park"]> = (binding) =>
+        Effect.uninterruptible(Effect.gen(function* () {
+          yield* requireEnabled(config, "park");
+          if (!client.stop) return yield* new WorkspaceRuntimeError({
+            operation: "park", detail: "Sandbox parking is unavailable.", runtimeId: binding.runtimeId,
+          });
+          const record = yield* client.stop(binding.runtimeId)
+            .pipe(Effect.mapError(toRuntimeError("park", binding.runtimeId)));
+          if (record.status !== "STOPPED") return yield* new WorkspaceRuntimeError({
+            operation: "park", detail: `Sandbox remained ${record.status}.`, runtimeId: binding.runtimeId,
+          });
+          const key = capacityKeyByRuntimeId.get(binding.runtimeId) ?? binding.capacityKey;
+          if (key) options.capacity?.release(key);
+          options.capacity?.release(`orphan:${binding.runtimeId}`);
+          capacityKeyByRuntimeId.delete(binding.runtimeId);
+          return { ...binding, status: "stopped" as const, region: record.region };
+        }));
+
+      const resume: NonNullable<WorkspaceRuntimeShape["resume"]> = (binding, input) =>
+        Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+          yield* requireEnabled(config, "resume");
+          if (!client.start || !client.stop) return yield* new WorkspaceRuntimeError({
+            operation: "resume", detail: "Sandbox resumption is unavailable.", runtimeId: binding.runtimeId,
+          });
+          const capacityKey = `${input.maintenance ? "maintenance:" : ""}${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
+          const request = { key: capacityKey, threadId: input.threadId ?? input.lifecycleGeneration, lifecycleGeneration: input.lifecycleGeneration };
+          const existing = options.capacity?.reassign(capacityKeyByRuntimeId.get(binding.runtimeId) ?? binding.capacityKey ?? `orphan:${binding.runtimeId}`, request)
+            ?? options.capacity?.reassign(`orphan:${binding.runtimeId}`, request);
+          const lease = existing ?? (options.capacity === undefined ? undefined : yield* restore(Effect.tryPromise({
+            try: (signal) => options.capacity!.acquire({
+              key: capacityKey, threadId: input.threadId ?? input.lifecycleGeneration,
+              lifecycleGeneration: input.lifecycleGeneration, signal,
+            }),
+            catch: toRuntimeError("capacity.acquire", binding.runtimeId),
+          })));
+          input.onCapacityAdmitted?.();
+          if (lease) capacityKeyByRuntimeId.set(binding.runtimeId, capacityKey);
+          const started = yield* Effect.exit(restore(client.start(binding.runtimeId).pipe(
+            Effect.mapError(toRuntimeError("resume", binding.runtimeId)),
+            Effect.flatMap((record) => record.status === "RUNNING" ? Effect.succeed(record)
+              : Effect.fail(new WorkspaceRuntimeError({
+                  operation: "resume", detail: `Sandbox remained ${record.status}.`, runtimeId: binding.runtimeId,
+                }))),
+          )));
+          if (Exit.isFailure(started)) {
+            const stopped = yield* Effect.exit(client.stop(binding.runtimeId));
+            if ((Exit.isSuccess(stopped) && stopped.value.status === "STOPPED") ||
+                (Exit.isFailure(stopped) && Cause.squash(stopped.cause) instanceof RailwaySandboxNotFoundError)) {
+              lease?.release(); capacityKeyByRuntimeId.delete(binding.runtimeId);
+            }
+            return yield* Effect.failCause(started.cause);
+          }
+          return {
+            runtimeKind: binding.runtimeKind,
+            runtimeId: binding.runtimeId,
+            lifecycleGeneration: input.lifecycleGeneration,
+            status: "running" as const,
+            region: started.value.region,
+            ...(lease ? { capacityKey } : {}),
+          };
+        }));
 
       const adopt: WorkspaceRuntimeShape["adopt"] = (binding) =>
         binding.creationOperationId === undefined
@@ -489,7 +584,7 @@ export function makeWorkspaceRuntimeLive(
               : Effect.fail(
                   new WorkspaceRuntimeError({
                     operation: "keepAlive",
-                    detail: `Railway Sandbox keepalive exited with ${String(result.exitCode)}.`,
+                    detail: `Sandbox keepalive exited with ${String(result.exitCode)}.`,
                     runtimeId: binding.runtimeId,
                   }),
                 ),
@@ -509,7 +604,7 @@ export function makeWorkspaceRuntimeLive(
               return Effect.fail(
                 new WorkspaceRuntimeError({
                   operation: "readFile",
-                  detail: "Railway file reads are unavailable.",
+                  detail: "Sandbox file reads are unavailable.",
                   runtimeId: binding.runtimeId,
                 }),
               );
@@ -527,7 +622,7 @@ export function makeWorkspaceRuntimeLive(
               return Effect.fail(
                 new WorkspaceRuntimeError({
                   operation: "listFiles",
-                  detail: "Railway directory listing is unavailable.",
+                  detail: "Sandbox directory listing is unavailable.",
                   runtimeId: binding.runtimeId,
                 }),
               );
@@ -545,7 +640,7 @@ export function makeWorkspaceRuntimeLive(
               return Effect.fail(
                 new WorkspaceRuntimeError({
                   operation: "statFile",
-                  detail: "Railway file stat is unavailable.",
+                  detail: "Sandbox file stat is unavailable.",
                   runtimeId: binding.runtimeId,
                 }),
               );
@@ -593,6 +688,12 @@ export function makeWorkspaceRuntimeLive(
                 ...(binding.capacityKey === undefined ? {} : { capacityKey: binding.capacityKey }),
               }),
             ),
+            Effect.tap(() => Effect.sync(() => options.capacity?.release(`orphan:${binding.runtimeId}`))),
+            Effect.tap(() => Effect.sync(() => {
+              const key = capacityKeyByRuntimeId.get(binding.runtimeId);
+              if (key) options.capacity?.release(key);
+              capacityKeyByRuntimeId.delete(binding.runtimeId);
+            })),
             Effect.onError(() =>
               Effect.sync(() => {
                 if (binding.creationOperationId !== undefined) {
@@ -608,7 +709,7 @@ export function makeWorkspaceRuntimeLive(
         Effect.map((records) =>
           records.map(
             (record): WorkspaceRuntimeInventoryRecord => ({
-              runtimeKind: "railway-sandbox",
+              runtimeKind: options.runtimeKind ?? "railway-sandbox",
               runtimeId: record.id,
               status: runtimeStatus(record.status),
               region: record.region,
@@ -634,6 +735,7 @@ export function makeWorkspaceRuntimeLive(
             .pipe(Effect.mapError(toRuntimeError("checkpoint.list"))),
         } : {}),
         connect,
+        ...(client.start && client.stop ? { park, resume } : {}),
         adopt,
         exec,
         writeFile,

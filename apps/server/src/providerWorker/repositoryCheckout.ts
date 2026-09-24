@@ -16,14 +16,14 @@ const PREVIOUS_COMMIT_MARKER = "__SYNARA_PREVIOUS_COMMIT__=";
 const CHANGED_FILES_MARKER = "__SYNARA_CHANGED_FILES__=";
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-export function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, sourceOrigin: string, credentialConfigPath?: string, mountRoot?: string): string {
+export function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, sourceOrigin: string, credentialConfigPath?: string, mountRoot?: string, onlyPath?: string): string {
   const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, sourceOrigin,
-    ...(credentialConfigPath ? { credentialConfigPath } : {}), ...(mountRoot ? { mountRoot } : {}) });
+    ...(credentialConfigPath ? { credentialConfigPath } : {}), ...(mountRoot ? { mountRoot } : {}), ...(onlyPath ? { onlyPath } : {}) });
   return `GIT_TERMINAL_PROMPT=0 ${credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(credentialConfigPath)} ` : ""}node -e ${shellQuote(script)}`;
 }
 
-export function uncoverLfs(checkoutRoot: string, companyPath: string, mountRoot?: string): string {
-  return mountRoot ? `node -e ${shellQuote(repositoryS3LfsUnmountScript(checkoutRoot, companyPath))}` : ":";
+export function uncoverLfs(checkoutRoot: string, companyPath: string, mountRoot?: string, onlyPath?: string): string {
+  return mountRoot ? `node -e ${shellQuote(repositoryS3LfsUnmountScript(checkoutRoot, companyPath, onlyPath))}` : ":";
 }
 
 function sparseCheckoutPattern(bindingPath: string): string {
@@ -61,9 +61,11 @@ export function makeRepositoryCheckoutPlan(input: {
     `${input.credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ` : ""}GIT_TERMINAL_PROMPT=0 git clone ${input.companyOnly ? `--single-branch --branch ${shellQuote(executionRef)} ` : ""}--no-checkout --depth=1 --filter=blob:none --config core.sparseCheckout=true --config core.sparseCheckoutCone=true ${shellQuote(repositoryUrl)} ${shellQuote(checkoutRoot)}`,
     `mkdir -p ${shellQuote(path.posix.dirname(sparsePath))}`,
     `printf '%s' ${shellQuote(sparseCheckoutPattern(input.binding.path))} > ${shellQuote(sparsePath)}`,
-    `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none origin ${shellQuote(executionRef)}; then printf '${CHECKOUT_MODE_MARKER}${input.companyOnly ? "company" : "partial"}\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags origin ${shellQuote(executionRef)} && printf '${CHECKOUT_MODE_MARKER}${input.companyOnly ? "company" : "shallow"}\\n'; fi`,
-    `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
-    `${sparseGit} checkout --detach FETCH_HEAD`,
+    input.companyOnly
+      ? `printf '${CHECKOUT_MODE_MARKER}company\\n'`
+      : `if ${authenticatedGit} fetch --depth=1 --no-tags --filter=blob:none origin ${shellQuote(executionRef)}; then printf '${CHECKOUT_MODE_MARKER}partial\\n'; else ${authenticatedGit} fetch --depth=1 --no-tags origin ${shellQuote(executionRef)} && printf '${CHECKOUT_MODE_MARKER}shallow\\n'; fi`,
+    `source_commit="$(${git} rev-parse ${input.companyOnly ? "HEAD" : "FETCH_HEAD"})"`,
+    `${sparseGit} checkout --detach "$source_commit"`,
     `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
     hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath, input.mountRoot),
     `test -d ${shellQuote(cwd)}`,
@@ -164,8 +166,7 @@ export function makeRepositoryRefreshPlan(input: {
       `if ${git} remote get-url origin >/dev/null 2>&1; then ${git} remote set-url origin ${shellQuote(repositoryUrl)}; fi`,
       `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(executionRef)}`,
       `source_commit="$(${git} rev-parse FETCH_HEAD)"`,
-      uncoverLfs(checkoutRoot, input.binding.path, input.mountRoot),
-      `${authenticatedGit} merge --ff-only --no-edit "$source_commit"`,
+      `if [ "$previous" != "$source_commit" ]; then ${uncoverLfs(checkoutRoot, input.binding.path, input.mountRoot)} && ${authenticatedGit} merge --ff-only --no-edit "$source_commit"; fi`,
       `test "$(${git} rev-parse HEAD)" = "$source_commit"`,
       hydrateLfs(checkoutRoot, input.binding.path, repositoryUrl, input.binding.origin, input.credentialConfigPath, input.mountRoot),
       `printf '${PREVIOUS_COMMIT_MARKER}%s\\n' "$previous"`,

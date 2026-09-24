@@ -1,5 +1,7 @@
 # Daytona-native recovery decision (dev)
 
+> Historical decision, superseded by the reopened Daytona-native dev evaluation. Its conclusion was premature: the recorded native trial did not exercise Pi recovery, and the shared 20-second storage path had not been profiled. See [the subsequent storage measurements](2026-09-24-repository-preparation-native.md).
+
 Decision on 2026-09-24: do not cut Synara dev over to Daytona. Keep the existing Railway worker runtime. Production was not changed.
 
 The paired company-workspace trial measured 25,423 ms to prepare a US Daytona sandbox versus 25,011 ms on Railway US East. A Daytona container stop preserved its draft and local Git disk but lost the S3 FUSE mount. Rebinding the 28 company LFS objects and refreshing Git took 20,454 ms in the recovery trial. See [the paired benchmark](2026-09-24-daytona-us-vs-railway.md).

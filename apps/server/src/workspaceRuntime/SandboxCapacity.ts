@@ -106,6 +106,18 @@ export class SandboxCapacity {
     this.#active.get(key)?.release();
   }
 
+  /** Transfer ownership of a still-running sandbox without freeing its physical slot. */
+  reassign(key: string, next: SandboxCapacityReservation): SandboxCapacityLease | undefined {
+    if (key === next.key) return this.#active.get(key);
+    if (!this.#active.has(key)) return undefined;
+    if (this.#active.has(next.key)) throw new Error("Sandbox capacity owner already exists.");
+    this.#active.delete(key);
+    const lease = this.#makeLease(next);
+    this.#active.set(next.key, lease);
+    this.#publish();
+    return lease;
+  }
+
   snapshot(): SandboxCapacitySnapshot {
     return {
       activeKeys: Array.from(this.#active.keys()),

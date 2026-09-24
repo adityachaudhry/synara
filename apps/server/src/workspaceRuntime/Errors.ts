@@ -21,5 +21,6 @@ export class WorkspaceRuntimeError extends Data.TaggedError("WorkspaceRuntimeErr
   readonly runtimeId?: string;
   /** Set only for an authoritative missing or terminal runtime, never a transport failure. */
   readonly unavailable?: boolean;
+  readonly status?: "creating" | "running" | "stopped" | "destroying" | "destroyed" | "failed";
   readonly cause?: unknown;
 }> {}

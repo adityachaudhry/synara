@@ -9,6 +9,9 @@ export interface ProviderWorkspaceCheckpoint {
   readonly binding: ProviderWorkerRuntimeBinding;
   readonly checkpoint?: RailwayCheckpoint;
   readonly archive?: WorkspaceArchive;
+  /** Stable Daytona disk identity; revision advances only with a verified portable backup. */
+  readonly nativeRevision?: string;
+  readonly archiveBinding?: ProviderWorkerRuntimeBinding;
   /** Retain deletion work across controller restarts. */
   readonly retiredCheckpoints?: readonly RailwayCheckpoint[];
 }
@@ -21,7 +24,7 @@ export interface WorkspaceCaptureIntent {
 }
 
 export const workspaceCheckpointRevision = (saved: ProviderWorkspaceCheckpoint) =>
-  saved.checkpoint?.key ?? saved.archive!.revision;
+  saved.nativeRevision ?? saved.checkpoint?.key ?? saved.archive!.revision;
 
 /** Atomic pointer replacement keeps the last verified disk until a new location is durable. */
 export function makeWorkspaceCheckpointStore(root: string) {
@@ -54,10 +57,23 @@ export function makeWorkspaceCheckpointStore(root: string) {
     const value = JSON.parse(raw);
     const binding = decodeProviderWorkerRuntimeBinding(value.binding);
     const checkpoint = value.checkpoint;
-    const archive = value.archive;
-    if (binding?.threadId !== threadId || (!checkpoint && !archive)) {
+    let archive = value.archive;
+    if (!archive && value.checkpoint?.key && binding?.workspace.runtimeKind === "railway-sandbox") {
+      try { archive = JSON.parse(await readFile(path.join(root, "imports", hashName(value.checkpoint.key)), "utf8")); }
+      catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause; }
+    }
+    const nativeRevision = value.nativeRevision;
+    const archiveBinding = value.archiveBinding === undefined ? undefined : decodeProviderWorkerRuntimeBinding(value.archiveBinding);
+    if (binding?.threadId !== threadId || (!checkpoint && !archive && !nativeRevision)) {
       throw new Error("Provider workspace checkpoint does not belong to this thread.");
     }
+    if (nativeRevision !== undefined && (binding.workspace.runtimeKind !== "daytona-sandbox" ||
+        typeof nativeRevision !== "string" || !/^[a-zA-Z0-9-]{1,160}$/.test(nativeRevision) || checkpoint ||
+        (archive && archive.revision !== nativeRevision))) throw new Error("Invalid native workspace revision.");
+    if (value.archiveBinding !== undefined && (!nativeRevision || !archive || !archiveBinding || archiveBinding.threadId !== threadId ||
+        JSON.stringify(archiveBinding.repositoryCheckout?.binding ?? archiveBinding.repositoryUnavailable?.binding) !==
+        JSON.stringify(binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding))) throw new Error("Invalid native archive binding.");
+    if (nativeRevision && !archive) return { binding, nativeRevision };
     if (value.retiredCheckpoints !== undefined && (!Array.isArray(value.retiredCheckpoints) ||
         value.retiredCheckpoints.some((item: RailwayCheckpoint) => typeof item?.id !== "string" || typeof item?.key !== "string"))) {
       throw new Error("Invalid retired checkpoint references.");
@@ -77,12 +93,16 @@ export function makeWorkspaceCheckpointStore(root: string) {
         archive.sizeBytes > 0 && archive.sizeBytes <= 2 * 1024 ** 3 && archive.format === "tar-gzip-v1" &&
         Array.isArray(archive.roots) && archive.roots.length === 2 &&
         archive.roots[0] === "workspace" && archive.roots[1] === "root/.pi/agent/sessions") {
-      return { binding, archive, ...(checkpoint ? { checkpoint } : {}), ...(value.retiredCheckpoints ? { retiredCheckpoints: value.retiredCheckpoints } : {}) };
+      return { binding, archive, ...(nativeRevision ? { nativeRevision } : {}), ...(archiveBinding ? { archiveBinding } : {}), ...(checkpoint ? { checkpoint } : {}), ...(value.retiredCheckpoints ? { retiredCheckpoints: value.retiredCheckpoints } : {}) };
     }
     throw new Error("Invalid provider workspace checkpoint location.");
   };
   return {
     read,
+    async writeImportedArchive(checkpointKey: string, archive: WorkspaceArchive) {
+      if (archive.revision !== checkpointKey) throw new Error("Imported archive revision mismatch.");
+      await atomicWrite(path.join(root, "imports", hashName(checkpointKey)), archive);
+    },
     async beginCapture(threadId: string, binding: ProviderWorkerRuntimeBinding, key: string): Promise<void> {
       if (binding.threadId !== threadId || !key || key.length > 256) {
         throw new Error("Invalid workspace capture owner or key.");
