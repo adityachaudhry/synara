@@ -80,8 +80,6 @@ export interface RailwaySandboxClientShape {
   readonly connect: (
     runtimeId: string,
   ) => Effect.Effect<RailwaySandboxRecord, RailwaySandboxClientFailure>;
-  readonly start?: (runtimeId: string) => Effect.Effect<RailwaySandboxRecord, RailwaySandboxClientFailure>;
-  readonly stop?: (runtimeId: string) => Effect.Effect<RailwaySandboxRecord, RailwaySandboxClientFailure>;
   readonly exec: (
     runtimeId: string,
     input: RailwaySandboxExecInput,

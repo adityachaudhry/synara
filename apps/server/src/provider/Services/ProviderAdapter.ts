@@ -241,9 +241,6 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
-  /** Stop the active process while retaining a provider-managed workspace for resume. */
-  readonly parkSession?: (threadId: ThreadId) => Effect.Effect<void, TError>;
-
   /**
    * List currently active provider sessions for this adapter.
    */

@@ -3,7 +3,7 @@ import { ServiceMap, type Effect } from "effect";
 import type { WorkspaceRuntimeError } from "../Errors";
 
 export interface WorkspaceRuntimeBinding {
-  readonly runtimeKind: "railway-sandbox" | "daytona-sandbox" | "docker-container";
+  readonly runtimeKind: "railway-sandbox" | "docker-container";
   readonly runtimeId: string;
   readonly creationOperationId?: string | undefined;
   readonly capacityKey?: string | undefined;
@@ -13,7 +13,7 @@ export interface WorkspaceRuntimeBinding {
 }
 
 export interface WorkspaceRuntimeInventoryRecord {
-  readonly runtimeKind: "railway-sandbox" | "daytona-sandbox" | "docker-container";
+  readonly runtimeKind: "railway-sandbox" | "docker-container";
   readonly runtimeId: string;
   readonly status: WorkspaceRuntimeBinding["status"];
   readonly region: string;
@@ -84,14 +84,6 @@ export interface WorkspaceRuntimeShape {
   readonly connect: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
-  /** Retain the sandbox filesystem while releasing its running capacity. */
-  readonly park?: (
-    binding: WorkspaceRuntimeBinding,
-  ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
-  readonly resume?: (
-    binding: WorkspaceRuntimeBinding,
-    input: Pick<WorkspaceRuntimeCreateInput, "threadId" | "lifecycleGeneration" | "onCapacityAdmitted">,
-  ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
   readonly adopt: (binding: WorkspaceRuntimeBinding) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly exec: (
     binding: WorkspaceRuntimeBinding,
@@ -101,7 +93,7 @@ export interface WorkspaceRuntimeShape {
     binding: WorkspaceRuntimeBinding,
     input: WorkspaceRuntimeWriteFileInput,
   ) => Effect.Effect<void, WorkspaceRuntimeError>;
-  /** Sandbox-backed file access. Optional for disabled and lightweight test runtimes. */
+  /** Railway-backed file access. Optional for disabled and lightweight test runtimes. */
   readonly readFile?: (
     binding: WorkspaceRuntimeBinding,
     path: string,

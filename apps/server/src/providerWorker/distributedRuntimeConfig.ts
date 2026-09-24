@@ -2,10 +2,6 @@ import {
   resolveRailwaySandboxRuntimeConfig,
   type RailwaySandboxRuntimeConfig,
 } from "../workspaceRuntime/railwaySandboxConfig";
-import {
-  resolveDaytonaSandboxRuntimeConfig,
-  type DaytonaSandboxRuntimeConfig,
-} from "../workspaceRuntime/daytonaSandboxConfig.ts";
 import type { DockerWorkspaceConfig } from "../workspaceRuntime/Layers/DockerWorkspaceRuntime";
 import { isTrustedPrivateWorkerUrl, privateWorkerHosts } from "./privateNetwork.ts";
 
@@ -34,7 +30,6 @@ export type DistributedPiRuntimeConfig =
   | {
       readonly enabled: true;
       readonly railway: RailwaySandboxRuntimeConfig;
-      readonly daytona: DaytonaSandboxRuntimeConfig;
       readonly docker?: DockerWorkspaceConfig;
       readonly controlUrl: string;
       readonly templateCheckpointName?: string;
@@ -58,8 +53,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
             : {}),
         }
       : undefined;
-  const daytona = resolveDaytonaSandboxRuntimeConfig(environment);
-  const railway: RailwaySandboxRuntimeConfig = docker || daytona.enabled
+  const railway: RailwaySandboxRuntimeConfig = docker
     ? { enabled: false }
     : resolveRailwaySandboxRuntimeConfig({
         token: environment.SYNARA_RAILWAY_SANDBOX_TOKEN,
@@ -69,7 +63,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
         idleTimeoutMinutes: environment.SYNARA_RAILWAY_SANDBOX_IDLE_TIMEOUT_MINUTES,
         maxActiveSandboxes: environment.SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES,
       });
-  if (!railway.enabled && !daytona.enabled && !docker) return { enabled: false };
+  if (!railway.enabled && !docker) return { enabled: false };
 
   const rawControlUrl = environment.SYNARA_PROVIDER_WORKER_CONTROL_URL?.trim();
   if (!rawControlUrl) {
@@ -82,9 +76,6 @@ export function resolveDistributedPiRuntimeConfig(input: {
   if (controlUrl.protocol === "https:") controlUrl.protocol = "wss:";
   if (controlUrl.protocol !== "ws:" && controlUrl.protocol !== "wss:") {
     throw new Error("SYNARA_PROVIDER_WORKER_CONTROL_URL must use http, https, ws, or wss.");
-  }
-  if (daytona.enabled && controlUrl.protocol !== "wss:") {
-    throw new Error("Daytona workers require a public WSS control URL.");
   }
   if (controlUrl.username || controlUrl.password || controlUrl.search || controlUrl.hash) {
     throw new Error(
@@ -122,12 +113,9 @@ export function resolveDistributedPiRuntimeConfig(input: {
       "Local Docker requires PRIVATE networking for its host callback; it does not implement Railway ISOLATED networking.",
     );
   }
-  if (daytona.enabled && networkIsolationInput !== "ISOLATED") {
-    throw new Error("Daytona workers require SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=ISOLATED.");
-  }
 
   const trustedEnvironment = { ...environment, SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION: networkIsolationInput };
-  const privateHosts = daytona.enabled ? [] : privateWorkerHosts(environment);
+  const privateHosts = privateWorkerHosts(environment);
   if (privateHosts.length && networkIsolationInput !== "PRIVATE") {
     throw new Error("Private worker hosts require SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=PRIVATE.");
   }
@@ -141,7 +129,7 @@ export function resolveDistributedPiRuntimeConfig(input: {
     workerEnvironment.SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION = networkIsolationInput;
   }
   let repositoryOriginOverride: { readonly sourceOrigin: string; readonly origin: string } | undefined;
-  const privateRepositoryOrigin = daytona.enabled ? undefined : environment.SYNARA_PROVIDER_WORKER_REPOSITORY_ORIGIN?.trim();
+  const privateRepositoryOrigin = environment.SYNARA_PROVIDER_WORKER_REPOSITORY_ORIGIN?.trim();
   if (privateRepositoryOrigin) {
     const origin = new URL(privateRepositoryOrigin);
     const source = new URL(environment.SYNARA_GITEA_ORIGIN ?? "");
@@ -152,16 +140,15 @@ export function resolveDistributedPiRuntimeConfig(input: {
     }
     repositoryOriginOverride = { sourceOrigin: source.origin, origin: origin.origin };
   }
-  const templateCheckpointName = daytona.enabled
-    ? daytona.snapshot : environment.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT?.trim();
 
   return {
     enabled: true,
     railway,
-    daytona,
     ...(docker ? { docker } : {}),
     controlUrl: controlUrl.toString(),
-    ...(templateCheckpointName ? { templateCheckpointName } : {}),
+    ...(environment.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT?.trim()
+      ? { templateCheckpointName: environment.SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT.trim() }
+      : {}),
     networkIsolation: networkIsolationInput,
     ...(repositoryOriginOverride ? { repositoryOriginOverride } : {}),
     workerEnvironment,

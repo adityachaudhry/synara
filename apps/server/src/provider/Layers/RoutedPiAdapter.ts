@@ -264,8 +264,6 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
       const previous = activeRemote ?? persistedRemote;
-      const migratingToDaytona = process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
-        previous?.workspace.runtimeKind === "railway-sandbox";
       const agentGatewayConnection = agentGatewayCredentials?.repositoryConnectionForThread(
         input.threadId,
         "pi",
@@ -276,7 +274,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           Effect.gen(function* () {
             const provisionExit = yield* Effect.exit(
               restore(
-                previous && !migratingToDaytona
+                previous
                   ? provisioner.restart(previous, {
                       threadId: input.threadId,
                       lifecycleGeneration,
@@ -673,31 +671,27 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       local.respondToUserInput(threadId, requestId, answers),
     );
 
-  const stopRemoteSession = (threadId: Parameters<PiAdapterShape["stopSession"]>[0], park: boolean) =>
+  const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
     Effect.gen(function* () {
       const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
       if (!binding) return yield* local.stopSession(threadId);
-      const preserve = park && binding.workspace.runtimeKind === "daytona-sandbox" && provisioner.park;
       if (!(yield* workspaceUnavailable(binding))) yield* requestUnknown(binding, "session.stop", { threadId }).pipe(
         Effect.tapError((cause) =>
           Effect.logWarning(
-            "Remote Pi session.stop response was lost; retiring the bound worker.",
+            "Remote Pi session.stop response was lost; destroying the bound sandbox.",
             cause,
           ),
         ),
         Effect.catch(() => Effect.void),
       );
-      yield* (preserve ? preserve(binding) : provisioner.stop(binding)).pipe(
+      yield* provisioner.stop(binding).pipe(
         Effect.mapError((cause) =>
-          adapterError("session.stop", "Failed to retire the remote Pi runtime.", cause),
+          adapterError("session.stop", "Failed to destroy the remote Pi runtime.", cause),
         ),
       );
       remoteByThread.delete(threadId);
       revokeRemoteGatewayToken(threadId);
     });
-
-  const stopSession: PiAdapterShape["stopSession"] = (threadId) => stopRemoteSession(threadId, false);
-  const parkSession: NonNullable<PiAdapterShape["parkSession"]> = (threadId) => stopRemoteSession(threadId, true);
 
   const listSessions: PiAdapterShape["listSessions"] = () =>
     Effect.all([
@@ -809,7 +803,6 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     respondToRequest,
     respondToUserInput,
     stopSession,
-    parkSession,
     listSessions,
     hasSession,
     readThread,

@@ -35,21 +35,11 @@ runs:
         bun -e '
           import { execFileSync } from "node:child_process";
           import { prepareProviderWorkerTemplate } from "./apps/server/src/providerWorker/prepareTemplate.ts";
-          import { prepareDaytonaWorkerTemplate } from "./apps/server/src/providerWorker/prepareDaytonaTemplate.ts";
           const target = ["--service", process.env.WORKER_SERVICE, "--project", process.env.WORKER_PROJECT, "--environment", process.env.WORKER_ENVIRONMENT];
           const railwayToken = process.env.RAILWAY_TOKEN;
           const variables = JSON.parse(execFileSync("railway", ["variables", ...target, "--json"], { encoding: "utf8" }));
           Object.assign(process.env, variables);
-          const daytona = variables.SYNARA_WORKSPACE_RUNTIME === "daytona";
-          const prepared = daytona
-            ? await prepareDaytonaWorkerTemplate({ artifactPath: "apps/server/dist/provider-worker/workerMain.mjs", apiKey: variables.SYNARA_DAYTONA_API_KEY, target: variables.SYNARA_DAYTONA_TARGET || "us" })
-            : await prepareProviderWorkerTemplate("apps/server/dist/provider-worker/workerMain.mjs");
-          execFileSync("railway", ["variables", ...target, "--set", `${daytona ? "SYNARA_DAYTONA_SNAPSHOT" : "SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT"}=${prepared.key}`, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
-          if (daytona) {
-            const publicUrl = new URL(variables.SYNARA_PUBLIC_URL);
-            if (publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) throw new Error("Daytona requires a public HTTPS Synara root URL.");
-            execFileSync("railway", ["variables", ...target, "--set", `SYNARA_PROVIDER_WORKER_CONTROL_URL=wss://${publicUrl.host}/internal/provider-worker`, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
-            execFileSync("railway", ["variables", ...target, "--set", "SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=ISOLATED", "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
-          }
-          console.log(JSON.stringify({ snapshot: prepared.key, workerSha256: prepared.sha256, reused: prepared.reused }));
+          const prepared = await prepareProviderWorkerTemplate("apps/server/dist/provider-worker/workerMain.mjs");
+          execFileSync("railway", ["variables", ...target, "--set", `SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT=${prepared.key}`, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
+          console.log(JSON.stringify({ checkpoint: prepared.key, workerSha256: prepared.sha256, reused: prepared.reused }));
         '
