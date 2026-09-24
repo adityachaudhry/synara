@@ -121,8 +121,8 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
         try: async () => {
           const sandbox = await get(id);
           const temporary = `${STAGING_ROOT}/upload-${randomUUID()}`;
-          await sandbox.fs.uploadFile(Buffer.from(input.data), temporary);
           try {
+            await sandbox.fs.uploadFile(Buffer.from(input.data), temporary);
             const result = await execute(sandbox, `install -D -m ${(input.mode ?? 0o600).toString(8)} ${quote(temporary)} ${quote(input.path)}`, undefined, 30);
             if (result.exitCode !== 0) throw new Error("Daytona file installation failed.");
           } finally {
@@ -139,9 +139,9 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
           } catch (cause) {
             if (!(cause instanceof DaytonaFileAccessDeniedError)) throw cause;
             const temporary = `${STAGING_ROOT}/read-${randomUUID()}`;
-            const staged = await execute(sandbox, `install -m 0640 -g daytona ${quote(filePath)} ${quote(temporary)}`, undefined, 30);
-            if (staged.exitCode !== 0) throw new Error("Daytona private file staging failed.");
             try {
+              const staged = await execute(sandbox, `install -m 0640 -g daytona ${quote(filePath)} ${quote(temporary)}`, undefined, 30);
+              if (staged.exitCode !== 0) throw new Error("Daytona private file staging failed.");
               return new Uint8Array(await sandbox.fs.downloadFile(temporary));
             } finally {
               await removeTemporary(sandbox, temporary);
