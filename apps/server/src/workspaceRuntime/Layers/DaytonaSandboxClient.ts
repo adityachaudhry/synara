@@ -78,7 +78,8 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
           const sandbox = await daytona.create({
             snapshot: input.checkpointName ?? config.snapshot,
             labels: { [MANAGED_LABEL]: "true", [OPERATION_LABEL]: input.operationId },
-            autoStopInterval: input.idleTimeoutMinutes,
+            // The provider owns idle retirement; Daytona activity does not include a worker's model turn.
+            autoStopInterval: 0,
             autoDeleteInterval: -1,
           });
           handles.set(sandbox.id, sandbox);
@@ -102,6 +103,26 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
           return { id, status: status(sandbox), region: sandbox.target };
         },
         catch: (cause) => failure("connect", cause, id),
+      }),
+      start: (id) => Effect.tryPromise({
+        try: async () => {
+          const sandbox = await get(id);
+          await sandbox.refreshData();
+          if (status(sandbox) === "STOPPED") await sandbox.start();
+          await sandbox.refreshData();
+          return { id, status: status(sandbox), region: sandbox.target };
+        },
+        catch: (cause) => failure("start", cause, id),
+      }),
+      stop: (id) => Effect.tryPromise({
+        try: async () => {
+          const sandbox = await get(id);
+          await sandbox.refreshData();
+          if (status(sandbox) === "RUNNING") await sandbox.stop();
+          await sandbox.refreshData();
+          return { id, status: status(sandbox), region: sandbox.target };
+        },
+        catch: (cause) => failure("stop", cause, id),
       }),
       exec: (id, input) => Effect.tryPromise({
         try: async () => {

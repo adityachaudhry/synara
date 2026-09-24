@@ -84,6 +84,14 @@ export interface WorkspaceRuntimeShape {
   readonly connect: (
     binding: WorkspaceRuntimeBinding,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
+  /** Retain the sandbox filesystem while releasing its running capacity. */
+  readonly park?: (
+    binding: WorkspaceRuntimeBinding,
+  ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
+  readonly resume?: (
+    binding: WorkspaceRuntimeBinding,
+    input: Pick<WorkspaceRuntimeCreateInput, "threadId" | "lifecycleGeneration" | "onCapacityAdmitted">,
+  ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
   readonly adopt: (binding: WorkspaceRuntimeBinding) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly exec: (
     binding: WorkspaceRuntimeBinding,

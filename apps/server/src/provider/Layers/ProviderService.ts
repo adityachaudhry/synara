@@ -2509,7 +2509,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (activeSession?.resumeCursor !== undefined) {
                 resumeCursor = activeSession.resumeCursor;
               }
-              yield* adapter.stopSession(input.threadId);
+              yield* (adapter.parkSession?.(input.threadId) ?? adapter.stopSession(input.threadId));
             }
             if (!isExpectedIdleStopCurrent()) {
               return;

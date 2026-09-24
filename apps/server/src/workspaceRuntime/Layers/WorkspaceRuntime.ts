@@ -120,6 +120,7 @@ export function reconcileSandboxCapacityAtStartup(input: {
   readonly intents: WorkspaceCreationIntentRepositoryShape;
   readonly runtimes: ProviderSessionRuntimeRepositoryShape;
   readonly capacity: SandboxCapacity;
+  readonly runningOnly?: boolean;
 }) {
   return Effect.gen(function* () {
     const [inventory, pendingCreationIntents, persistedRuntimes] = yield* Effect.all([
@@ -172,7 +173,8 @@ export function reconcileSandboxCapacityAtStartup(input: {
       });
     }
     const report = reconcileSandboxCapacityInventory({
-      inventoryRuntimeIds: inventory.map((record) => record.id),
+      inventoryRuntimeIds: inventory.filter((record) => !input.runningOnly || record.status === "RUNNING")
+        .map((record) => record.id),
       liveBindings,
       pendingCreationIntents: resolvedIntents,
     });
@@ -243,6 +245,7 @@ export function makeWorkspaceRuntimeLive(
               intents,
               runtimes,
               capacity: options.capacity,
+              runningOnly: options.runtimeKind === "daytona-sandbox",
             }).pipe(
               Effect.tap((report) =>
                 report.orphanRuntimeIds.length === 0
@@ -468,6 +471,58 @@ export function makeWorkspaceRuntimeLive(
           };
         });
 
+      const park: NonNullable<WorkspaceRuntimeShape["park"]> = (binding) =>
+        Effect.uninterruptible(Effect.gen(function* () {
+          yield* requireEnabled(config, "park");
+          if (!client.stop) return yield* new WorkspaceRuntimeError({
+            operation: "park", detail: "Sandbox parking is unavailable.", runtimeId: binding.runtimeId,
+          });
+          const record = yield* client.stop(binding.runtimeId)
+            .pipe(Effect.mapError(toRuntimeError("park", binding.runtimeId)));
+          if (record.status !== "STOPPED") return yield* new WorkspaceRuntimeError({
+            operation: "park", detail: `Sandbox remained ${record.status}.`, runtimeId: binding.runtimeId,
+          });
+          if (binding.capacityKey) options.capacity?.release(binding.capacityKey);
+          return { ...binding, status: "stopped" as const, region: record.region };
+        }));
+
+      const resume: NonNullable<WorkspaceRuntimeShape["resume"]> = (binding, input) =>
+        Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+          yield* requireEnabled(config, "resume");
+          if (!client.start || !client.stop) return yield* new WorkspaceRuntimeError({
+            operation: "resume", detail: "Sandbox resumption is unavailable.", runtimeId: binding.runtimeId,
+          });
+          const capacityKey = `${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
+          const lease = options.capacity === undefined ? undefined : yield* Effect.tryPromise({
+            try: (signal) => options.capacity!.acquire({
+              key: capacityKey, threadId: input.threadId ?? input.lifecycleGeneration,
+              lifecycleGeneration: input.lifecycleGeneration, signal,
+            }),
+            catch: toRuntimeError("capacity.acquire", binding.runtimeId),
+          });
+          input.onCapacityAdmitted?.();
+          const started = yield* Effect.exit(restore(client.start(binding.runtimeId).pipe(
+            Effect.mapError(toRuntimeError("resume", binding.runtimeId)),
+            Effect.flatMap((record) => record.status === "RUNNING" ? Effect.succeed(record)
+              : Effect.fail(new WorkspaceRuntimeError({
+                  operation: "resume", detail: `Sandbox remained ${record.status}.`, runtimeId: binding.runtimeId,
+                }))),
+          )));
+          if (Exit.isFailure(started)) {
+            const stopped = yield* Effect.exit(client.stop(binding.runtimeId));
+            if (Exit.isSuccess(stopped) && stopped.value.status === "STOPPED") lease?.release();
+            return yield* Effect.failCause(started.cause);
+          }
+          return {
+            runtimeKind: binding.runtimeKind,
+            runtimeId: binding.runtimeId,
+            lifecycleGeneration: input.lifecycleGeneration,
+            status: "running" as const,
+            region: started.value.region,
+            ...(lease ? { capacityKey } : {}),
+          };
+        }));
+
       const adopt: WorkspaceRuntimeShape["adopt"] = (binding) =>
         binding.creationOperationId === undefined
           ? Effect.void
@@ -638,6 +693,7 @@ export function makeWorkspaceRuntimeLive(
             .pipe(Effect.mapError(toRuntimeError("checkpoint.list"))),
         } : {}),
         connect,
+        ...(client.start && client.stop ? { park, resume } : {}),
         adopt,
         exec,
         writeFile,

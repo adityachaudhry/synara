@@ -85,6 +85,9 @@ export interface ProviderWorkerProvisionerShape {
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly park?: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
 }
 
 export class ProviderWorkerProvisioner extends ServiceMap.Service<
