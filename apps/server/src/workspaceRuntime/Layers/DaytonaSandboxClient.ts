@@ -58,6 +58,10 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
     const root = (command: string) => `sudo -n -E sh -lc ${quote(command)}`;
     const execute = async (sandbox: Sandbox, command: string, cwd?: string, timeoutSeconds?: number) =>
       sandbox.process.executeCommand(root(command), cwd, undefined, timeoutSeconds);
+    const removeTemporary = async (sandbox: Sandbox, filePath: string) => {
+      const removed = await sandbox.process.executeCommand(`rm -f ${quote(filePath)} && test ! -e ${quote(filePath)}`);
+      if (removed.exitCode !== 0) throw new Error("Daytona private staging cleanup failed.");
+    };
     const rootJson = async (sandbox: Sandbox, script: string, filePath: string) => {
       const result = await execute(sandbox, `node -e ${quote(script)} ${quote(filePath)}`, undefined, 30);
       if (result.exitCode !== 0) throw new Error("Daytona private file metadata failed.");
@@ -122,7 +126,7 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
             const result = await execute(sandbox, `install -D -m ${(input.mode ?? 0o600).toString(8)} ${quote(temporary)} ${quote(input.path)}`, undefined, 30);
             if (result.exitCode !== 0) throw new Error("Daytona file installation failed.");
           } finally {
-            await sandbox.process.executeCommand(`rm -f ${quote(temporary)}`).catch(() => undefined);
+            await removeTemporary(sandbox, temporary);
           }
         },
         catch: (cause) => failure("writeFile", cause, id),
@@ -140,7 +144,7 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
             try {
               return new Uint8Array(await sandbox.fs.downloadFile(temporary));
             } finally {
-              await execute(sandbox, `rm -f ${quote(temporary)}`, undefined, 10).catch(() => undefined);
+              await removeTemporary(sandbox, temporary);
             }
           }
         },
@@ -193,7 +197,10 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
       }),
       checkpoint: (id, name) => Effect.tryPromise({
         try: async () => {
-          await (await get(id)).createSnapshot(name, 300);
+          const sandbox = await get(id);
+          const clean = await sandbox.process.executeCommand(`test -d ${quote(STAGING_ROOT)} && test -z "$(find ${quote(STAGING_ROOT)} -mindepth 1 -print -quit)"`);
+          if (clean.exitCode !== 0) throw new Error("Daytona private staging is not empty; refusing to snapshot.");
+          await sandbox.createSnapshot(name, 300);
           const snapshot = await daytona.snapshot.get(name);
           return { id: snapshot.id, key: snapshot.name };
         },
