@@ -162,6 +162,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     });
     const runRepositoryPlan = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"], command: string,
       timeoutSeconds: number, shellTimeout?: number) {
+      if (workspace.runtimeKind === "daytona-sandbox") return yield* workspaceRuntime.exec(workspace, {
+        command: shellTimeout ? `timeout --kill-after=5s ${shellTimeout}s sh -c ${shellQuote(command)}` : command,
+        timeoutSeconds,
+      });
       const script = `/root/.synara-repository-plan-${randomUUID()}.sh`;
       yield* workspaceRuntime.writeFile(workspace, { path: script, data: command, mode: 0o700 });
       return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
@@ -228,6 +232,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       const archive = sameRepository ? previous?.archive : undefined;
       yield* saveDiskPointer(binding.threadId, { binding, nativeRevision: archive?.revision ?? `native-${randomUUID()}`,
         ...(archive ? { archive, archiveBinding: previous!.archiveBinding ?? previous!.binding } : {}) });
+    });
+    const ensureNativeImport = (saved: ProviderWorkspaceCheckpoint) => Effect.gen(function* () {
+      if (!nativeDaytona || saved.binding.workspace.runtimeKind !== "railway-sandbox" || saved.archive) return saved;
+      const archive = yield* importLock.withLock("railway", importRailwayWorkspace(saved)).pipe(
+        observeProviderOperation("workspace.import", { threadId: saved.binding.threadId }),
+      );
+      yield* Effect.tryPromise({ try: () => workspaceCheckpointStore!.writeImportedArchive(saved.checkpoint!.key, archive), catch: (cause) => cause });
+      return { ...saved, archive };
     });
     const reconcileCaptures = Effect.gen(function* () {
       if (!workspaceCheckpointStore || !workspaceRuntime.listCheckpoints || !workspaceRuntime.deleteCheckpoint) return;
@@ -819,14 +831,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const sameRepository = input.repositoryBinding && previousRepository &&
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
         let saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
-        if (process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
-            saved?.binding.workspace.runtimeKind === "railway-sandbox" && !saved.archive) {
-          const archive = yield* importLock.withLock("railway", importRailwayWorkspace(saved)).pipe(
-            observeProviderOperation("workspace.import", { threadId: input.threadId }),
-          );
-          yield* Effect.tryPromise({ try: () => workspaceCheckpointStore!.writeImportedArchive(saved!.checkpoint!.key, archive), catch: (cause) => cause });
-          saved = { ...saved, archive };
-        }
+        if (saved) saved = yield* ensureNativeImport(saved);
         if (nativeDaytona && saved?.nativeRevision) return yield* replaceBinding(saved.binding, input);
         const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
         const companyOnly = (companyRefsEnabled && input.repositoryBinding?.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
@@ -946,7 +951,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       if (Exit.isSuccess(connection)) {
         yield* stopWorkerProcess(binding);
         yield* checkpointOutbox(binding);
-        yield* checkpointWorkspaceUnlocked(binding);
+        if (binding.workspace.runtimeKind !== "daytona-sandbox" || mode === "destroy") yield* checkpointWorkspaceUnlocked(binding);
       } else if (workspaceCheckpointStore && mode === "destroy") {
         const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
         if (!saved || (!saved.checkpoint && !saved.archive)) {
@@ -1426,6 +1431,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           }
         }
         return yield* withSavedDisk(binding.threadId, (saved) => Effect.gen(function* () {
+        if (saved) saved = yield* ensureNativeImport(saved);
         const archivedBinding = saved?.archiveBinding ?? saved?.binding;
         const currentRepository = binding.repositoryCheckout?.binding;
         const savedRepository = saved?.binding.repositoryCheckout?.binding;

@@ -106,6 +106,20 @@ export class SandboxCapacity {
     this.#active.get(key)?.release();
   }
 
+  whenReconciled(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(abortError());
+    if (this.#reconciled) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error?: Error) => {
+        unsubscribe(); signal?.removeEventListener("abort", cancelled);
+        if (error) reject(error); else resolve();
+      };
+      const cancelled = () => finish(abortError());
+      const unsubscribe = this.subscribe((snapshot) => { if (snapshot.reconciled) finish(); });
+      signal?.addEventListener("abort", cancelled, { once: true });
+    });
+  }
+
   /** Transfer ownership of a still-running sandbox without freeing its physical slot. */
   reassign(key: string, next: SandboxCapacityReservation): SandboxCapacityLease | undefined {
     if (key === next.key) return this.#active.get(key);

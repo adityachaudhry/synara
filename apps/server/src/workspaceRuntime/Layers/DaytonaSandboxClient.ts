@@ -143,12 +143,14 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
         try: async () => {
           const sandbox = await get(id);
           const temporary = `${STAGING_ROOT}/upload-${randomUUID()}`;
+          let cleaned = false;
           try {
             await sandbox.fs.uploadFile(Buffer.from(input.data), temporary);
-            const result = await execute(sandbox, `install -D -m ${(input.mode ?? 0o600).toString(8)} ${quote(temporary)} ${quote(input.path)}`, undefined, 30);
+            const result = await execute(sandbox, `install -D -m ${(input.mode ?? 0o600).toString(8)} ${quote(temporary)} ${quote(input.path)} && rm -f ${quote(temporary)} && test ! -e ${quote(temporary)}`, undefined, 30);
             if (result.exitCode !== 0) throw new Error("Daytona file installation failed.");
+            cleaned = true;
           } finally {
-            await removeTemporary(sandbox, temporary);
+            if (!cleaned) await removeTemporary(sandbox, temporary);
           }
         },
         catch: (cause) => failure("writeFile", cause, id),

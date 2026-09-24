@@ -521,9 +521,14 @@ export function makeWorkspaceRuntimeLive(
           if (!client.start || !client.stop) return yield* new WorkspaceRuntimeError({
             operation: "resume", detail: "Sandbox resumption is unavailable.", runtimeId: binding.runtimeId,
           });
+          if (options.capacity) yield* restore(Effect.tryPromise({
+            try: (signal) => options.capacity!.whenReconciled(signal),
+            catch: toRuntimeError("capacity.reconcile", binding.runtimeId),
+          }));
           const capacityKey = `${input.maintenance ? "maintenance:" : ""}${input.threadId ?? input.lifecycleGeneration}:${input.lifecycleGeneration}`;
           const request = { key: capacityKey, threadId: input.threadId ?? input.lifecycleGeneration, lifecycleGeneration: input.lifecycleGeneration };
           const existing = options.capacity?.reassign(capacityKeyByRuntimeId.get(binding.runtimeId) ?? binding.capacityKey ?? `orphan:${binding.runtimeId}`, request)
+            ?? (binding.creationOperationId ? options.capacity?.reassign(`create-intent:${binding.creationOperationId}`, request) : undefined)
             ?? options.capacity?.reassign(`orphan:${binding.runtimeId}`, request);
           const lease = existing ?? (options.capacity === undefined ? undefined : yield* restore(Effect.tryPromise({
             try: (signal) => options.capacity!.acquire({
