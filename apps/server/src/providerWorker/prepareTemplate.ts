@@ -1,6 +1,7 @@
 /** Prepare a credential-free Railway disk once per worker artifact. Run only with explicit provisioning authority. */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { Sandbox } from "railway";
 import {
@@ -16,12 +17,15 @@ export async function prepareProviderWorkerTemplate(artifactPath: string) {
   const { token, authType, environmentId, region } = config.railway;
   const connection = { token, authType, environmentId };
   const artifact = await readFile(artifactPath);
+  const photonWasm = await readFile(join(dirname(artifactPath), "photon_rs_bg.wasm"));
   const sha256 = createHash("sha256").update(artifact).digest("hex");
-  const name = `synara-worker-tools-v3-${region ?? "default"}-${sha256}`;
+  const photonSha256 = createHash("sha256").update(photonWasm).digest("hex");
+  const templateSha256 = createHash("sha256").update(artifact).update(photonWasm).digest("hex");
+  const name = `synara-worker-tools-v3-${region ?? "default"}-${templateSha256}`;
   const existing = (await Sandbox.checkpoints(connection)).find(
     (checkpoint) => checkpoint.key === name,
   );
-  if (existing) return { ...existing, sha256, reused: true };
+  if (existing) return { ...existing, sha256, photonSha256, reused: true };
   // Recipe builds currently land in us-west2; prepare the disk in its actual runtime region.
   const sandbox = await Sandbox.create({
     ...connection,
@@ -42,13 +46,14 @@ export async function prepareProviderWorkerTemplate(artifactPath: string) {
     await sandbox.files.write("/opt/synara/provider-worker.mjs.gz", gzipSync(artifact), {
       mode: 0o400,
     });
+    await sandbox.files.write("/opt/synara/photon_rs_bg.wasm", photonWasm, { mode: 0o444 });
     const result = await sandbox.exec(
-      `gzip -df /opt/synara/provider-worker.mjs.gz && chmod 500 /opt/synara/provider-worker.mjs && printf '%s  %s\n' '${sha256}' '/opt/synara/provider-worker.mjs' | sha256sum --check --status && sync`,
+      `gzip -df /opt/synara/provider-worker.mjs.gz && chmod 500 /opt/synara/provider-worker.mjs && printf '%s  %s\\n%s  %s\\n' '${sha256}' '/opt/synara/provider-worker.mjs' '${photonSha256}' '/opt/synara/photon_rs_bg.wasm' | sha256sum --check --status && sync`,
       { timeoutSec: 30 },
     );
     if (result.exitCode !== 0 || result.timedOut)
       throw new Error("Prepared worker digest verification failed.");
-    return { ...(await sandbox.checkpoint(name)), sha256, reused: false };
+    return { ...(await sandbox.checkpoint(name)), sha256, photonSha256, reused: false };
   } finally {
     await sandbox.destroy();
   }

@@ -194,6 +194,7 @@ const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function*
     "dist/index.mjs",
     "dist/restoreMigrationBackup.mjs",
     "dist/provider-worker/workerMain.mjs",
+    "dist/provider-worker/photon_rs_bg.wasm",
     "dist/client/index.html",
   ]) {
     const abs = path.join(serverDir, relPath);

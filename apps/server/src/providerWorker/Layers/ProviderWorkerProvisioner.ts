@@ -46,13 +46,14 @@ import {
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 const WORKER_ARTIFACT_ARCHIVE_PATH = `${WORKER_ARTIFACT_PATH}.gz`;
+const WORKER_PHOTON_WASM_PATH = "/opt/synara/photon_rs_bg.wasm";
 const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
 const DEFAULT_CWD = "/workspace";
 const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-function workerLaunchCommand(homeDir: string, artifactDigest: string) {
+function workerLaunchCommand(homeDir: string, artifactDigest: string, photonDigest?: string) {
   const logsDir = `${homeDir}/state/logs`;
   const workerLogPath = `${logsDir}/worker.log`;
   const extractArtifact = [
@@ -63,6 +64,7 @@ function workerLaunchCommand(homeDir: string, artifactDigest: string) {
     "if(fs.existsSync(source))fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
     "fs.rmSync(source,{force:true})",
     `if(require("node:crypto").createHash("sha256").update(fs.readFileSync(target)).digest("hex")!==${JSON.stringify(artifactDigest)})throw Error("Worker artifact digest mismatch")`,
+    ...(photonDigest ? [`if(require("node:crypto").createHash("sha256").update(fs.readFileSync(${JSON.stringify(WORKER_PHOTON_WASM_PATH)})).digest("hex")!==${JSON.stringify(photonDigest)})throw Error("Worker Photon WASM digest mismatch")`] : []),
   ].join(";");
   return `mkdir -p ${shellQuote(logsDir)} && { node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)}; } >> ${shellQuote(workerLogPath)} 2>&1`;
 }
@@ -76,6 +78,7 @@ function agentGatewayUrl(controlUrl: string): string {
 
 export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
+  readonly photonWasm?: Uint8Array;
   readonly controlUrl: string;
   readonly checkpointRoot?: string;
   readonly templateCheckpointName?: string;
@@ -125,6 +128,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     let diskIndexLoaded = false;
     const artifactArchive = gzipSync(options.artifact, { level: 6 });
     const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
+    const photonDigest = options.photonWasm && createHash("sha256").update(options.photonWasm).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
     const companyRefsEnabled = process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true";
@@ -624,6 +628,19 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             mode: 0o400,
           });
         }
+        if (options.photonWasm && photonDigest) {
+          const photonProbe = yield* workspaceRuntime.exec(input.workspace, {
+            command: `test -f ${shellQuote(WORKER_PHOTON_WASM_PATH)} && printf '%s  %s\\n' ${shellQuote(photonDigest)} ${shellQuote(WORKER_PHOTON_WASM_PATH)} | sha256sum --check --status`,
+            timeoutSeconds: 15,
+          });
+          if (photonProbe.exitCode !== 0 || photonProbe.timedOut) {
+            yield* workspaceRuntime.writeFile(input.workspace, {
+              path: WORKER_PHOTON_WASM_PATH,
+              data: options.photonWasm,
+              mode: 0o444,
+            });
+          }
+        }
         yield* Effect.logInfo("provider worker artifact ready", {
           sandboxId: fence.sandboxId,
           sha256: artifactDigest,
@@ -667,7 +684,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: workerLaunchCommand(input.homeDir, artifactDigest),
+          command: workerLaunchCommand(input.homeDir, artifactDigest, photonDigest),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {
@@ -1381,8 +1398,13 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
             provisionError("artifact.read", "Failed to read the provider worker artifact.", cause),
           ),
         );
+      const photonWasm = yield* fileSystem
+        .readFile(path.join(path.dirname(artifactPath), "photon_rs_bg.wasm"))
+        .pipe(Effect.mapError((cause) =>
+          provisionError("artifact.read", "Provider worker Photon WASM is missing; run the server build before enabling Railway distributed Pi.", cause)));
       return yield* makeProviderWorkerProvisioner({
         artifact,
+        photonWasm,
         controlUrl: options.controlUrl,
         ...(options.templateCheckpointName ? { templateCheckpointName: options.templateCheckpointName } : {}),
         ...(options.repositoryOriginOverride ? { repositoryOriginOverride: options.repositoryOriginOverride } : {}),
