@@ -326,7 +326,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
               ),
             );
             if (Exit.isSuccess(startExit)) return startExit.value;
-            const cleanupExit = yield* Effect.exit(retainFailedWorker(binding));
+            const cleanupExit = yield* Effect.exit((binding.workspace.runtimeKind === "daytona-sandbox"
+              ? persistRemoteBinding({ threadId: input.threadId, lifecycleGeneration, binding }).pipe(
+                  Effect.andThen(provisioner.adopt(binding)),
+                )
+              : Effect.void).pipe(Effect.ensuring(retainFailedWorker(binding))));
             if (Exit.isFailure(cleanupExit)) {
               return yield* adapterError(
                 "session.start.cleanup",

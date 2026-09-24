@@ -983,6 +983,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             const workspace = yield* workspaceRuntime.resume(binding.workspace, {
               threadId: input.threadId,
               lifecycleGeneration: input.lifecycleGeneration,
+              ...(options.environment ? { environment: options.environment } : {}),
               ...(input.onCapacityAdmitted ? { onCapacityAdmitted: input.onCapacityAdmitted } : {}),
             });
             const companyOnly = binding.repositoryCheckout?.checkoutMode === "company" ||

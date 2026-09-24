@@ -105,11 +105,13 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
         },
         catch: (cause) => failure("connect", cause, id),
       }),
-      start: (id) => Effect.tryPromise({
+      start: (id, environment) => Effect.tryPromise({
         try: async () => {
           const sandbox = await get(id);
           await sandbox.refreshData();
           if (status(sandbox) === "STOPPED") await sandbox.start();
+          // updateEnv changes the running daemon only; stop/start discards it.
+          if (environment && Object.keys(environment).length) await sandbox.updateEnv({ ...environment });
           await sandbox.refreshData();
           return { id, status: status(sandbox), region: sandbox.target };
         },

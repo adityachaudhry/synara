@@ -539,7 +539,7 @@ export function makeWorkspaceRuntimeLive(
           })));
           input.onCapacityAdmitted?.();
           if (lease) capacityKeyByRuntimeId.set(binding.runtimeId, capacityKey);
-          const started = yield* Effect.exit(restore(client.start(binding.runtimeId).pipe(
+          const started = yield* Effect.exit(restore(client.start(binding.runtimeId, input.environment).pipe(
             Effect.mapError(toRuntimeError("resume", binding.runtimeId)),
             Effect.flatMap((record) => record.status === "RUNNING" ? Effect.succeed(record)
               : Effect.fail(new WorkspaceRuntimeError({

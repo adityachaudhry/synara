@@ -90,7 +90,7 @@ export interface WorkspaceRuntimeShape {
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
   readonly resume?: (
     binding: WorkspaceRuntimeBinding,
-    input: Pick<WorkspaceRuntimeCreateInput, "threadId" | "lifecycleGeneration" | "onCapacityAdmitted" | "maintenance">,
+    input: Pick<WorkspaceRuntimeCreateInput, "threadId" | "lifecycleGeneration" | "onCapacityAdmitted" | "maintenance"> & Partial<Pick<WorkspaceRuntimeCreateInput, "environment">>,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
   readonly adopt: (binding: WorkspaceRuntimeBinding) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly exec: (
