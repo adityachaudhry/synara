@@ -1318,11 +1318,13 @@ function SettingsRouteView() {
         {/* Mounted at the route level (outside the scrollable panel) so the
           dialog portal can overlay the entire settings view without being
           clipped by the content wrapper's overflow. */}
-        <ReleaseHistoryDialog
-          open={releaseHistoryOpen}
-          onOpenChange={setReleaseHistoryOpen}
-          defaultExpandedVersion={APP_VERSION}
-        />
+        {import.meta.env.VITE_SYNARA_EMBEDDED !== "true" && (
+          <ReleaseHistoryDialog
+            open={releaseHistoryOpen}
+            onOpenChange={setReleaseHistoryOpen}
+            defaultExpandedVersion={APP_VERSION}
+          />
+        )}
       </RouteInsetSurface>
     </div>
   );

@@ -853,11 +853,29 @@ const SYNARA_DOCS_URL = "https://trysynara.com/docs";
 
 // Latest curated releases surfaced directly in the help menu. Static data, so
 // computed once at module scope rather than per render.
-const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
+const HELP_MENU_RELEASE_ENTRIES = import.meta.env.VITE_SYNARA_EMBEDDED === "true"
+  ? []
+  : sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).
-function SidebarHelpMenu({
+function SidebarHelpMenu(props: {
+  onOpenShortcuts: () => void;
+  onOpenFeedback: () => void;
+}) {
+  return import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? (
+    <SidebarIconButton
+      icon={KeyboardIcon}
+      label="Keybindings"
+      tooltip="Keybindings"
+      onClick={props.onOpenShortcuts}
+    />
+  ) : (
+    <StandaloneSidebarHelpMenu {...props} />
+  );
+}
+
+function StandaloneSidebarHelpMenu({
   onOpenShortcuts,
   onOpenFeedback,
 }: {
@@ -5439,12 +5457,12 @@ export default function Sidebar() {
         ],
         shortcutLabel: importThreadShortcutLabel,
       },
-      {
+      ...(import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? [] : [{
         id: "feedback",
         label: "Feedback Synara",
         description: "Send feedback or report an issue to the Synara team.",
         keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
-      },
+      } satisfies SidebarSearchAction]),
       {
         id: "settings",
         label: "Settings",
