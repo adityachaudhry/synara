@@ -81,6 +81,9 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   const remoteGatewayTokenByThread = new Map<string, string>();
   const workspaceUnavailable = (binding: ProviderWorkerRuntimeBinding) =>
     provisioner.isWorkspaceUnavailable?.(binding) ?? Effect.succeed(false);
+  const retainFailedWorker = (binding: ProviderWorkerRuntimeBinding) =>
+    binding.workspace.runtimeKind === "daytona-sandbox" && provisioner.park
+      ? provisioner.park(binding) : provisioner.stop(binding);
   const revokeRemoteGatewayToken = (threadId: string) => {
     const token = remoteGatewayTokenByThread.get(threadId);
     if (token && agentGatewayCredentials) agentGatewayCredentials.revokeSessionToken(token);
@@ -323,11 +326,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
               ),
             );
             if (Exit.isSuccess(startExit)) return startExit.value;
-            const cleanupExit = yield* Effect.exit(provisioner.stop(binding));
+            const cleanupExit = yield* Effect.exit(retainFailedWorker(binding));
             if (Exit.isFailure(cleanupExit)) {
               return yield* adapterError(
                 "session.start.cleanup",
-                "Remote Pi launch failed and its sandbox could not be authoritatively destroyed.",
+                "Remote Pi launch failed and its worker could not be safely retired.",
                 Cause.squash(cleanupExit.cause),
               );
             }
@@ -429,7 +432,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             ProviderTurnStartResult,
           ).pipe(
             Effect.catch((cause) =>
-              provisioner.stop(current).pipe(
+              retainFailedWorker(current).pipe(
                 Effect.tap(() =>
                   Effect.sync(() => {
                     remoteByThread.delete(input.threadId);
@@ -439,7 +442,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                 Effect.mapError((cleanupCause) =>
                   adapterError(
                     "turn.send.cleanup",
-                    "A remote Pi turn became uncertain and its sandbox could not be destroyed.",
+                    "A remote Pi turn became uncertain and its worker could not be safely retired.",
                     cleanupCause,
                   ),
                 ),
