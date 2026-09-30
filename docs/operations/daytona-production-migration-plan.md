@@ -1,6 +1,8 @@
 # Daytona production migration plan
 
-Planning only. No production writes, deployments, resource creation or migrations are authorized by this document. Verified September 24, 2026. Dev uses Daytona US; production remains at Synara `98183771a69ab9e0f7d97c505401ba3faca90755`, with Railway sandbox credentials, private worker networking, no Daytona key, and no worker-side S3 LFS mount settings.
+The user authorizes implementation, dev refresh and production promotion conditional on successful verification. September 30 status and current receipts are maintained in [model-workspace-rollout.md](model-workspace-rollout.md); production remains Synara `98183771a69ab9e0f7d97c505401ba3faca90755` on Railway. The separate production Daytona organization is unfunded and its $500 Tier3 top-up awaits spending approval. No production runtime switch has occurred.
+
+The inventory and measurements below are September 24 planning evidence, superseded by the linked current checkpoint. Retain every original disk/checkpoint. Copied database startup is proved; native private-state forward/reverse restoration remains open. Application deployments must use canonical branches and GitHub Actions. No unit tests.
 
 ## Current dev boundary
 
