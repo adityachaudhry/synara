@@ -252,7 +252,8 @@ export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 
 export const ProviderPrepareWorkspaceInput = Schema.Struct({ projectId: ProjectId, threadId: ThreadId });
 export type ProviderPrepareWorkspaceInput = typeof ProviderPrepareWorkspaceInput.Type;
-export interface ProviderPrepareWorkspaceResult { readonly started: boolean }
+export const ProviderPrepareWorkspaceResult = Schema.Struct({ started: Schema.Boolean });
+export type ProviderPrepareWorkspaceResult = typeof ProviderPrepareWorkspaceResult.Type;
 
 export const ProviderReasoningEffortDescriptor = Schema.Struct({
   value: TrimmedNonEmptyString,
