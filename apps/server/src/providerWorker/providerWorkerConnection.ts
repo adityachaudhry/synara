@@ -117,7 +117,7 @@ export function runProviderWorkerConnection(input: {
               }
               yield* input.broker.accept(frame).pipe(
                 Effect.mapError((cause) =>
-                  transportError("frame.accept", "Worker frame was rejected.", cause),
+                  transportError("frame.accept", `Worker frame was rejected (${cause.operation}): ${cause.detail}`, cause),
                 ),
               );
             }),
