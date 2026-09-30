@@ -108,7 +108,7 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
         Effect.catch(() => Effect.logWarning("Daytona regional readiness refresh failed; retaining last known selection")),
       );
       yield* refresh;
-      yield* Effect.forkScoped(Effect.sleep("15 seconds").pipe(Effect.andThen(refresh), Effect.repeat(Schedule.spaced(Duration.seconds(15)))));
+      yield* Effect.forkScoped(Effect.sleep("15 seconds").pipe(Effect.andThen(refresh.pipe(Effect.repeat(Schedule.spaced(Duration.seconds(15)))))));
     }
     const handles = new Map<string, Sandbox>();
     const get = async (id: string) => {

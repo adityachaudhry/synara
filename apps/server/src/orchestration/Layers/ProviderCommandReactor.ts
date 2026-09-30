@@ -32,6 +32,7 @@ import {
 import {
   Cache,
   Cause,
+  Deferred,
   Duration,
   Effect,
   Equal,
@@ -40,6 +41,7 @@ import {
   Option,
   Queue,
   Schema,
+  Scope,
   Semaphore,
   ServiceMap,
   Stream,
@@ -217,7 +219,7 @@ type BoundedProviderCallResult<E> =
 /**
  * Runs a provider call under a hard deadline and reduces it to a decision.
  * A call that never returns cannot simply be awaited here: the caller holds the
- * reactor's single delivery permit, so waiting forever stalls every thread.
+ * session owner's delivery permit, so waiting forever stalls that owner's queue.
  * Interruption is re-raised untouched so shutdown still cancels cleanly.
  */
 const runBoundedProviderCall = <E, R>(input: {
@@ -317,12 +319,11 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
+const PROVIDER_COMMAND_ACTIVE_OWNER_LIMIT = 100;
+const PROVIDER_COMMAND_PENDING_EVENT_LIMIT = 4_096;
 /**
- * Every provider intent runs under a single process-wide delivery lock, so an
- * unbounded provider call does not stall one thread — it stalls the reactor,
- * which back-pressures the orchestration event PubSub and eventually times out
- * every dispatched command. These deadlines make "hung" degrade into a normal
- * terminal delivery failure instead of a process-wide deadlock.
+ * Deadlines turn a hung owner handler into a terminal delivery failure, letting
+ * its queue quarantine safely and releasing an active-owner permit.
  */
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
@@ -538,6 +539,13 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
   ProviderCommandReactorConfigShape
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
 
+const CurrentProviderDeliveryOwner = ServiceMap.Reference<{
+  readonly threadId: ThreadId;
+  readonly ownerId: ThreadId;
+} | undefined>("synara/orchestration/CurrentProviderDeliveryOwner", {
+  defaultValue: () => undefined,
+});
+
 const make = Effect.gen(function* () {
   const { commandEventTimeout } = yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -610,6 +618,7 @@ const make = Effect.gen(function* () {
   // projected thread metadata so an option changed mid-turn is still compared
   // against the old subprocess configuration before the next turn starts.
   const threadSessionModelSelections = new Map<string, ModelSelection>();
+  const threadSessionOwnerIds = new Map<ThreadId, ThreadId>();
   // Seeded from the engine's in-memory command read model, not a second snapshot query.
   // The engine loads that model once after the projection bootstrap and keeps it current
   // as commands commit, so reading it here is both free and strictly fresher than
@@ -619,6 +628,9 @@ const make = Effect.gen(function* () {
     Effect.map((snapshot) => {
       for (const thread of snapshot.threads) {
         threadSessionModelSelections.set(thread.id, thread.modelSelection);
+        if (thread.parentThreadId != null || !(thread.id as string).startsWith("subagent:")) {
+          threadSessionOwnerIds.set(thread.id, thread.parentThreadId ?? thread.id);
+        }
       }
     }),
   );
@@ -916,8 +928,15 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
-  const resolveProviderSessionThread = (threadId: ThreadId) =>
-    resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
+  const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const admittedOwner = yield* CurrentProviderDeliveryOwner;
+    if (admittedOwner?.threadId === threadId) {
+      // Projection metadata commits ahead of source intake. Keep an admitted
+      // command on its FIFO's session even if this child is reparented mid-call.
+      return (yield* resolveThread(admittedOwner.ownerId)) ?? null;
+    }
+    return yield* resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
+  });
 
   const withProviderSessionLease = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
     resolveProviderSessionThread(threadId).pipe(
@@ -4074,11 +4093,36 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  // One attach-before-replay source owns every provider intent. The claimed
-  // canary classes settle before cursor advancement. Remaining classes execute
-  // serially in the same source but do not acquire delivery claims yet.
+  // One attach-before-replay source admits intents in sequence order. Owner
+  // FIFOs execute independently; the completed source prefix owns cursor advancement.
   const startProviderIntentSource = Effect.gen(function* () {
-    const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents;
+    const sourceScope = yield* Effect.acquireRelease(Scope.make(), (scope, exit) =>
+      Scope.close(scope, exit),
+    );
+    const sourceFailure = yield* Deferred.make<never, unknown>();
+    let sourceStopped = false;
+    const closeSource = (exit: Exit.Exit<unknown, unknown>) =>
+      Effect.sync(() => {
+        sourceStopped = true;
+        reconcileDeliveryRuntime = undefined;
+      }).pipe(
+        Effect.andThen(Exit.isFailure(exit)
+          ? Deferred.failCause(sourceFailure, exit.cause)
+          : Deferred.fail(sourceFailure, new Error("Provider delivery source stopped"))),
+        Effect.andThen(Scope.close(sourceScope, exit)),
+      );
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        sourceStopped = true;
+        reconcileDeliveryRuntime = undefined;
+      }).pipe(
+        Effect.andThen(Deferred.fail(sourceFailure, new Error("Provider delivery source stopped"))),
+        Effect.asVoid,
+      ),
+    );
+    const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents.pipe(
+      Scope.provide(sourceScope),
+    );
     // Detach the engine from this reactor's processing latency. The engine
     // publishes committed events into a bounded PubSub from an uninterruptible
     // section of its single command worker, so a subscriber that stalls (a hung
@@ -4088,7 +4132,8 @@ const make = Effect.gen(function* () {
     // free while boot work runs; ordering is preserved because the queue is FIFO
     // and `processOrderedEvent` skips anything at or below the durable cursor.
     const liveEventQueue = yield* Queue.unbounded<OrchestrationEvent, Cause.Done>();
-    yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkScoped);
+    yield* Scope.addFinalizer(sourceScope, Queue.shutdown(liveEventQueue));
+    yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkIn(sourceScope));
     const liveEvents = Stream.fromQueue(liveEventQueue);
     const consumerState = yield* deliveryRepository.getConsumerState(
       PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -4101,9 +4146,129 @@ const make = Effect.gen(function* () {
 
     const processOwner = `provider-command-reactor:${crypto.randomUUID()}`;
     let cursor = consumerState.value.lastAckedSequence;
+    let admittedThrough = cursor;
+    const pendingSourceEvents = new Map<
+      number,
+      { readonly event: OrchestrationEvent; completed: boolean }
+    >();
+    const quarantinedThreadFrontiers = new Map<string, number>();
+    const activeOwners = yield* Semaphore.make(PROVIDER_COMMAND_ACTIVE_OWNER_LIMIT);
+    const sourceWindow = yield* Semaphore.make(PROVIDER_COMMAND_PENDING_EVENT_LIMIT);
+    type OwnerWork = {
+      readonly pending: Array<{
+        readonly ready: Effect.Effect<void, unknown>;
+        readonly run: Effect.Effect<void, unknown, Scope.Scope>;
+      }>;
+      readonly done: Deferred.Deferred<void, unknown>;
+    };
+    const ownerWork = new Map<ThreadId, OwnerWork>();
+    const threadWorkDone = new Map<ThreadId, Deferred.Deferred<void, unknown>>();
+
+    const resolveDeliveryOwnerId = Effect.fnUntraced(function* (
+      threadId: ThreadId,
+      event?: ProviderIntentEvent,
+    ) {
+      if (event?.type === "thread.created" && event.payload.parentThreadId != null) {
+        threadSessionOwnerIds.set(threadId, event.payload.parentThreadId);
+      } else if (event?.type === "thread.created" && !(threadId as string).startsWith("subagent:")) {
+        threadSessionOwnerIds.set(threadId, threadId);
+      } else if (event?.type === "thread.meta-updated" && event.payload.parentThreadId !== undefined) {
+        if (event.payload.parentThreadId === null && (threadId as string).startsWith("subagent:")) {
+          // Clearing legacy metadata still uses the projection's synthetic-parent inference.
+          threadSessionOwnerIds.delete(threadId);
+        } else {
+          threadSessionOwnerIds.set(threadId, event.payload.parentThreadId ?? threadId);
+        }
+      }
+      const cached = threadSessionOwnerIds.get(threadId);
+      if (cached !== undefined) return cached;
+      const ownerId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+      // Retain the owner across deletion: older queued child commands and an
+      // operator retry must still serialize with the parent's session.
+      threadSessionOwnerIds.set(threadId, ownerId);
+      return ownerId;
+    });
+
+    // Called under deliverySourceLock. The lock covers only admission and
+    // contiguous acknowledgements, never provider I/O. One fiber per busy owner
+    // prevents same-owner waiters from consuming the bounded execution permits.
+    const enqueueOwnerWork = Effect.fnUntraced(function* (
+      ownerId: ThreadId,
+      threadId: ThreadId,
+      work: Effect.Effect<void, unknown, Scope.Scope>,
+    ) {
+      if (sourceStopped) return yield* Effect.fail(new Error("Provider delivery source stopped"));
+      const predecessor = threadWorkDone.get(threadId);
+      const done = yield* Deferred.make<void, unknown>();
+      threadWorkDone.set(threadId, done);
+      const orderedWork = work.pipe(
+        Effect.provideService(CurrentProviderDeliveryOwner, { threadId, ownerId }),
+        Effect.onExit((exit) => Effect.gen(function* () {
+          yield* Deferred.done(done, exit);
+          if (threadWorkDone.get(threadId) === done) threadWorkDone.delete(threadId);
+        })),
+      );
+      const queued = {
+        ready: predecessor === undefined ? Effect.void : Deferred.await(predecessor),
+        run: orderedWork,
+      };
+      const existing = ownerWork.get(ownerId);
+      if (existing !== undefined) {
+        existing.pending.push(queued);
+        return;
+      }
+      const entry: OwnerWork = { pending: [queued], done: yield* Deferred.make<void, unknown>() };
+      ownerWork.set(ownerId, entry);
+      yield* Effect.gen(function* () {
+        while (true) {
+          const next = entry.pending.shift();
+          if (next === undefined) {
+            ownerWork.delete(ownerId);
+            return;
+          }
+          // Owner migration waits for the previous same-thread command without
+          // taking an execution permit needed by that predecessor's owner.
+          yield* next.ready;
+          yield* activeOwners.withPermits(1)(next.run);
+        }
+      }).pipe(
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            if (Exit.isFailure(exit)) {
+              yield* Deferred.failCause(sourceFailure, exit.cause);
+            }
+            if (ownerWork.get(ownerId) === entry) ownerWork.delete(ownerId);
+            yield* Deferred.done(entry.done, exit);
+          }),
+        ),
+        Scope.provide(sourceScope),
+        Effect.forkIn(sourceScope),
+      );
+    });
+
+    const runOwnerWork = <A, E>(
+      threadId: ThreadId,
+      work: Effect.Effect<A, E, Scope.Scope>,
+    ) => Effect.gen(function* () {
+      const result = yield* Deferred.make<A, E>();
+      yield* deliverySourceLock.withPermits(1)(Effect.gen(function* () {
+        const ownerId = yield* resolveDeliveryOwnerId(threadId);
+        yield* enqueueOwnerWork(ownerId, threadId, work.pipe(
+          Effect.onExit((exit) => Deferred.done(result, exit)),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.void,
+          ),
+          Effect.asVoid,
+        ));
+      }));
+      // A queued job may never start if an earlier owner job stops the source.
+      // Release its caller on shutdown too; running jobs settle results in onExit.
+      return yield* Effect.raceFirst(Deferred.await(result), Deferred.await(sourceFailure));
+    });
+
     const refreshCursor = Effect.gen(function* () {
       const state = yield* deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER);
-      if (Option.isSome(state)) cursor = state.value.lastAckedSequence;
+      if (Option.isSome(state)) cursor = Math.max(cursor, state.value.lastAckedSequence);
     });
 
     const advanceCursor = Effect.fnUntraced(function* (event: OrchestrationEvent) {
@@ -4123,6 +4288,15 @@ const make = Effect.gen(function* () {
         return yield* Effect.die(
           new Error(`Provider command cursor could not advance through event ${event.sequence}`),
         );
+      }
+    });
+
+    const acknowledgeCompletedPrefix = Effect.gen(function* () {
+      for (const [sequence, pending] of pendingSourceEvents) {
+        if (!pending.completed) break;
+        yield* requireCursorAdvance(pending.event);
+        pendingSourceEvents.delete(sequence);
+        yield* sourceWindow.release(1);
       }
     });
 
@@ -4166,7 +4340,6 @@ const make = Effect.gen(function* () {
         );
       }
       quarantinedThreads.add(input.event.payload.threadId);
-      yield* requireCursorAdvance(input.event);
     });
 
     const skipQuarantinedSideEffect = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
@@ -4223,26 +4396,26 @@ const make = Effect.gen(function* () {
           ),
         );
       }
-      yield* requireCursorAdvance(event);
       return true;
     });
 
     const processClaimedProviderIntent = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       const threadId = event.payload.threadId;
-      if (yield* skipQuarantinedSideEffect(event)) return;
-
       const existing = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
       });
       if (Option.isSome(existing)) {
         if (existing.value.state === "succeeded") {
-          yield* requireCursorAdvance(event);
           return;
         }
+      }
+      // A later blocker may be durable above a cursor held back by another
+      // owner. Honor this event's acceptance proof before surfacing a skip.
+      if (yield* skipQuarantinedSideEffect(event)) return;
+      if (Option.isSome(existing)) {
         if (existing.value.state === "dead" || existing.value.state === "uncertain") {
           quarantinedThreads.add(threadId);
-          yield* requireCursorAdvance(event);
           return;
         }
         if (existing.value.state === "inflight") {
@@ -4306,9 +4479,8 @@ const make = Effect.gen(function* () {
           ),
         });
         if (workerResult._tag === "timeout") {
-          // The delivery lock is single-permit and process-wide, so an attempt
-          // that never returns is a total outage. Settle it as uncertain and
-          // let the thread quarantine rather than block every other thread.
+          // Settle a timed-out owner as uncertain; later intents on that
+          // thread quarantine while other owners continue independently.
           if (event.type === "thread.turn-start-requested") {
             yield* surfaceTimedOutTurnStart(event, workerResult.detail).pipe(
               Effect.catchCause((cause) =>
@@ -4363,7 +4535,6 @@ const make = Effect.gen(function* () {
                 new Error(`Provider command delivery ${event.sequence} lost settlement ownership`),
               );
             }
-            yield* refreshCursor;
             return;
           }
           case "safe_retry": {
@@ -4408,7 +4579,6 @@ const make = Effect.gen(function* () {
     ) {
       if (yield* skipQuarantinedSideEffect(event)) return;
       yield* processDomainEventSafely(event);
-      yield* requireCursorAdvance(event);
     });
 
     // Every entry point that settles a claimed delivery must cross this
@@ -4427,7 +4597,6 @@ const make = Effect.gen(function* () {
     const processOrderedEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
       if (event.sequence <= cursor) return;
       if (!isProviderIntentEvent(event)) {
-        yield* requireCursorAdvance(event);
         return;
       }
       if (isClaimedProviderIntent(event)) {
@@ -4457,7 +4626,7 @@ const make = Effect.gen(function* () {
       readonly threadId: string;
       readonly afterSequence: number;
     }) {
-      const replayThrough = cursor;
+      const replayThrough = Math.max(cursor, quarantinedThreadFrontiers.get(input.threadId) ?? 0);
       if (replayThrough <= input.afterSequence) return;
       yield* Stream.runForEach(
         orchestrationEngine.readEventsThrough(input.afterSequence, replayThrough),
@@ -4504,54 +4673,53 @@ const make = Effect.gen(function* () {
     });
 
     reconcileDeliveryRuntime = (input) =>
-      Effect.scoped(
-        deliverySourceLock.withPermits(1)(
-          Effect.gen(function* () {
-            const reconciledAt = new Date().toISOString();
-            const reconciled = yield* deliveryRepository.reconcile({
-              reconciliationId: crypto.randomUUID(),
-              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-              eventSequence: input.eventSequence,
-              threadId: input.threadId,
-              expectedState: input.expectedState,
-              outcome: input.outcome,
-              reconciledBy: input.reconciledBy,
-              ...(input.note === undefined ? {} : { note: input.note }),
-              reconciledAt,
-            });
-            if (Option.isNone(reconciled)) return null;
+      runOwnerWork(input.threadId, Effect.scoped(Effect.gen(function* () {
+        const reconciledAt = new Date().toISOString();
+        const reconciled = yield* deliveryRepository.reconcile({
+          reconciliationId: crypto.randomUUID(),
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: input.eventSequence,
+          threadId: input.threadId,
+          expectedState: input.expectedState,
+          outcome: input.outcome,
+          reconciledBy: input.reconciledBy,
+          ...(input.note === undefined ? {} : { note: input.note }),
+          reconciledAt,
+        });
+        if (Option.isNone(reconciled)) return null;
 
-            if (input.outcome === "safe_retry") {
-              yield* resumeRetryableDelivery(input);
-            } else {
-              quarantinedThreads.delete(input.threadId);
-              yield* replayQuarantinedThreadSideEffects({
-                threadId: input.threadId,
-                afterSequence: input.eventSequence,
-              });
-            }
+        if (input.outcome === "safe_retry") {
+          yield* resumeRetryableDelivery(input);
+        } else {
+          quarantinedThreads.delete(input.threadId);
+          yield* replayQuarantinedThreadSideEffects({
+            threadId: input.threadId,
+            afterSequence: input.eventSequence,
+          });
+        }
 
-            const finalDelivery = yield* deliveryRepository.getDelivery({
-              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-              eventSequence: input.eventSequence,
-            });
-            if (Option.isNone(finalDelivery) || finalDelivery.value.state === "inflight") {
-              return yield* Effect.die(
-                new Error(
-                  `Provider delivery ${input.eventSequence} did not reach a reconciled state`,
-                ),
-              );
-            }
-            return {
-              eventSequence: input.eventSequence,
-              threadId: input.threadId,
-              outcome: input.outcome,
-              state: finalDelivery.value.state,
-              reconciledAt,
-            };
-          }),
-        ),
-      ) as ReturnType<ProviderCommandReactorShape["reconcileDelivery"]>;
+        const finalDelivery = yield* deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: input.eventSequence,
+        });
+        if (Option.isNone(finalDelivery) || finalDelivery.value.state === "inflight") {
+          return yield* Effect.die(
+            new Error(
+              `Provider delivery ${input.eventSequence} did not reach a reconciled state`,
+            ),
+          );
+        }
+        if (!quarantinedThreads.has(input.threadId)) {
+          quarantinedThreadFrontiers.delete(input.threadId);
+        }
+        return {
+          eventSequence: input.eventSequence,
+          threadId: input.threadId,
+          outcome: input.outcome,
+          state: finalDelivery.value.state,
+          reconciledAt,
+        };
+      }))) as ReturnType<ProviderCommandReactorShape["reconcileDelivery"]>;
 
     const countSkippedPrompts = (input: {
       readonly threadId: ThreadId;
@@ -4643,24 +4811,66 @@ const make = Effect.gen(function* () {
     const retryableDeliveries = yield* deliveryRepository.listRetryableDeliveries(
       PROVIDER_COMMAND_REACTOR_CONSUMER,
     );
-    yield* deliverySourceLock.withPermits(1)(
-      Effect.forEach(retryableDeliveries, resumeRetryableDelivery, { discard: true }),
-    );
+    yield* Effect.forEach(retryableDeliveries, (delivery) =>
+      runOwnerWork(ThreadId.makeUnsafe(delivery.threadId), resumeRetryableDelivery(delivery)),
+      { discard: true },
+    ).pipe(Effect.onExit((exit) => Exit.isFailure(exit) ? closeSource(exit) : Effect.void));
 
-    const processOrderedEventSerially = (event: OrchestrationEvent) =>
-      deliverySourceLock.withPermits(1)(processOrderedEvent(event));
+    const enqueueOrderedEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+      // Bound completion bookkeeping while an earlier owner is slow. Acquire
+      // outside the intake/ack lock so completions can release admission slots.
+      yield* sourceWindow.take(1);
+      yield* deliverySourceLock.withPermits(1)(Effect.gen(function* () {
+        if (sourceStopped) return yield* Effect.fail(new Error("Provider delivery source stopped"));
+        if (event.sequence <= admittedThrough) {
+          yield* sourceWindow.release(1);
+          return;
+        }
+        const pending = { event, completed: false };
+        pendingSourceEvents.set(event.sequence, pending);
+        admittedThrough = event.sequence;
+        if (!isProviderIntentEvent(event)) {
+          pending.completed = true;
+          yield* acknowledgeCompletedPrefix;
+          return;
+        }
+        const ownerId = yield* resolveDeliveryOwnerId(event.payload.threadId, event);
+        yield* enqueueOwnerWork(ownerId, event.payload.threadId, processOrderedEvent(event).pipe(
+          Effect.andThen(deliverySourceLock.withPermits(1)(Effect.gen(function* () {
+            pending.completed = true;
+            if (quarantinedThreads.has(event.payload.threadId)) {
+              quarantinedThreadFrontiers.set(event.payload.threadId, event.sequence);
+            }
+            yield* acknowledgeCompletedPrefix;
+          }))),
+        ));
+      }));
+    });
 
     const replayThrough = yield* orchestrationEngine.getEventHighWaterSequence;
-    yield* Stream.runForEach(
-      orchestrationEngine.readEventsThrough(cursor, replayThrough),
-      processOrderedEventSerially,
+    yield* Effect.raceFirst(Effect.gen(function* () {
+      yield* Stream.runForEach(
+        orchestrationEngine.readEventsThrough(cursor, replayThrough),
+        enqueueOrderedEvent,
+      );
+      yield* Effect.forEach([...ownerWork.values()], (entry) => Deferred.await(entry.done), {
+        discard: true,
+        concurrency: "unbounded",
+      });
+      if (yield* Deferred.isDone(sourceFailure)) yield* Deferred.await(sourceFailure);
+    }), Deferred.await(sourceFailure)).pipe(
+      Effect.onExit((exit) => Exit.isFailure(exit) ? closeSource(exit) : Effect.void),
     );
-    yield* Stream.runForEach(liveEvents, processOrderedEventSerially).pipe(
+    yield* Effect.raceFirst(
+      Stream.runForEach(liveEvents, enqueueOrderedEvent),
+      Deferred.await(sourceFailure),
+    ).pipe(
       Effect.catchCause((cause) =>
         Effect.logError("provider command durable source stopped", {
           cause: Cause.pretty(cause),
         }).pipe(Effect.andThen(Effect.failCause(cause))),
       ),
+      Effect.onExit(closeSource),
       Effect.forkScoped,
     );
   });

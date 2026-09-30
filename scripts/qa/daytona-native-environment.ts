@@ -1,4 +1,4 @@
-/** Real US dev lifecycle check; creates and deletes one sandbox, with no mocks. */
+/** Real US-preferred dev lifecycle check; creates and deletes one sandbox in the ready region. */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -29,6 +29,6 @@ await Effect.runPromise(Effect.gen(function* () {
     yield* client.stop!(sandbox.id);
     yield* client.start!(sandbox.id, marker);
     assert.equal((yield* probe()).exitCode, 0, "Production resume must restore the current environment");
-    console.log("PASS: native stop/start reapplies current environment; no credentials were printed");
+    console.log(`PASS: ${sandbox.region} native stop/start reapplies current environment; no credentials were printed`);
   }).pipe(Effect.ensuring(client.destroy(sandbox.id)));
 }).pipe(Effect.provide(makeDaytonaSandboxClientLive(config)), Effect.scoped));

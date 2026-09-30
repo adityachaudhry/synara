@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { availableDaytonaContainerTargets } from '../../apps/server/src/workspaceRuntime/daytonaRegions.ts';
@@ -23,6 +23,9 @@ const snapshot = target === vars.SYNARA_DAYTONA_TARGET ? vars.SYNARA_DAYTONA_SNA
 assert(snapshot, 'Selected regional image is absent');
 const origin = 'https://synara-gitea-dev-dev-6df3.up.railway.app';
 const runId = randomUUID();
+const cleanupPath = process.argv.find(x => x.startsWith('--cleanup-from='))?.slice(15);
+const cleanupSource = cleanupPath ? JSON.parse(readFileSync(cleanupPath, 'utf8')) : undefined;
+assert(!cleanupSource || cleanupSource.projects.every(p => /^external-[a-f0-9-]+$/.test(p.id)) && cleanupSource.runId, 'Cleanup requires saved QA ownership evidence');
 const evidence = { checkedAt: new Date().toISOString(), runId, count, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES }, trials: [], cleanup: [] };
 const save = () => writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 });
 const http = async (route, token, body, method = 'POST') => {
@@ -55,12 +58,16 @@ try {
     assert(!pool.errorReason && pool.currentSize === pool.pool, 'Warm pool did not become ready');
   }
   const companies = ['chipsage', 'amorphiq', 'ansatz-labs', 'abraxas'];
-  for (const company of companies.slice(0, Math.min(count, companies.length))) {
+  if (cleanupSource) {
+    projects.push(...cleanupSource.projects);
+    fixtures.push(...(cleanupSource.fixtures ?? []));
+    evidence.cleanupSourceRunId = cleanupSource.runId;
+  } else for (const company of companies.slice(0, Math.min(count, companies.length))) {
     const r = await http('/api/external/projects/resolve', vars.SYNARA_EXTERNAL_AUTH_SECRET, { externalKey: 'daytona-readiness:' + runId + ':' + company, name: 'QA Daytona ' + company + ' ' + runId.slice(0, 8), repositoryBinding: { kind: 'git-subdirectory', origin: vars.SYNARA_GITEA_ORIGIN, owner: vars.SYNARA_GITEA_OWNER, repository: vars.SYNARA_GITEA_REPOSITORY, ref: 'main', path: 'companies/' + company } });
     projects.push({ id: r.projectId, company });
   }
   evidence.projects = projects; save();
-  const session = await http('/api/auth/external/session', vars.SYNARA_EXTERNAL_AUTH_SECRET, { subject: 'daytona-readiness-' + runId, email: 'daytona-readiness@glasswing.invalid', allowedProjectIds: projects.map(p => p.id), expiresAt: new Date(Date.now() + 1800000).toISOString(), nonce: randomUUID() });
+  const session = await http('/api/auth/external/session', vars.SYNARA_EXTERNAL_AUTH_SECRET, { subject: 'daytona-readiness-' + runId, email: 'daytona-readiness@glasswing.invalid', allowedProjectIds: projects.map(p => p.id), expiresAt: new Date(Date.now() + 840000).toISOString(), nonce: randomUUID() });
   const ticket = await http('/api/auth/ws-token', session.sessionToken);
   const negotiated = await fetch(origin + '/ws/negotiate?x-synara-client-build=0.7.3&x-synara-protocol-epoch=1&x-synara-protocol-min-revision=1&x-synara-protocol-max-revision=1').then(r => r.json());
   ws = new WebSocket(origin.replace('https:', 'wss:') + '/ws?' + new URLSearchParams({ wsToken: ticket.token, 'x-synara-client-build': '0.7.3', 'x-synara-protocol-epoch': '1', 'x-synara-protocol-revision': '1', 'x-synara-server-instance': negotiated.serverInstanceId }), { headers: { Origin: 'https://glasswing-web-dev-0e4d.up.railway.app' } });
@@ -74,9 +81,10 @@ try {
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
   const rpc = (tag, payload) => new Promise((resolve, reject) => { const id = String(++sequence); const timer = setTimeout(() => { pending.delete(id); reject(Error('RPC deadline: ' + tag)); }, 30000); pending.set(id, { resolve, reject, timer }); ws.send(JSON.stringify({ _tag: 'Request', id, tag, payload, headers: [] })); });
   command = data => rpc('orchestration.dispatchCommand', { commandId: randomUUID(), createdAt: new Date().toISOString(), ...data });
+  if (!cleanupSource) {
   for (let i = 0; i < count; i++) {
-    const project = projects[i % projects.length];
-    const f = { threadId: randomUUID(), projectId: project.id, company: project.company, marker: randomUUID(), note: 'analysis/.daytona-qa-' + runId + '-' + i + '.txt' };
+    const project = projects[count >= 25 && i < 10 ? 0 : i % projects.length];
+    const f = { threadId: randomUUID(), projectId: project.id, company: project.company, marker: randomUUID(), note: 'analysis/daytona-qa-' + runId + '-' + i + '.txt' };
     fixtures.push(f); evidence.fixtures = fixtures; save();
     await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId, title: 'QA Daytona ' + i, modelSelection: { provider: 'pi', model: 'anthropic/claude-opus-5', options: { thinkingLevel: 'minimal' } }, runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
   }
@@ -84,33 +92,39 @@ try {
     const messageId = randomUUID(); const start = Date.now();
     await command({ type: 'thread.turn.start', threadId: f.threadId, message: { messageId, role: 'user', text, attachments: [] }, runtimeMode: 'full-access', interactionMode: 'default' });
     let snapshot;
+    let firstTextObservedMs = null;
     while (Date.now() - start < 300000) {
       snapshot = await rpc('orchestration.getThreadDetailSnapshot', { threadId: f.threadId });
+      const messages = snapshot?.thread?.messages ?? [];
+      const userIndex = messages.findIndex(m => m.id === messageId);
+      if (firstTextObservedMs === null && userIndex >= 0 && messages.slice(userIndex + 1).some(m => m.role === 'assistant' && m.text)) firstTextObservedMs = Date.now() - start;
       const t = snapshot?.thread?.latestTurn;
       if (snapshot?.thread?.messages?.some(m => m.id === messageId) && t?.completedAt && Date.parse(t.requestedAt) >= start - 2000) break;
       await new Promise(r => setTimeout(r, 600));
     }
     const t = snapshot?.thread?.latestTurn;
     const answer = snapshot?.thread?.messages?.filter(m => m.role === 'assistant').at(-1)?.text ?? '';
-    const trial = { kind, threadId: f.threadId, company: f.company, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind) };
+    const trial = { kind, threadId: f.threadId, company: f.company, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, firstTextObservedMs, firstTextPollIntervalMs: 600, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind), runtimeErrors: snapshot?.thread?.activities?.filter(a => a.kind === 'runtime.error').map(a => ({ class: a.payload?.class, message: a.payload?.message })) };
     evidence.trials.push(trial); save(); console.log(JSON.stringify({ phase: 'turn', kind, threadId: f.threadId, company: f.company, state: trial.state, readinessMs: trial.readinessMs, totalMs: trial.totalMs }));
-    assert(t?.completedAt && t.state === 'completed', 'Turn failed: ' + trial.state);
+    assert(t?.completedAt && t.state === 'completed', 'Turn failed: ' + trial.state + ' ' + JSON.stringify(trial.runtimeErrors));
     assert(answer.includes(f.marker), 'Private thread marker missing from response');
     return trial;
   };
-  const cold = await Promise.allSettled(fixtures.map(f => turn(f, 'new', `Dev readiness test. Work only inside this company (${f.company}). In ONE execution tool call, find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Verify no other companies are accessible and root/controller credential directories are inaccessible from your user. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and check results, briefly.`)));
+  const cold = await Promise.allSettled(fixtures.map(f => turn(f, 'new', `Dev file readiness check for ${f.company}. In ONE execution tool call, find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and file check results, briefly.`)));
   evidence.coldFailures = cold.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []); save();
   assert.equal(evidence.coldFailures.length, 0, JSON.stringify(evidence.coldFailures));
   for (let repeat = 0; repeat < 3; repeat++) await Promise.all(fixtures.map(f => turn(f, 'warm-' + repeat, `Read only your private file ${f.note}; reply with its exact token ${f.marker}, the company name and nothing else. Do not call any other tool.`)));
   for (const f of fixtures) {
-    const response = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: f.threadId, path: f.note }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) });
-    const body = await response.text(); assert(response.ok && body.trim() === f.marker, 'Private file differs');
-    evidence.trials.push({ kind: 'private-preview', threadId: f.threadId, status: response.status, markerMatched: true }); save();
+    const response = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: f.threadId, path: '/workspace/repository/companies/' + f.company + '/' + f.note }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) });
+    const body = await response.text();
+    evidence.trials.push({ kind: 'private-preview', threadId: f.threadId, status: response.status, markerMatched: body.trim() === f.marker }); save();
+    assert(response.ok && body.trim() === f.marker, 'Private file differs; HTTP ' + response.status);
   }
   // Deliberate lifecycle faults apply only to the uniquely named QA threads.
   await command({ type: 'thread.session.stop', threadId: fixtures[0].threadId });
   await turn(fixtures[0], 'stopped-resume', `Read your private file ${fixtures[0].note}; reply with exact token ${fixtures[0].marker} and nothing else.`);
   evidence.passed = true; save();
+  }
 } catch (error) { evidence.error = error.message; save(); throw error; }
 finally {
   // Let the controller retire only the uniquely owned QA threads. Do not infer

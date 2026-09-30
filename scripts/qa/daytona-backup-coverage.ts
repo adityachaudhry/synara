@@ -24,8 +24,10 @@ try {
   assert.equal(workspaceArchiveIsCurrent(await store.read(threadId)), false, "Legacy coverage must remain unknown");
   const current = { ...saved, mutationRevision: randomUUID() };
   await store.write(threadId, { ...current, archiveMutationRevision: current.mutationRevision });
+  assert.equal(workspaceArchiveIsCurrent(await store.read(threadId)), false, "An idle-session archive cannot prove detached writers stopped");
+  await store.write(threadId, { ...current, archiveMutationRevision: current.mutationRevision, archiveWritersStopped: true });
   assert.equal(workspaceArchiveIsCurrent(await store.read(threadId)), true);
-  const dirty = { ...current, mutationRevision: randomUUID(), archiveMutationRevision: current.mutationRevision };
+  const dirty = { ...current, mutationRevision: randomUUID(), archiveMutationRevision: current.mutationRevision, archiveWritersStopped: true as const };
   await store.write(threadId, dirty);
   assert.equal(workspaceArchiveIsCurrent(await store.read(threadId)), false, "A newer mutation must block archive recovery");
   assert.equal((await store.read(threadId))?.binding.workspace.runtimeId, sandboxId, "Dirtying must retain the native disk");

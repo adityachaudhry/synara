@@ -14,8 +14,10 @@ export interface ProviderWorkspaceCheckpoint {
   readonly archiveBinding?: ProviderWorkerRuntimeBinding;
   /** Written before mutable work; absence means historical coverage is unknown. */
   readonly mutationRevision?: string;
-  /** The mutation revision covered by the last verified, settled archive. */
+  /** The mutation revision covered by the last verified archive after all agent writers stopped. */
   readonly archiveMutationRevision?: string;
+  /** An idle session alone cannot exclude detached background writers. */
+  readonly archiveWritersStopped?: true;
   /** Retain deletion work across controller restarts. */
   readonly retiredCheckpoints?: readonly RailwayCheckpoint[];
 }
@@ -31,7 +33,7 @@ export const workspaceCheckpointRevision = (saved: ProviderWorkspaceCheckpoint) 
   saved.nativeRevision ?? saved.checkpoint?.key ?? saved.archive!.revision;
 
 export const workspaceArchiveIsCurrent = (saved: ProviderWorkspaceCheckpoint | undefined) =>
-  !!saved?.archive && !!saved.mutationRevision && saved.mutationRevision === saved.archiveMutationRevision;
+  !!saved?.archive && saved.archiveWritersStopped === true && !!saved.mutationRevision && saved.mutationRevision === saved.archiveMutationRevision;
 
 /** Atomic pointer replacement keeps the last verified disk until a new location is durable. */
 export function makeWorkspaceCheckpointStore(root: string) {
@@ -74,10 +76,12 @@ export function makeWorkspaceCheckpointStore(root: string) {
     const archiveMutationRevision = value.archiveMutationRevision;
     if ([mutationRevision, archiveMutationRevision].some((revision) => revision !== undefined &&
         (typeof revision !== "string" || !/^[a-zA-Z0-9-]{1,160}$/.test(revision))) ||
-        (archiveMutationRevision !== undefined && (!archive || !mutationRevision)))
+        (archiveMutationRevision !== undefined && (!archive || !mutationRevision)) ||
+        (value.archiveWritersStopped !== undefined && (value.archiveWritersStopped !== true || !archiveMutationRevision)))
       throw new Error("Invalid workspace backup coverage.");
     const coverage = { ...(mutationRevision ? { mutationRevision } : {}),
-      ...(archiveMutationRevision ? { archiveMutationRevision } : {}) };
+      ...(archiveMutationRevision ? { archiveMutationRevision } : {}),
+      ...(value.archiveWritersStopped === true ? { archiveWritersStopped: true as const } : {}) };
     const archiveBinding = value.archiveBinding === undefined ? undefined : decodeProviderWorkerRuntimeBinding(value.archiveBinding);
     if (binding?.threadId !== threadId || (!checkpoint && !archive && !nativeRevision)) {
       throw new Error("Provider workspace checkpoint does not belong to this thread.");

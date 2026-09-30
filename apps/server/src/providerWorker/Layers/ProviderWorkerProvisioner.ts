@@ -236,6 +236,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       yield* saveDiskPointer(binding.threadId, { binding, nativeRevision: archive?.revision ?? `native-${randomUUID()}`,
         mutationRevision: !dirty && sameDisk && previous?.mutationRevision ? previous.mutationRevision : randomUUID(),
         ...(archive && previous?.archiveMutationRevision ? { archiveMutationRevision: previous.archiveMutationRevision } : {}),
+        ...(archive && previous?.archiveWritersStopped ? { archiveWritersStopped: true } : {}),
         ...(archive ? { archive, archiveBinding: previous!.archiveBinding ?? previous!.binding } : {}) });
     });
     const markWorkspaceMutationUnlocked = (binding: ProviderWorkerRuntimeBinding, allowRetired = false) => Effect.gen(function* () {
@@ -375,7 +376,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             current.binding.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration)
           return yield* provisionError("workspace.checkpoint.stale", "Native workspace changed before backup coverage could be committed.", undefined, binding.workspace.runtimeId);
         yield* saveDiskPointer(binding.threadId, { binding, nativeRevision: captureKey, archive,
-          mutationRevision: captured.mutationRevision, archiveMutationRevision: captured.mutationRevision });
+          mutationRevision: captured.mutationRevision,
+          // Terminal archives remain useful copies, but an idle Pi session can leave
+          // detached children writing. Only the proven UID stop permits recovery.
+          ...(stopped ? { archiveMutationRevision: captured.mutationRevision, archiveWritersStopped: true } : {}) });
         yield* Effect.logInfo("provider native workspace backed up", {
           threadId: binding.threadId, sandboxId: binding.workspace.runtimeId, revision: captureKey, bytes: archive.sizeBytes,
         });
@@ -572,6 +576,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly repositoryCredential?: string;
       readonly unprivileged?: boolean;
     }) {
+      const unprivileged = input.unprivileged || input.workspace.runtimeKind === "daytona-sandbox";
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
         workerId: randomUUID(),
@@ -719,13 +724,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           reused: artifactProbe.exitCode === 0 && !artifactProbe.timedOut,
           uploadBytes: artifactProbe.exitCode === 0 && !artifactProbe.timedOut ? 0 : artifactArchive.byteLength,
         });
-        if (input.unprivileged) {
+        if (unprivileged) {
           const prepared = yield* workspaceRuntime.exec(input.workspace, {
-            command: `mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi/agent/sessions && if [ -d /root/.pi/agent/sessions ]; then cp -an /root/.pi/agent/sessions/. /workspace/.pi/agent/sessions/; fi && chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi`,
+            command: `mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi/agent/sessions && if [ -d /root/.pi/agent/sessions ]; then cp -an /root/.pi/agent/sessions/. /workspace/.pi/agent/sessions/; fi && chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi${input.unprivileged ? "" : ` && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace`}`,
             timeoutSeconds: 60,
           });
           if (prepared.exitCode !== 0 || prepared.timedOut)
-            return yield* provisionError("workspace.user", "Could not prepare the unprivileged company worker.", undefined, fence.sandboxId);
+            return yield* provisionError("workspace.user", "Could not prepare the unprivileged worker.", undefined, fence.sandboxId);
           yield* workspaceRuntime.writeFile(input.workspace, {
             path: "/opt/synara/agent-gitconfig",
             data: "[safe]\n\tdirectory = /workspace/repository\n[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
@@ -742,7 +747,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             lifecycleGeneration: fence.lifecycleGeneration,
             cwd: input.cwd,
             homeDir: input.homeDir,
-            ...(input.unprivileged ? { runAsUid: String(S3_LFS_AGENT_UID) } : {}),
+            ...(unprivileged ? { runAsUid: String(S3_LFS_AGENT_UID) } : {}),
             ...(input.agentGatewayConnection === undefined
               ? {}
               : {
@@ -942,32 +947,41 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
-    const stopWorkerProcess = (binding: ProviderWorkerRuntimeBinding) => Effect.gen(function* () {
+    const stopWorkerProcess = (binding: ProviderWorkerRuntimeBinding, nativeAgentUidVerified = false) => Effect.gen(function* () {
+      if (binding.workspace.runtimeKind === "daytona-sandbox" && !nativeAgentUidVerified)
+        return yield* provisionError("workspace.stop", "Cannot prove the native worker's detached writers belong to the fenced agent UID; retaining its disk.", undefined, binding.workspace.runtimeId);
       yield* workspaceRuntime.stopDurableProcess(binding.workspace, binding.durableSessionName)
         .pipe(Effect.catch(() => Effect.void));
       if (binding.workspace.runtimeKind === "daytona-sandbox") {
         const fenced = yield* workspaceRuntime.exec(binding.workspace, {
-          command: `pkill -KILL -u ${S3_LFS_AGENT_UID} 2>/dev/null || true; for i in $(seq 1 100); do if ! pgrep -u ${S3_LFS_AGENT_UID} >/dev/null; then exit 0; fi; sleep 0.05; done; exit 1`,
+          command: `for i in $(seq 1 100); do pkill -KILL -u ${S3_LFS_AGENT_UID} 2>/dev/null || true; pgrep -u ${S3_LFS_AGENT_UID} >/dev/null; found=$?; if [ "$found" = 1 ]; then exit 0; fi; if [ "$found" != 0 ]; then exit 1; fi; sleep 0.05; done; exit 1`,
           timeoutSeconds: 10,
         });
-        if (fenced.exitCode !== 0 || fenced.timedOut) return yield* provisionError("workspace.stop", "Previous worker processes could not be fenced.", undefined, binding.workspace.runtimeId);
+        if (fenced.exitCode !== 0 || fenced.timedOut || fenced.truncated) return yield* provisionError("workspace.stop", "Previous worker processes could not be fenced.", undefined, binding.workspace.runtimeId);
       }
       if (!workspaceCheckpointStore) return;
       const stopped = yield* workspaceRuntime.exec(binding.workspace, {
-        command: "for i in $(seq 1 100); do if ! pgrep -f '^node /opt/synara/provider-worker.mjs$' >/dev/null; then exit 0; fi; sleep 0.1; done; exit 1",
+        command: "for i in $(seq 1 100); do pgrep -f '^node /opt/synara/provider-worker.mjs$' >/dev/null; found=$?; if [ \"$found\" = 1 ]; then exit 0; fi; if [ \"$found\" != 0 ]; then exit 1; fi; sleep 0.1; done; exit 1",
         timeoutSeconds: 15,
       });
-      if (stopped.exitCode !== 0 || stopped.timedOut) {
+      if (stopped.exitCode !== 0 || stopped.timedOut || stopped.truncated) {
         return yield* provisionError("workspace.stop", "Worker did not stop before its disk checkpoint.", undefined, binding.workspace.runtimeId);
       }
     });
 
     const retireWorkspace = (binding: ProviderWorkerRuntimeBinding, reason: string, mode: "destroy" | "park" | "reuse" = "destroy") => Effect.gen(function* () {
       let connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+      let nativeAgentUidVerified = false;
+      let maintenanceWritersStopped = false;
       if (Exit.isFailure(connection) && binding.workspace.runtimeKind === "daytona-sandbox") {
         const unavailable = Cause.squash(connection.cause);
         if (!(unavailable instanceof WorkspaceRuntimeError) || !unavailable.unavailable) return yield* Effect.failCause(connection.cause);
         if (mode === "destroy" && unavailable.status === "stopped" && workspaceRuntime.resume) {
+          const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+          if (!workspaceArchiveIsCurrent(saved) || saved?.binding.workspace.runtimeId !== binding.workspace.runtimeId ||
+              saved.binding.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration)
+            return yield* provisionError("workspace.stop", "Stopped native worker has no verified writer fence; retaining its disk and recovery pointer.", undefined, binding.workspace.runtimeId);
+          maintenanceWritersStopped = true;
           const workspace = yield* workspaceRuntime.resume(binding.workspace, {
             ...(binding.threadId ? { threadId: binding.threadId } : {}), lifecycleGeneration: binding.fence.lifecycleGeneration, maintenance: true,
           });
@@ -975,6 +989,19 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           connection = yield* Effect.exit(workspaceRuntime.connect(workspace));
           if (Exit.isFailure(connection)) return yield* Effect.failCause(connection.cause);
         }
+      }
+      if (Exit.isSuccess(connection) && binding.workspace.runtimeKind === "daytona-sandbox") {
+        // Check while the worker is still connected: after exit, root-owned
+        // detached children cannot be attributed safely to its generation.
+        const uid = yield* workspaceRuntime.exec(binding.workspace, {
+          command: `worker_processes="$(ps -eo uid=,args=)" || exit 3; printf '%s\\n' "$worker_processes" | awk '$2 == "node" && $3 == "/opt/synara/provider-worker.mjs" { found = 1; if ($1 != ${S3_LFS_AGENT_UID}) bad = 1 } END { exit (bad ? 2 : !found) }'`,
+          timeoutSeconds: 10,
+        });
+        // A provider-confirmed stopped disk with the matching persisted fence
+        // has no prior writers. Maintenance resume need not launch a new worker.
+        if ((uid.exitCode !== 0 && !(maintenanceWritersStopped && uid.exitCode === 1)) || uid.timedOut || uid.truncated)
+          return yield* provisionError("workspace.stop", "Native worker UID could not be verified; retaining its disk and recovery pointer.", undefined, binding.workspace.runtimeId);
+        nativeAgentUidVerified = true;
       }
       if (Exit.isSuccess(connection) && workspaceCheckpointStore && binding.threadId) {
         yield* markWorkspaceMutationUnlocked(binding, true);
@@ -987,7 +1014,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
       yield* authority.revoke(binding.fence);
       if (Exit.isSuccess(connection)) {
-        yield* stopWorkerProcess(binding);
+        yield* stopWorkerProcess(binding, nativeAgentUidVerified);
         yield* checkpointOutbox(binding);
         yield* checkpointWorkspaceUnlocked(binding, true);
       } else if (workspaceCheckpointStore && mode === "destroy") {
@@ -1031,6 +1058,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           return yield* createBinding({ ...input, ...(repositoryBinding ? { repositoryBinding } : {}) }, {
             binding: saved.archiveBinding ?? saved.binding, archive: saved.archive,
             mutationRevision: saved.mutationRevision, archiveMutationRevision: saved.archiveMutationRevision,
+            archiveWritersStopped: saved.archiveWritersStopped,
           });
         });
         const reuse = binding.workspace.runtimeKind === "daytona-sandbox" && workspaceRuntime.park && workspaceRuntime.resume &&
