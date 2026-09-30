@@ -1,0 +1,72 @@
+{
+  "verifiedAt": "2026-09-30T22:55:51.682Z",
+  "devCommit": "a7f73f3783e3db83774e56c1215ddad72d3c18d4",
+  "devActions": "https://github.com/adityachaudhry/synara/actions/runs/36784508540",
+  "glasswingDevCommit": "86dbdb7cae66cba9be08e853dd0ad81a9d6698ae",
+  "glasswingDevActions": "https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36780559190",
+  "piVersion": "0.99.2",
+  "mcpAdapterVersion": "4.0.0",
+  "webAccessVersion": "0.34.0",
+  "models": [
+    "anthropic/claude-fable-5-1",
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "openai/gpt-6.1-sol",
+    "openai/gpt-6-astra"
+  ],
+  "runId": "3947c5c0-f9c0-46d6-b325-12a1c781be5f",
+  "companyCount": 4,
+  "conversations": 5,
+  "completedModelTurns": 26,
+  "firstSendUsesExactPreparedWorker": true,
+  "nativeIsolationPasses": 5,
+  "realMcpPasses": 5,
+  "scopedPreviewDenied": true,
+  "detachedWriterRestore": true,
+  "ownedNativeDisksDirectlyDestroyed": 5,
+  "workerFrameRejections": 0,
+  "preparedNewReadiness": {
+    "samples": 5,
+    "medianMs": 3409,
+    "p95NearestRankMs": 3546,
+    "minimumMs": 1811,
+    "maximumMs": 3546
+  },
+  "warmReadiness": {
+    "samples": 15,
+    "medianMs": 2165,
+    "p95NearestRankMs": 5743,
+    "minimumMs": 945,
+    "maximumMs": 5743
+  },
+  "preparedStoppedResumeReadiness": {
+    "samples": 1,
+    "medianMs": 1422,
+    "p95NearestRankMs": 1422,
+    "minimumMs": 1422,
+    "maximumMs": 1422
+  },
+  "uiNavigation": {
+    "verified": true,
+    "fiveModelPicker": true,
+    "defaultModel": "Opus 5.5",
+    "hydratedWithoutMessage": true,
+    "draftThreadId": "ecbdf51b-6428-472b-9fcc-ceb5c20151d1",
+    "ownedSandboxId": "e4a69c04-f881-4454-b32e-cdf56358c8c5",
+    "expiredDiskDirect404": true
+  },
+  "matchingRecipe": "364ebde53a6ac38155da2e9f587cfcc8594f5f99613f71bfb66a9c6166af28b5",
+  "matchingRegionalReadySpares": {
+    "eu": 2,
+    "us": 2
+  },
+  "productionPromoted": false,
+  "devDataRefreshExecuted": false,
+  "privateReceiptsRoot": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration",
+  "limits": [
+    "Five latest-model conversations; no new 50/98 or soak pass",
+    "Readiness is controller requestedAt to startedAt, distinct from model first token and total answer time",
+    "No production parity or actual vendor outage was induced",
+    "Independent model load budgets, production Daytona funding and private migration/reverse proof remain open"
+  ]
+}
