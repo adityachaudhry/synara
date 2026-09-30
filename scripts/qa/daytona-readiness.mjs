@@ -11,6 +11,8 @@ const require = createRequire(new URL('../../apps/server/package.json', import.m
 const { Daytona } = await import(require.resolve('@daytona/sdk'));
 const { default: WebSocket } = await import(require.resolve('ws'));
 assert(process.argv.includes('--run-dev'), 'Pass --run-dev for real, disposable dev trials');
+const model = process.argv.find(x => x.startsWith('--model='))?.slice(8) ?? 'anthropic/claude-opus-5';
+assert(/^[a-z0-9-]+\/[a-zA-Z0-9._:/-]+$/u.test(model), 'Use a provider-qualified Pi model slug');
 const count = Number(process.argv.find(x => x.startsWith('--count='))?.split('=')[1] ?? 4);
 assert(Number.isInteger(count) && count > 0 && count <= 98);
 const coldBurst = Number(process.argv.find(x => x.startsWith('--cold-burst='))?.split('=')[1] ?? count);
@@ -29,7 +31,7 @@ const runId = randomUUID();
 const cleanupPath = process.argv.find(x => x.startsWith('--cleanup-from='))?.slice(15);
 const cleanupSource = cleanupPath ? JSON.parse(readFileSync(cleanupPath, 'utf8')) : undefined;
 assert(!cleanupSource || cleanupSource.projects.every(p => /^external-[a-f0-9-]+$/.test(p.id)) && cleanupSource.runId, 'Cleanup requires saved QA ownership evidence');
-const evidence = { checkedAt: new Date().toISOString(), runId, count, coldBurstSize: coldBurst, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES }, trials: [], cleanup: [] };
+const evidence = { checkedAt: new Date().toISOString(), runId, count, coldBurstSize: coldBurst, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES, model }, trials: [], cleanup: [] };
 const save = () => writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 });
 const http = async (route, token, body, method = 'POST') => {
   const r = await fetch(origin + route, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
@@ -137,7 +139,7 @@ try {
     const project = projects[count >= 25 && i < 10 ? 0 : i % projects.length];
     const f = { threadId: randomUUID(), projectId: project.id, company: project.company, marker: randomUUID(), note: 'analysis/daytona-qa-' + runId + '-' + i + '.txt' };
     fixtures.push(f); evidence.fixtures = fixtures; save();
-    await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId, title: 'QA Daytona ' + i, modelSelection: { provider: 'pi', model: 'anthropic/claude-opus-5', options: { thinkingLevel: 'minimal' } }, runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
+    await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId, title: 'QA Daytona ' + i, modelSelection: { provider: 'pi', model, options: { thinkingLevel: 'minimal' } }, runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
   }
   const turn = async (f, kind, text) => {
     const messageId = randomUUID(); const start = Date.now();
