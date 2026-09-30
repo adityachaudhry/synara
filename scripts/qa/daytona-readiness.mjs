@@ -135,6 +135,11 @@ try {
     const answer = snapshot?.thread?.messages?.filter(m => m.role === 'assistant').at(-1)?.text ?? '';
     const trial = { kind, threadId: f.threadId, company: f.company, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, firstTextObservedMs, firstTextPollIntervalMs: 600, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind), runtimeErrors: snapshot?.thread?.activities?.filter(a => a.kind === 'runtime.error').map(a => ({ class: a.payload?.class, message: a.payload?.message })) };
     evidence.trials.push(trial); save(); console.log(JSON.stringify({ phase: 'turn', kind, threadId: f.threadId, company: f.company, state: trial.state, readinessMs: trial.readinessMs, totalMs: trial.totalMs }));
+    if (kind === 'profile-mcp') {
+      trial.crunchbaseSearchCompleted = snapshot?.thread?.activities?.some(a => a.kind === 'tool.completed' && a.payload?.title === 'crunchbase_search' && Date.parse(a.createdAt) >= start - 2000);
+      save();
+      assert(trial.crunchbaseSearchCompleted, 'Configured profile must execute the real Crunchbase search tool');
+    }
     assert(t?.completedAt && t.state === 'completed', 'Turn failed: ' + trial.state + ' ' + JSON.stringify(trial.runtimeErrors));
     assert(answer.includes(f.marker), 'Private thread marker missing from response');
     return trial;
@@ -143,6 +148,7 @@ try {
   evidence.coldFailures = cold.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []); save();
   assert.equal(evidence.coldFailures.length, 0, JSON.stringify(evidence.coldFailures));
   collectOwnedWorkers();
+  if (process.argv.includes('--profile-check')) await turn(fixtures[0], 'profile-mcp', `Use crunchbase_search once to check the company identity for ${fixtures[0].company}, with limit 1 if supported. Say whether the result contains a matching company; do not invent a match. Then read your private file ${fixtures[0].note} and include its exact token ${fixtures[0].marker}. Keep the answer brief; do not publish or edit any file.`);
   for (const f of fixtures) {
     const ids = [...(ownedByThread.get(f.threadId) ?? [])];
     assert.equal(ids.length, 1, 'A cold QA thread must have one directly mapped native worker');
@@ -238,7 +244,7 @@ finally {
   const after = [];
   for await (const sandbox of d.list({ labels: { 'synara-managed': 'true' } })) if (!before.has(sandbox.id)) after.push({ id: sandbox.id, state: sandbox.state });
   evidence.newManagedDisksAtExit = after; // Includes concurrent users; never delete them from this inventory.
-  if (evidence.cleanup.some(c => c.ownershipReadFailed || c.deletionRequested === false || c.deleted === false || c.physicalState && c.physicalState !== 'destroyed')) evidence.passed = false;
+  evidence.passed = evidence.passed === true && !evidence.cleanup.some(c => c.ownershipReadFailed || c.deletionRequested === false || c.deleted === false || c.physicalState && c.physicalState !== 'destroyed');
   save();
   console.log(JSON.stringify({ phase: 'done', passed: evidence.passed ?? false, evidence: path.join(root, 'evidence.json') }));
 }

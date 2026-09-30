@@ -168,7 +168,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       throw new Error("SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS must be an integer from 1 through 64.");
     }
     const checkpointPool = makeKeyedLock<string>();
-    const captureSlots = yield* Semaphore.make(4);
+    const captureSlots = yield* Semaphore.make(nativeDaytona ? 8 : 4);
     const diskReaders = new Map<string, number>();
     const cachedDisks = new Map<string, ProviderWorkspaceCheckpoint>();
     const activeCaptures = new Set<string>();
