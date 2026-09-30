@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { Daytona, DaytonaFileAccessDeniedError, DaytonaNotFoundError, DaytonaProcessExecutionTimeoutError } from "@daytona/sdk";
+import { Daytona, DaytonaError, DaytonaFileAccessDeniedError, DaytonaNotFoundError, DaytonaProcessExecutionTimeoutError } from "@daytona/sdk";
 import type { Sandbox } from "@daytona/sdk";
-import { Effect, Layer } from "effect";
+import { Duration, Effect, Layer, Schedule } from "effect";
 
 import { RailwaySandboxClientError, RailwaySandboxNotFoundError } from "../Errors.ts";
 import { RailwaySandboxClient } from "../Services/RailwaySandboxClient.ts";
 import type { RailwaySandboxClientShape, RailwaySandboxStatus, RailwaySandboxFileEntry } from "../Services/RailwaySandboxClient.ts";
 import type { DaytonaSandboxRuntimeConfig } from "../daytonaSandboxConfig.ts";
+import { availableDaytonaContainerTargets } from "../daytonaRegions.ts";
 
 const MANAGED_LABEL = "synara-managed";
 const OPERATION_LABEL = "synara-create-operation-id";
@@ -38,14 +39,77 @@ function mode(value: string): number {
 }
 
 function failure(operation: string, cause: unknown, runtimeId?: string) {
+  if (cause instanceof RailwaySandboxClientError) return cause;
   return cause instanceof DaytonaNotFoundError && runtimeId
     ? new RailwaySandboxNotFoundError({ operation, runtimeId, cause })
-    : new RailwaySandboxClientError({ operation, detail: `Daytona sandbox ${operation} failed.`, ...(runtimeId ? { runtimeId } : {}), cause });
+    : new RailwaySandboxClientError({ operation, detail: `Daytona sandbox ${operation} failed.`, ...(runtimeId ? { runtimeId } : {}),
+        ...(regionDenied(cause) ? { regionUnavailable: true } : {}), cause });
 }
 
+const regionDenied = (cause: unknown) => cause instanceof DaytonaError && cause.statusCode === 403 &&
+  /^Region [a-z0-9-]+ is not available to the organization for class container$/u.test(cause.message);
+
 export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRuntimeConfig, { readonly enabled: true }>) {
-  return Layer.sync(RailwaySandboxClient, () => {
+  return Layer.effect(RailwaySandboxClient, Effect.gen(function* () {
     const daytona = new Daytona({ apiKey: config.apiKey, apiUrl: config.apiUrl, target: config.target });
+    const targets = [config.target, ...(config.fallbackTarget ? [config.fallbackTarget] : [])];
+    const allocators = new Map(targets.map((target) => [target, new Daytona({ apiKey: config.apiKey, apiUrl: config.apiUrl, target })]));
+    const snapshotFor = (target: string) => target === config.target ? config.snapshot : config.fallbackSnapshot!;
+    let eligibleTargets = config.fallbackTarget ? [] as string[] : [config.target];
+    const blockedTargets = new Set<string>();
+    const activatedTargets = new Set<string>();
+    const pendingProbes = new Map<string, { id: string; startedAt: number }>();
+    const refreshRegions = async () => {
+      const available = await availableDaytonaContainerTargets(config);
+      const next: string[] = [];
+      const pools = config.warmPoolSize > 0 ? await daytona.warmPool.list() : [];
+      for (const target of targets) {
+        if (!available.has(target)) { blockedTargets.add(target); continue; }
+        try {
+        const allocator = allocators.get(target)!;
+        const snapshot = await allocator.snapshot.get(snapshotFor(target));
+        if (snapshot.state !== "active" || !snapshot.regionIds?.includes(target)) continue;
+        // Probe uncertain regions off the conversation path. Empty probes never receive company credentials.
+        if (blockedTargets.has(target)) {
+          let probe;
+          const pending = pendingProbes.get(target);
+          const operationId = pending?.id ?? randomUUID();
+          try {
+            if (pending) {
+              let found = false;
+              for await (const owned of daytona.list({ labels: { "synara-region-probe": operationId } })) { found = true; await owned.delete(30, true); }
+              // Empty probes auto-stop/delete. An uncertain probe may only delay another
+              // empty probe; it never permits duplicate conversation allocation.
+              if (!found && Date.now() - pending.startedAt < 5 * 60_000) continue;
+              pendingProbes.delete(target);
+            }
+            pendingProbes.set(target, { id: operationId, startedAt: Date.now() });
+            probe = await allocator.create({ snapshot: snapshotFor(target), labels: { "synara-region-probe": operationId }, autoStopInterval: 1, autoDeleteInterval: 1 }, { timeout: 30 });
+            await probe.delete(30, true);
+            pendingProbes.delete(target);
+            blockedTargets.delete(target);
+          } catch (cause) { if (regionDenied(cause)) pendingProbes.delete(target); continue; }
+        }
+        if (config.warmPoolSize > 0) {
+          let pool = pools.find((candidate) => candidate.target === target && candidate.snapshot === snapshotFor(target));
+          pool ??= await daytona.warmPool.create({ snapshot: snapshotFor(target), target, pool: config.warmPoolSize });
+          if (pool.pool !== config.warmPoolSize) pool = await daytona.warmPool.update(pool.id, { pool: config.warmPoolSize });
+          if (pool.errorReason || (!activatedTargets.has(target) && pool.currentSize < 1)) continue;
+          activatedTargets.add(target);
+        }
+        next.push(target);
+        } catch { /* A failing preferred region cannot suppress a ready fallback. */ }
+      }
+      if (eligibleTargets.join(",") !== next.join(",")) console.info(JSON.stringify({ event: "daytona.regions.ready", targets: next }));
+      eligibleTargets = next;
+    };
+    if (config.fallbackTarget || config.warmPoolSize > 0) {
+      const refresh = Effect.tryPromise({ try: refreshRegions, catch: () => new Error("Daytona regional readiness refresh failed.") }).pipe(
+        Effect.catch(() => Effect.logWarning("Daytona regional readiness refresh failed; retaining last known selection")),
+      );
+      yield* refresh;
+      yield* Effect.forkScoped(Effect.sleep("15 seconds").pipe(Effect.andThen(refresh), Effect.repeat(Schedule.spaced(Duration.seconds(15)))));
+    }
     const handles = new Map<string, Sandbox>();
     const get = async (id: string) => {
       const sandbox = handles.get(id) ?? await daytona.get(id);
@@ -73,16 +137,32 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
     const client: RailwaySandboxClientShape = {
       create: (input) => Effect.tryPromise({
         try: async () => {
-          if (input.region && input.region !== config.target) throw new Error("Daytona target differs from configured region.");
-          if (input.networkIsolation !== "ISOLATED") throw new Error("Daytona workspaces cannot join the Railway private network.");
-          const sandbox = await daytona.create({
-            snapshot: input.checkpointName ?? config.snapshot,
+          if ((input.region && input.region !== config.target) || input.networkIsolation !== "ISOLATED" ||
+              (input.checkpointName && input.checkpointName !== config.snapshot)) throw new RailwaySandboxClientError({
+            operation: "create", detail: "Daytona allocation requires configured regional snapshots and isolated networking.", createRejected: true,
+          });
+          const candidates = eligibleTargets.filter((target) => !blockedTargets.has(target));
+          if (!candidates.length) throw new RailwaySandboxClientError({ operation: "create", detail: "No prepared Daytona region is ready; retry after regional recovery.", createRejected: true });
+          let sandbox: Sandbox | undefined;
+          for (const target of candidates) {
+            try {
+              sandbox = await allocators.get(target)!.create({
+            snapshot: snapshotFor(target),
             labels: { [MANAGED_LABEL]: "true", [OPERATION_LABEL]: input.operationId },
             // Provider idle retirement is earlier; the periodic outbox read renews activity during live turns.
             autoStopInterval: input.idleTimeoutMinutes,
             autoArchiveInterval: 24 * 60,
             autoDeleteInterval: -1,
-          });
+              });
+              break;
+            } catch (cause) {
+              if (config.fallbackTarget || config.warmPoolSize > 0) blockedTargets.add(target);
+              // A readiness/transport failure may own a disk: keep its intent, never allocate twice.
+              if (!regionDenied(cause)) throw cause;
+              if (target === candidates.at(-1)) throw new RailwaySandboxClientError({ operation: "create", detail: "Daytona rejected sandbox creation in all prepared regions.", createRejected: true, regionUnavailable: true, cause });
+            }
+          }
+          if (!sandbox) throw new Error("Daytona allocation did not return a sandbox.");
           handles.set(sandbox.id, sandbox);
           try {
             if (Object.keys(input.environment).length) await sandbox.updateEnv({ ...input.environment });
@@ -92,7 +172,7 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
           } catch (cause) {
             await sandbox.delete(60, true);
             handles.delete(sandbox.id);
-            throw cause;
+            throw new RailwaySandboxClientError({ operation: "create", detail: "Daytona sandbox setup failed; its disk was deleted.", createRejected: true, cause });
           }
         },
         catch: (cause) => failure("create", cause) as RailwaySandboxClientError,
@@ -246,5 +326,5 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
       }),
     };
     return client;
-  });
+  }));
 }

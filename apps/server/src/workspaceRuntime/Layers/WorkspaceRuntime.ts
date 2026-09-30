@@ -12,7 +12,7 @@ import {
   type ProviderSessionRuntimeRepositoryShape,
 } from "../../persistence/Services/ProviderSessionRuntime";
 import { decodeProviderWorkerRuntimeBinding } from "../../providerWorker/runtimeBinding";
-import { RailwaySandboxNotFoundError, WorkspaceRuntimeError } from "../Errors";
+import { RailwaySandboxClientError, RailwaySandboxNotFoundError, WorkspaceRuntimeError } from "../Errors";
 import { RailwaySandboxClient } from "../Services/RailwaySandboxClient";
 import {
   WorkspaceRuntime,
@@ -53,6 +53,7 @@ function toRuntimeError(operation: string, runtimeId?: string) {
       detail: `Sandbox workspace runtime ${operation} failed.`,
       ...(runtimeId === undefined ? {} : { runtimeId }),
       ...(cause instanceof RailwaySandboxNotFoundError ? { unavailable: true } : {}),
+      ...(cause instanceof RailwaySandboxClientError && cause.regionUnavailable ? { regionUnavailable: true } : {}),
       cause,
     });
 }
@@ -413,7 +414,10 @@ export function makeWorkspaceRuntimeLive(
             );
             if (Exit.isFailure(createExit)) {
               ownedOperationIds.delete(operationId);
-              if (!createStarted) {
+              const error = Cause.squash(createExit.cause);
+              const rejected = error instanceof WorkspaceRuntimeError &&
+                error.cause instanceof RailwaySandboxClientError && error.cause.createRejected === true;
+              if (!createStarted || rejected) {
                 const cleanupExit = yield* Effect.exit(removeIntent(operationId));
                 if (Exit.isFailure(cleanupExit)) {
                   return yield* Effect.failCause(cleanupExit.cause);

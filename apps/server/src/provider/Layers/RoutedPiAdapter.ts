@@ -8,7 +8,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderWorkerMethod,
 } from "@synara/contracts";
-import { Cause, Effect, Exit, Layer, Option, PubSub, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, Option, PubSub, Schema, Scope, Stream } from "effect";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -27,6 +27,7 @@ import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { makeKeyedLock } from "../keyedLock";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -79,6 +80,103 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   );
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
   const remoteGatewayTokenByThread = new Map<string, string>();
+  const mutationLock = makeKeyedLock<string>();
+  type CheckpointRequest = {
+    readonly binding: ProviderWorkerRuntimeBinding;
+    readonly eventId: string;
+    readonly turnId?: TurnId;
+    readonly terminal: boolean;
+  };
+  type CheckpointWorker = {
+    readonly done: Deferred.Deferred<void>;
+    terminalDone: Deferred.Deferred<void> | undefined;
+    pending: CheckpointRequest | undefined;
+    lastEventId: string;
+  };
+  const checkpointWorkers = new Map<string, CheckpointWorker>();
+  let checkpointClosing = false;
+  const awaitCheckpoint = (threadId: string): Effect.Effect<void> =>
+    Effect.suspend(() => {
+      const worker = checkpointWorkers.get(threadId);
+      return worker?.terminalDone
+        ? Deferred.await(worker.terminalDone).pipe(Effect.andThen(awaitCheckpoint(threadId)))
+        : Effect.void;
+    });
+  const checkpointScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+    Effect.suspend(() => {
+      checkpointClosing = true;
+      return Effect.forEach(Array.from(checkpointWorkers.values()), (worker) => Deferred.await(worker.done),
+        { concurrency: "unbounded", discard: true });
+    }).pipe(Effect.ensuring(Scope.close(scope, Exit.void))),
+  );
+  const withCheckpointBarrier = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    mutationLock.withLock(threadId, awaitCheckpoint(threadId).pipe(Effect.andThen(effect)));
+  const scheduleCheckpoint = (threadId: string, request: CheckpointRequest) =>
+    Effect.uninterruptible(Effect.suspend(() => {
+      if (checkpointClosing) return Effect.interrupt;
+      const existing = checkpointWorkers.get(threadId);
+      if (existing) {
+        if (existing.lastEventId === request.eventId) return Effect.void;
+        existing.lastEventId = request.eventId;
+        if (request.terminal && !existing.terminalDone) existing.terminalDone = Deferred.makeUnsafe<void>();
+        // A terminal capture also reads the Outbox; file-change bursts need only
+        // one pending read and must not replace a pending terminal capture.
+        if (!existing.pending?.terminal || request.terminal) existing.pending = request;
+        return Effect.void;
+      }
+      const worker: CheckpointWorker = {
+        done: Deferred.makeUnsafe<void>(), pending: request, lastEventId: request.eventId,
+        terminalDone: request.terminal ? Deferred.makeUnsafe<void>() : undefined,
+      };
+      checkpointWorkers.set(threadId, worker);
+      const drain = (): Effect.Effect<void> => Effect.suspend(() => {
+        const next = worker.pending;
+        worker.pending = undefined;
+        if (!next) {
+          if (checkpointWorkers.get(threadId) === worker) checkpointWorkers.delete(threadId);
+          return Effect.void;
+        }
+        const finishTerminal = Effect.suspend(() => {
+          if (!next.terminal || worker.pending?.terminal) return Effect.void;
+          const done = worker.terminalDone;
+          worker.terminalDone = undefined;
+          return done ? Deferred.succeed(done, undefined).pipe(Effect.asVoid) : Effect.void;
+        });
+        const binding = remoteByThread.get(threadId);
+        if (!binding || binding.fence.lifecycleGeneration !== next.binding.fence.lifecycleGeneration ||
+            binding.fence.sandboxId !== next.binding.fence.sandboxId || binding.fence.workerId !== next.binding.fence.workerId) {
+          return finishTerminal.pipe(Effect.andThen(drain()));
+        }
+        const checkpoint = next.terminal && provisioner.checkpointWorkspace
+          ? provisioner.checkpointWorkspace(binding).pipe(
+              Effect.catchCause((cause) => Cause.hasInterruptsOnly(cause) ? Effect.interrupt :
+                Effect.logWarning("provider native session checkpoint deferred", { threadId, cause })),
+            )
+          : Effect.void;
+        return checkpoint.pipe(
+          Effect.andThen(provisioner.checkpointOutbox(binding, next.turnId)),
+          Effect.asVoid,
+          Effect.catchCause((cause) => Cause.hasInterruptsOnly(cause) ? Effect.interrupt :
+            Effect.logWarning("provider Outbox terminal checkpoint deferred", {
+              threadId, sandboxId: binding.workspace.runtimeId, cause,
+            })),
+          Effect.andThen(finishTerminal),
+          Effect.andThen(drain()),
+        );
+      });
+      // Register the barrier before the event is forwarded, and retain the job
+      // in the adapter scope even if its stream subscription is restarted.
+      return drain().pipe(
+        Effect.interruptible,
+        Effect.ensuring(Effect.suspend(() => {
+          if (checkpointWorkers.get(threadId) === worker) checkpointWorkers.delete(threadId);
+          return Deferred.succeed(worker.done, undefined).pipe(Effect.andThen(worker.terminalDone
+            ? Deferred.succeed(worker.terminalDone, undefined) : Effect.void));
+        })),
+        Effect.forkIn(checkpointScope),
+        Effect.asVoid,
+      );
+    }));
   const workspaceUnavailable = (binding: ProviderWorkerRuntimeBinding) =>
     provisioner.isWorkspaceUnavailable?.(binding) ?? Effect.succeed(false);
   const retainFailedWorker = (binding: ProviderWorkerRuntimeBinding) =>
@@ -143,12 +241,16 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     binding: ProviderWorkerRuntimeBinding,
     method: ProviderWorkerMethod,
     params: unknown,
-  ) =>
-    broker.request(binding.fence, method, params).pipe(
+  ) => {
+    const request = broker.request(binding.fence, method, params);
+    const mutates = ["session.start", "turn.send", "turn.steer", "turn.interrupt", "request.respond",
+      "userInput.respond", "thread.rollback", "thread.compact"].includes(method);
+    return (mutates && provisioner.withWorkspaceMutation ? provisioner.withWorkspaceMutation(binding, request) : request).pipe(
       Effect.mapError((cause) =>
         adapterError(method, `Remote Pi worker request '${method}' failed.`, cause),
       ),
     );
+  };
 
   const requestDecoded = <A, I>(
     binding: ProviderWorkerRuntimeBinding,
@@ -169,9 +271,17 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     threadId: string,
     remote: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<A, E>,
     localEffect: Effect.Effect<A, E>,
+    mutates = false,
   ) => {
-    const binding = remoteByThread.get(threadId);
-    return binding ? remote(binding) : localEffect;
+    const routed = Effect.suspend(() => {
+      const binding = remoteByThread.get(threadId);
+      return binding ? (mutates && provisioner.markWorkspaceMutation
+        ? provisioner.markWorkspaceMutation(binding).pipe(
+            Effect.mapError((cause) => adapterError("workspace.mutation", "Could not preserve native workspace recovery coverage.", cause)),
+            Effect.andThen(remote(binding)),
+          ) : remote(binding)) : localEffect;
+    });
+    return mutates ? withCheckpointBarrier(threadId, routed) : routed;
   };
 
   const loadPersistedRemote = (threadId: Parameters<PiAdapterShape["hasSession"]>[0]) =>
@@ -243,7 +353,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     });
 
   const startSession: PiAdapterShape["startSession"] = (input) =>
-    Effect.gen(function* () {
+    withCheckpointBarrier(input.threadId, Effect.gen(function* () {
       const persisted = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
       const persistedRemote = persistedDistributedBinding(persisted?.runtimePayload);
       const activeRemote = remoteByThread.get(input.threadId);
@@ -308,6 +418,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             const startExit = yield* Effect.exit(
               restore(
                 Effect.gen(function* () {
+                  yield* provisioner.markWorkspaceMutation?.(binding) ?? Effect.void;
                   const session = yield* requestDecoded(
                     binding,
                     "session.start",
@@ -380,7 +491,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
               { retryable: cause instanceof ProviderWorkerProvisioningError },
             ),
       ),
-    );
+    ));
 
   const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
     route(
@@ -456,6 +567,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           );
         }),
       local.sendTurn(input),
+      true,
     );
 
   const requireRepositoryBinding = Effect.fnUntraced(function* (
@@ -517,7 +629,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
 
   const listPersistenceCandidates: NonNullable<PiAdapterShape["listPersistenceCandidates"]> =
     (threadId) =>
-      Effect.gen(function* () {
+      withCheckpointBarrier(threadId, Effect.gen(function* () {
         const binding = yield* requireReadableOutboxBinding(threadId, "persistence.list");
         return yield* provisioner.listPersistenceCandidates(binding).pipe(
           Effect.mapError((cause) =>
@@ -528,11 +640,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             ),
           ),
         );
-      });
+      }));
 
   const readPersistenceCandidate: NonNullable<PiAdapterShape["readPersistenceCandidate"]> =
     (threadId, lifecycleGeneration, selection) =>
-      Effect.gen(function* () {
+      withCheckpointBarrier(threadId, Effect.gen(function* () {
         const binding =
           selection.source === "outbox"
             ? yield* requireReadableOutboxBinding(threadId, "persistence.read")
@@ -552,16 +664,16 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             ),
           ),
         );
-      });
+      }));
 
   const readWorkspaceFile: NonNullable<PiAdapterShape["readWorkspaceFile"]> = (threadId, filePath) =>
-    Effect.gen(function* () {
+    withCheckpointBarrier(threadId, Effect.gen(function* () {
       const binding = yield* requireRepositoryBinding(threadId, "workspace.file.read");
       if (!provisioner.readWorkspaceFile) return yield* adapterError("workspace.file.read", "Workspace file preview is unavailable.");
       return yield* provisioner.readWorkspaceFile(binding, filePath).pipe(
         Effect.mapError((cause) => adapterError("workspace.file.read", cause.detail, cause)),
       );
-    });
+    }));
 
   const readOutboxCheckpoint: NonNullable<PiAdapterShape["readOutboxCheckpoint"]> =
     (threadId, candidatePath) =>
@@ -582,7 +694,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     activeTurnId,
     workspaceCommit,
   ) =>
-    Effect.gen(function* () {
+    withCheckpointBarrier(threadId, Effect.gen(function* () {
       const persistedBinding = yield* requireRepositoryBinding(threadId, "repository.reconcile");
       yield* provisioner.markOutboxPromoted(persistedBinding, persistedFiles);
       const binding = activeTurnId === undefined
@@ -601,6 +713,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         binding,
         targetCommit,
         persistedFiles,
+        activeTurnId,
       ).pipe(
         Effect.mapError((cause) =>
           adapterError(
@@ -621,7 +734,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         previousCommit,
         commit: reconciled.repositoryCheckout?.commit ?? commit,
       };
-    });
+    }));
 
   const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
     route(
@@ -634,6 +747,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       local.steerTurn
         ? local.steerTurn(input)
         : Effect.fail(adapterError("turn.steer", "Local Pi turn steering is unavailable.")),
+      true,
     );
 
   const interruptTurn: PiAdapterShape["interruptTurn"] = (
@@ -650,6 +764,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           ...(providerThreadId === undefined ? {} : { providerThreadId }),
         }).pipe(Effect.asVoid),
       local.interruptTurn(threadId, turnId, providerThreadId),
+      true,
     );
 
   const respondToRequest: PiAdapterShape["respondToRequest"] = (
@@ -664,6 +779,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           Effect.asVoid,
         ),
       local.respondToRequest(threadId, requestId, decision),
+      true,
     );
 
   const respondToUserInput: PiAdapterShape["respondToUserInput"] = (
@@ -678,10 +794,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           Effect.asVoid,
         ),
       local.respondToUserInput(threadId, requestId, answers),
+      true,
     );
 
   const stopRemoteSession = (threadId: Parameters<PiAdapterShape["stopSession"]>[0], park: boolean) =>
-    Effect.gen(function* () {
+    withCheckpointBarrier(threadId, Effect.gen(function* () {
       const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(threadId));
       if (!binding) return yield* local.stopSession(threadId);
       const preserve = park && binding.workspace.runtimeKind === "daytona-sandbox" && provisioner.park;
@@ -701,15 +818,16 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       );
       remoteByThread.delete(threadId);
       revokeRemoteGatewayToken(threadId);
-    });
+    }));
 
   const stopSession: PiAdapterShape["stopSession"] = (threadId) => stopRemoteSession(threadId, false);
   const parkSession: NonNullable<PiAdapterShape["parkSession"]> = (threadId) => stopRemoteSession(threadId, true);
 
-  const listSessions: PiAdapterShape["listSessions"] = () =>
-    Effect.all([
-      local.listSessions(),
-      Effect.forEach(Array.from(remoteByThread.values()), (binding) =>
+  const listSessions: PiAdapterShape["listSessions"] = (threadId) =>
+    Effect.suspend(() => Effect.all([
+      local.listSessions(threadId),
+      Effect.forEach(threadId === undefined ? Array.from(remoteByThread.values())
+        : [remoteByThread.get(threadId)].flatMap((binding) => binding ? [binding] : []), (binding) =>
         workspaceUnavailable(binding).pipe(
           Effect.flatMap((unavailable) => unavailable
             ? Effect.succeed([] as const)
@@ -722,7 +840,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           ),
         ),
       ).pipe(Effect.map((groups) => groups.flat())),
-    ]).pipe(Effect.map(([localSessions, remoteSessions]) => [...localSessions, ...remoteSessions]));
+    ]).pipe(Effect.map(([localSessions, remoteSessions]) => [...localSessions, ...remoteSessions])));
 
   const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
     route(
@@ -756,6 +874,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           ProviderThreadSnapshotSchema,
         ).pipe(Effect.map((snapshot) => snapshot as ProviderThreadSnapshot)),
       local.rollbackThread(threadId, numTurns),
+      true,
     );
 
   const compactThread: NonNullable<PiAdapterShape["compactThread"]> = (threadId) =>
@@ -766,6 +885,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       local.compactThread
         ? local.compactThread(threadId)
         : Effect.fail(adapterError("thread.compact", "Local Pi compaction is unavailable.")),
+      true,
     );
 
   const stopAll: PiAdapterShape["stopAll"] = () =>
@@ -781,13 +901,17 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       yield* Effect.forEach(
         Array.from(bindings.entries()),
         ([threadId, binding]) =>
-          (binding.workspace.runtimeKind === "daytona-sandbox" && provisioner.park ? provisioner.park(binding) : provisioner.stop(binding)).pipe(
+          withCheckpointBarrier(threadId, Effect.suspend(() => {
+            const current = remoteByThread.get(threadId) ?? binding;
+            return current.workspace.runtimeKind === "daytona-sandbox" && provisioner.park
+              ? provisioner.park(current) : provisioner.stop(current);
+          }).pipe(
             Effect.tap(() => Effect.sync(() => remoteByThread.delete(threadId))),
             Effect.tap(() => Effect.sync(() => revokeRemoteGatewayToken(threadId))),
             Effect.mapError((cause) =>
               adapterError("runtime.stopAll", "Failed to destroy a remote Pi runtime.", cause),
             ),
-          ),
+          )),
         { discard: true },
       );
       yield* local.stopAll();
@@ -829,14 +953,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     getComposerCapabilities: local.getComposerCapabilities,
     get streamEvents() {
       const remoteEvents = broker.streamEvents.pipe(
-        Stream.tap((event) => {
-          if ((event.type === "turn.completed" || event.type === "turn.aborted") && event.turnId) {
-            const token = remoteGatewayTokenByThread.get(event.threadId);
-            if (token) {
-              // Each completed turn retires write authority; ProviderService rotates it on recovery.
-              void agentGatewayCredentials?.retireSessionTurn(token, event.turnId);
-            }
-          }
+        Stream.tap((event) => Effect.suspend(() => {
           const completedFileChange =
             event.type === "item.completed" &&
             event.payload.itemType === "file_change" &&
@@ -850,22 +967,18 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           }
           const binding = remoteByThread.get(event.threadId);
           if (!binding || event.lifecycleGeneration !== binding.fence.lifecycleGeneration) return Effect.void;
-          const checkpoint = !completedFileChange && provisioner.checkpointWorkspace
-            ? provisioner.checkpointWorkspace(binding).pipe(
-                Effect.catch((cause) => Effect.logWarning("provider native session checkpoint deferred", { threadId: event.threadId, cause })),
-              )
-            : Effect.void;
-          return checkpoint.pipe(Effect.andThen(provisioner.checkpointOutbox(binding, event.turnId ?? undefined)),
-            Effect.asVoid,
-            Effect.catch((cause) =>
-              Effect.logWarning("provider Outbox terminal checkpoint deferred", {
-                threadId: event.threadId,
-                sandboxId: binding.workspace.runtimeId,
-                cause,
-              }),
-            ),
-          );
-        }),
+          if (!completedFileChange && event.turnId) {
+            const token = remoteGatewayTokenByThread.get(event.threadId);
+            if (token) {
+              // Each completed turn retires write authority; ProviderService rotates it on recovery.
+              void agentGatewayCredentials?.retireSessionTurn(token, event.turnId);
+            }
+          }
+          return scheduleCheckpoint(event.threadId, {
+            binding, eventId: event.eventId, terminal: !completedFileChange,
+            ...(event.turnId ? { turnId: event.turnId } : {}),
+          });
+        })),
       );
       const providerEvents = Stream.merge(local.streamEvents, remoteEvents);
       return capacityEvents === undefined

@@ -1,8 +1,8 @@
 import type { ProviderSessionStartInput } from "@synara/contracts";
 import { it as effectIt } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -13,6 +13,13 @@ import { makeRoutedPiAdapter, makeRoutedPiAdapterWithCapacity } from "./RoutedPi
 import { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import type { SandboxCapacityLease } from "../../workspaceRuntime/SandboxCapacity";
 import type { ProviderWorkerProvisionInput } from "../../providerWorker/Services/ProviderWorkerProvisioner";
+
+// Keep the adapter's managed checkpoint scope alive through each existing scenario.
+async function runScopedAdapter<A, E>(effect: Effect.Effect<A, E, Scope.Scope>) {
+  const scope = await Effect.runPromise(Scope.make());
+  onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+  return Effect.runPromise(effect.pipe(Effect.provideService(Scope.Scope, scope)));
+}
 
 const threadId = "11111111-1111-4111-8111-111111111111" as never;
 const repositoryBinding = {
@@ -428,7 +435,7 @@ describe("RoutedPiAdapter", () => {
       threadId: "occupied" as never,
       lifecycleGeneration: "generation",
     });
-    const adapter = await Effect.runPromise(
+    const adapter = await runScopedAdapter(
       makeRoutedPiAdapterWithCapacity(capacity).pipe(Effect.provide(harness.layer)),
     );
     const eventsFiber = Effect.runFork(
@@ -464,7 +471,7 @@ describe("RoutedPiAdapter", () => {
 
   it("preserves the existing local Pi adapter as the default", async () => {
     const harness = makeHarness();
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
 
     await Effect.runPromise(adapter.startSession(startInput()));
 
@@ -476,7 +483,7 @@ describe("RoutedPiAdapter", () => {
   it("moves only capacity-managed Railway launches to the post-admission timeout", async () => {
     const harness = makeHarness();
     const capacity = new SandboxCapacity(1);
-    const adapter = await Effect.runPromise(
+    const adapter = await runScopedAdapter(
       makeRoutedPiAdapterWithCapacity(capacity).pipe(Effect.provide(harness.layer)),
     );
 
@@ -488,7 +495,7 @@ describe("RoutedPiAdapter", () => {
 
   it("starts only an admitted repository-bound Pi session through the worker protocol", async () => {
     const harness = makeHarness();
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
 
     await Effect.runPromise(adapter.startSession(startInput({ repositoryBound: true })));
 
@@ -525,7 +532,7 @@ describe("RoutedPiAdapter", () => {
 
   it("rehydrates a persisted remote binding through the existing restart seam", async () => {
     const harness = makeHarness(runtimeBinding);
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
 
     await Effect.runPromise(adapter.startSession(startInput({ repositoryBound: true })));
 
@@ -547,7 +554,7 @@ describe("RoutedPiAdapter", () => {
 
   it("stops a persisted remote sandbox after the controller adapter restarts", async () => {
     const harness = makeHarness(runtimeBinding);
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
 
     await Effect.runPromise(adapter.stopSession(threadId));
 
@@ -558,7 +565,7 @@ describe("RoutedPiAdapter", () => {
 
   it("stops every persisted remote sandbox after the controller adapter restarts", async () => {
     const harness = makeHarness(runtimeBinding);
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
 
     await Effect.runPromise(adapter.stopAll());
 
@@ -573,7 +580,7 @@ describe("RoutedPiAdapter", () => {
         ? Effect.fail(new Error("worker disconnected"))
         : Effect.succeed(null),
     );
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
 
     await expect(Effect.runPromise(adapter.stopSession(threadId))).resolves.toBeUndefined();
     expect(harness.provisioner.stop).toHaveBeenCalledWith(runtimeBinding);
@@ -581,7 +588,7 @@ describe("RoutedPiAdapter", () => {
 
   it("destroys the remote runtime when a sent turn becomes uncertain", async () => {
     const harness = makeHarness();
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
     await Effect.runPromise(adapter.startSession(startInput({ repositoryBound: true })));
     harness.request.mockImplementation((_fence, method: string) =>
       method === "turn.send"
@@ -601,7 +608,7 @@ describe("RoutedPiAdapter", () => {
 
   it("keeps local session discovery available when a remote worker is down", async () => {
     const harness = makeHarness();
-    const adapter = await Effect.runPromise(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
+    const adapter = await runScopedAdapter(makeRoutedPiAdapter.pipe(Effect.provide(harness.layer)));
     await Effect.runPromise(adapter.startSession(startInput({ repositoryBound: true })));
     harness.request.mockImplementation((_fence, method: string) =>
       method === "session.list"

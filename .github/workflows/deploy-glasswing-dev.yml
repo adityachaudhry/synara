@@ -48,3 +48,9 @@ jobs:
       - run: railway up --service synara-gitea-dev --project "$RAILWAY_PROJECT_ID" --environment dev --ci
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Retire obsolete unclaimed warm pools
+        run: node .github/actions/prepare-worker/cleanup.mjs
+        env:
+          WORKER_PROJECT: ${{ env.RAILWAY_PROJECT_ID }}
+          WORKER_SERVICE: synara-gitea-dev
+          WORKER_ENVIRONMENT: dev

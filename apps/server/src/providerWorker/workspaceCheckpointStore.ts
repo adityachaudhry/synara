@@ -12,6 +12,10 @@ export interface ProviderWorkspaceCheckpoint {
   /** Stable Daytona disk identity; revision advances only with a verified portable backup. */
   readonly nativeRevision?: string;
   readonly archiveBinding?: ProviderWorkerRuntimeBinding;
+  /** Written before mutable work; absence means historical coverage is unknown. */
+  readonly mutationRevision?: string;
+  /** The mutation revision covered by the last verified, settled archive. */
+  readonly archiveMutationRevision?: string;
   /** Retain deletion work across controller restarts. */
   readonly retiredCheckpoints?: readonly RailwayCheckpoint[];
 }
@@ -25,6 +29,9 @@ export interface WorkspaceCaptureIntent {
 
 export const workspaceCheckpointRevision = (saved: ProviderWorkspaceCheckpoint) =>
   saved.nativeRevision ?? saved.checkpoint?.key ?? saved.archive!.revision;
+
+export const workspaceArchiveIsCurrent = (saved: ProviderWorkspaceCheckpoint | undefined) =>
+  !!saved?.archive && !!saved.mutationRevision && saved.mutationRevision === saved.archiveMutationRevision;
 
 /** Atomic pointer replacement keeps the last verified disk until a new location is durable. */
 export function makeWorkspaceCheckpointStore(root: string) {
@@ -63,6 +70,14 @@ export function makeWorkspaceCheckpointStore(root: string) {
       catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause; }
     }
     const nativeRevision = value.nativeRevision;
+    const mutationRevision = value.mutationRevision;
+    const archiveMutationRevision = value.archiveMutationRevision;
+    if ([mutationRevision, archiveMutationRevision].some((revision) => revision !== undefined &&
+        (typeof revision !== "string" || !/^[a-zA-Z0-9-]{1,160}$/.test(revision))) ||
+        (archiveMutationRevision !== undefined && (!archive || !mutationRevision)))
+      throw new Error("Invalid workspace backup coverage.");
+    const coverage = { ...(mutationRevision ? { mutationRevision } : {}),
+      ...(archiveMutationRevision ? { archiveMutationRevision } : {}) };
     const archiveBinding = value.archiveBinding === undefined ? undefined : decodeProviderWorkerRuntimeBinding(value.archiveBinding);
     if (binding?.threadId !== threadId || (!checkpoint && !archive && !nativeRevision)) {
       throw new Error("Provider workspace checkpoint does not belong to this thread.");
@@ -73,7 +88,7 @@ export function makeWorkspaceCheckpointStore(root: string) {
     if (value.archiveBinding !== undefined && (!nativeRevision || !archive || !archiveBinding || archiveBinding.threadId !== threadId ||
         JSON.stringify(archiveBinding.repositoryCheckout?.binding ?? archiveBinding.repositoryUnavailable?.binding) !==
         JSON.stringify(binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding))) throw new Error("Invalid native archive binding.");
-    if (nativeRevision && !archive) return { binding, nativeRevision };
+    if (nativeRevision && !archive) return { binding, nativeRevision, ...coverage };
     if (value.retiredCheckpoints !== undefined && (!Array.isArray(value.retiredCheckpoints) ||
         value.retiredCheckpoints.some((item: RailwayCheckpoint) => typeof item?.id !== "string" || typeof item?.key !== "string"))) {
       throw new Error("Invalid retired checkpoint references.");
@@ -86,14 +101,14 @@ export function makeWorkspaceCheckpointStore(root: string) {
       throw new Error("Workspace checkpoint locations have different revisions.");
     }
     if (checkpoint) {
-      if (archive === undefined) return { binding, checkpoint, ...(value.retiredCheckpoints ? { retiredCheckpoints: value.retiredCheckpoints } : {}) };
+      if (archive === undefined) return { binding, checkpoint, ...coverage, ...(value.retiredCheckpoints ? { retiredCheckpoints: value.retiredCheckpoints } : {}) };
     }
     if (archive && typeof archive.archiveId === "string" && typeof archive.revision === "string" &&
         /^[a-f0-9]{64}$/.test(archive.sha256) && Number.isSafeInteger(archive.sizeBytes) &&
         archive.sizeBytes > 0 && archive.sizeBytes <= 2 * 1024 ** 3 && archive.format === "tar-gzip-v1" &&
         Array.isArray(archive.roots) && archive.roots.length === 2 &&
         archive.roots[0] === "workspace" && archive.roots[1] === "root/.pi/agent/sessions") {
-      return { binding, archive, ...(nativeRevision ? { nativeRevision } : {}), ...(archiveBinding ? { archiveBinding } : {}), ...(checkpoint ? { checkpoint } : {}), ...(value.retiredCheckpoints ? { retiredCheckpoints: value.retiredCheckpoints } : {}) };
+      return { binding, archive, ...coverage, ...(nativeRevision ? { nativeRevision } : {}), ...(archiveBinding ? { archiveBinding } : {}), ...(checkpoint ? { checkpoint } : {}), ...(value.retiredCheckpoints ? { retiredCheckpoints: value.retiredCheckpoints } : {}) };
     }
     throw new Error("Invalid provider workspace checkpoint location.");
   };

@@ -246,8 +246,9 @@ export interface ProviderAdapterShape<TError> {
 
   /**
    * List currently active provider sessions for this adapter.
+   * A thread hint lets remote adapters query one worker instead of every worker.
    */
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+  readonly listSessions: (threadId?: ThreadId) => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
    * Check whether this adapter owns an active session id.

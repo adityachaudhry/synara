@@ -28,6 +28,9 @@ export interface ProviderWorkerAttachmentStageInput {
 export interface ProviderWorkerProvisionerShape {
   /** A positive result means the runtime is conclusively gone; connection errors stay recoverable. */
   readonly isWorkspaceUnavailable?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<boolean>;
+  /** Persist uncertain coverage before sending a request that can change native state. */
+  readonly markWorkspaceMutation?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly withWorkspaceMutation?: <A, E, R>(binding: ProviderWorkerRuntimeBinding, mutation: Effect.Effect<A, E, R>) => Effect.Effect<A, E | ProviderWorkerProvisioningError, R>;
   readonly start: (
     input: ProviderWorkerProvisionInput,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
@@ -65,6 +68,7 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     commit: string,
     persistedFiles?: ReadonlyArray<ProviderPersistenceCandidateSelection>,
+    activeTurnId?: string,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
   readonly listPersistenceCandidates: (
     binding: ProviderWorkerRuntimeBinding,

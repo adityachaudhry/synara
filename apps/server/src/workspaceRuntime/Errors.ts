@@ -4,6 +4,9 @@ export class RailwaySandboxClientError extends Data.TaggedError("RailwaySandboxC
   readonly operation: string;
   readonly detail: string;
   readonly runtimeId?: string;
+  /** An authoritative create rejection; transport failures can still have created a disk. */
+  readonly createRejected?: boolean;
+  readonly regionUnavailable?: boolean;
   readonly cause?: unknown;
 }> {}
 
@@ -21,6 +24,8 @@ export class WorkspaceRuntimeError extends Data.TaggedError("WorkspaceRuntimeErr
   readonly runtimeId?: string;
   /** Set only for an authoritative missing or terminal runtime, never a transport failure. */
   readonly unavailable?: boolean;
+  /** A definitive regional entitlement rejection, not missing conversation data. */
+  readonly regionUnavailable?: boolean;
   readonly status?: "creating" | "running" | "stopped" | "destroying" | "destroyed" | "failed";
   readonly cause?: unknown;
 }> {}

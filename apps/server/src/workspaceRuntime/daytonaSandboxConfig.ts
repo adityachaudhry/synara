@@ -6,6 +6,9 @@ export type DaytonaSandboxRuntimeConfig =
       readonly apiUrl: string;
       readonly target: string;
       readonly snapshot: string;
+      readonly fallbackTarget?: string;
+      readonly fallbackSnapshot?: string;
+      readonly warmPoolSize: number;
       readonly idleTimeoutMinutes: number;
       readonly maxActiveSandboxes: number;
     };
@@ -15,6 +18,9 @@ export function resolveDaytonaSandboxRuntimeConfig(environment: Readonly<Record<
   const apiKey = environment.SYNARA_DAYTONA_API_KEY?.trim();
   const snapshot = environment.SYNARA_DAYTONA_SNAPSHOT?.trim();
   const target = environment.SYNARA_DAYTONA_TARGET?.trim() || "us";
+  const fallbackTarget = environment.SYNARA_DAYTONA_FALLBACK_TARGET?.trim();
+  const fallbackSnapshot = environment.SYNARA_DAYTONA_FALLBACK_SNAPSHOT?.trim();
+  const warmPoolSize = Number(environment.SYNARA_DAYTONA_WARM_POOL_SIZE ?? "0");
   const apiUrl = environment.SYNARA_DAYTONA_API_URL?.trim() || "https://app.daytona.io/api";
   const idleTimeoutMinutes = Number(environment.SYNARA_DAYTONA_IDLE_TIMEOUT_MINUTES ?? "30");
   const maxActiveSandboxes = Number(environment.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES ?? "100");
@@ -22,8 +28,10 @@ export function resolveDaytonaSandboxRuntimeConfig(environment: Readonly<Record<
   if (!apiKey || !snapshot || url.protocol !== "https:" || url.username || url.password ||
       !/^[a-z0-9-]+$/u.test(target) || !Number.isInteger(idleTimeoutMinutes) ||
       idleTimeoutMinutes < 1 || idleTimeoutMinutes > 120 ||
+      (fallbackTarget && (!/^[a-z0-9-]+$/u.test(fallbackTarget) || fallbackTarget === target || !fallbackSnapshot)) ||
+      (!fallbackTarget && fallbackSnapshot) || !Number.isInteger(warmPoolSize) || warmPoolSize < 0 || warmPoolSize > 5 ||
       !Number.isInteger(maxActiveSandboxes) || maxActiveSandboxes < 1) {
     throw new Error("Daytona requires an API key, prepared snapshot, HTTPS API URL, target, idle timeout, and positive sandbox limit.");
   }
-  return { enabled: true, apiKey, apiUrl, target, snapshot, idleTimeoutMinutes, maxActiveSandboxes };
+  return { enabled: true, apiKey, apiUrl, target, snapshot, ...(fallbackTarget ? { fallbackTarget, fallbackSnapshot } : {}), warmPoolSize, idleTimeoutMinutes, maxActiveSandboxes };
 }

@@ -34,22 +34,74 @@ runs:
       run: |
         bun -e '
           import { execFileSync } from "node:child_process";
+          import { writeFileSync } from "node:fs";
+          import { createRequire } from "node:module";
           import { prepareProviderWorkerTemplate } from "./apps/server/src/providerWorker/prepareTemplate.ts";
           import { prepareDaytonaWorkerTemplate } from "./apps/server/src/providerWorker/prepareDaytonaTemplate.ts";
+          import { availableDaytonaContainerTargets } from "./apps/server/src/workspaceRuntime/daytonaRegions.ts";
+          const require = createRequire(`${process.cwd()}/apps/server/package.json`);
+          const { Daytona } = await import(require.resolve("@daytona/sdk"));
           const target = ["--service", process.env.WORKER_SERVICE, "--project", process.env.WORKER_PROJECT, "--environment", process.env.WORKER_ENVIRONMENT];
           const railwayToken = process.env.RAILWAY_TOKEN;
           const variables = JSON.parse(execFileSync("railway", ["variables", ...target, "--json"], { encoding: "utf8" }));
           Object.assign(process.env, variables);
           const daytona = variables.SYNARA_WORKSPACE_RUNTIME === "daytona";
-          const prepared = daytona
-            ? await prepareDaytonaWorkerTemplate({ artifactPath: "apps/server/dist/provider-worker/workerMain.mjs", apiKey: variables.SYNARA_DAYTONA_API_KEY, target: variables.SYNARA_DAYTONA_TARGET || "us" })
-            : await prepareProviderWorkerTemplate("apps/server/dist/provider-worker/workerMain.mjs");
-          execFileSync("railway", ["variables", ...target, "--set", `${daytona ? "SYNARA_DAYTONA_SNAPSHOT" : "SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT"}=${prepared.key}`, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
+          const preferredTarget = variables.SYNARA_DAYTONA_TARGET || "us";
+          const fallbackTarget = variables.SYNARA_DAYTONA_FALLBACK_TARGET?.trim();
+          let publicUrl;
+          let available;
           if (daytona) {
-            const publicUrl = new URL(variables.SYNARA_PUBLIC_URL);
+            publicUrl = new URL(variables.SYNARA_PUBLIC_URL);
             if (publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) throw new Error("Daytona requires a public HTTPS Synara root URL.");
-            execFileSync("railway", ["variables", ...target, "--set", `SYNARA_PROVIDER_WORKER_CONTROL_URL=wss://${publicUrl.host}/internal/provider-worker`, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
-            execFileSync("railway", ["variables", ...target, "--set", "SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=ISOLATED", "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
+            if (fallbackTarget === preferredTarget) throw new Error("Fallback must be a different region.");
+            available = await availableDaytonaContainerTargets({ apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL });
+            if (![preferredTarget, fallbackTarget].some(target => target && available.has(target))) throw new Error("No configured Daytona container region is available.");
           }
+          const prepared = daytona
+            ? await prepareDaytonaWorkerTemplate({ artifactPath: "apps/server/dist/provider-worker/workerMain.mjs", apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL, target: preferredTarget })
+            : await prepareProviderWorkerTemplate("apps/server/dist/provider-worker/workerMain.mjs");
+          const updates = [`${daytona ? "SYNARA_DAYTONA_SNAPSHOT" : "SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT"}=${prepared.key}`];
+          const obsoletePools = [];
+          if (daytona) {
+            let fallback;
+            if (fallbackTarget) {
+              fallback = await prepareDaytonaWorkerTemplate({ artifactPath: "apps/server/dist/provider-worker/workerMain.mjs", apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL, target: fallbackTarget });
+              if (fallback.sha256 !== prepared.sha256 || fallback.photonSha256 !== prepared.photonSha256) throw new Error("Regional worker artifacts differ.");
+              updates.push(`SYNARA_DAYTONA_FALLBACK_SNAPSHOT=${fallback.key}`);
+              console.log(JSON.stringify({ fallbackSnapshot: fallback.key, fallbackTarget }));
+            }
+            updates.push(`SYNARA_PROVIDER_WORKER_CONTROL_URL=wss://${publicUrl.host}/internal/provider-worker`, "SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=ISOLATED");
+            const oldSnapshots = [variables.SYNARA_DAYTONA_SNAPSHOT, variables.SYNARA_DAYTONA_FALLBACK_SNAPSHOT].filter(key => key && key !== prepared.key && key !== fallback?.key);
+            const client = new Daytona({ apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL });
+            const size = Number(variables.SYNARA_DAYTONA_WARM_POOL_SIZE || 0);
+            if (!Number.isInteger(size) || size < 0 || size > 5) throw new Error("Warm pool size must be 0..5.");
+            if (size > 0) {
+              let pools = await client.warmPool.list();
+              // Pool deletion needs an operator-verified exclusive organization: pool IDs
+              // cannot establish whether another controller consumes the same snapshot.
+              if (variables.SYNARA_DAYTONA_EXCLUSIVE_POOL_OWNER === "1") {
+                const oldPairs = [[preferredTarget, variables.SYNARA_DAYTONA_SNAPSHOT], [fallbackTarget, variables.SYNARA_DAYTONA_FALLBACK_SNAPSHOT]];
+                obsoletePools.push(...pools.filter(pool => oldSnapshots.includes(pool.snapshot) && oldPairs.some(([region, key]) => pool.target === region && pool.snapshot === key)).map(pool => pool.id));
+              }
+              for (const [region, key] of [[preferredTarget, prepared.key], [fallbackTarget, fallback?.key]]) {
+                if (!region || !key || !available.has(region)) continue;
+                let pool = pools.find(pool => pool.target === region && pool.snapshot === key);
+                pool ??= await client.warmPool.create({ snapshot: key, target: region, pool: size });
+                if (pool.pool !== size) pool = await client.warmPool.update(pool.id, { pool: size });
+                const deadline = Date.now() + 180_000;
+                while (pool.currentSize < size && !pool.errorReason && Date.now() < deadline) {
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                  pools = await client.warmPool.list();
+                  pool = pools.find(candidate => candidate.id === pool.id);
+                  if (!pool) throw new Error("Prepared warm pool disappeared.");
+                }
+                if (pool.errorReason || pool.currentSize < size) throw new Error(`Prepared ${region} warm pool did not fill.`);
+                console.log(JSON.stringify({ region, snapshot: key, ready: pool.currentSize }));
+              }
+            }
+          }
+          // Publish the matching regional release together only after every preparation check passes.
+          execFileSync("railway", ["variable", "set", ...target, ...updates, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
+          writeFileSync(".daytona-obsolete-pools.json", JSON.stringify(obsoletePools));
           console.log(JSON.stringify({ snapshot: prepared.key, workerSha256: prepared.sha256, reused: prepared.reused }));
         '

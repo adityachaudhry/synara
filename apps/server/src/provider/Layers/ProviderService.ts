@@ -770,7 +770,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
       return Effect.gen(function* () {
         const adapter = yield* registry.getByProvider(binding.provider);
-        const sessions = yield* adapter.listSessions();
+        const sessions = yield* adapter.listSessions(event.threadId);
         const activeSession = sessions.find((session) => session.threadId === event.threadId);
         return activeSession?.resumeCursor ?? binding.resumeCursor;
       }).pipe(
@@ -1351,7 +1351,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               return;
             }
 
-            const activeSession = (yield* adapter.listSessions()).find(
+            const activeSession = (yield* adapter.listSessions(threadId)).find(
               (session) => session.threadId === threadId,
             );
             if (activeSession?.resumeCursor !== undefined) {
@@ -1382,7 +1382,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // A concurrent recovery may have won between the drain and restart
             // phases. Adopt its fresh runtime instead of replacing it again.
             if (hasActiveSession && !requiresCredentialRotation) {
-              const existing = (yield* adapter.listSessions()).find(
+              const existing = (yield* adapter.listSessions(threadId)).find(
                 (session) => session.threadId === threadId,
               );
               if (existing) {
@@ -1888,7 +1888,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return null;
         }
 
-        const forkedSession = (yield* adapter.listSessions()).find(
+        const forkedSession = (yield* adapter.listSessions(input.threadId)).find(
           (session) => session.threadId === input.threadId,
         );
         // Register the fork under a committed lifecycle generation. Writing the
@@ -2502,7 +2502,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               return;
             }
             if (hasActiveSession) {
-              const activeSessions = yield* adapter.listSessions();
+              const activeSessions = yield* adapter.listSessions(input.threadId);
               const activeSession = activeSessions.find(
                 (session) => session.threadId === input.threadId,
               );
@@ -2561,7 +2561,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
 
         const adapter = yield* registry.getByProvider(binding.provider);
-        const sessions = yield* adapter.listSessions();
+        const sessions = yield* adapter.listSessions(threadId);
         const session = sessions.find((entry) => entry.threadId === threadId);
         const bindingRuntimePayload = runtimePayloadRecord(binding.runtimePayload);
         if (
