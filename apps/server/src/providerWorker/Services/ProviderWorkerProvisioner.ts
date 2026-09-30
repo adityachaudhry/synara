@@ -12,6 +12,7 @@ import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 
 export interface ProviderWorkerProvisionInput {
+  readonly speculative?: boolean;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration: string;
   readonly cwd?: string;

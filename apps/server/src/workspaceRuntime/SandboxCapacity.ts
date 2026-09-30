@@ -3,6 +3,8 @@ export interface SandboxCapacityRequest {
   readonly threadId: string;
   readonly lifecycleGeneration: string;
   readonly signal?: AbortSignal;
+  /** Speculation never queues or consumes the last interactive progress slot. */
+  readonly speculative?: boolean;
 }
 
 export interface SandboxCapacityReservation {
@@ -62,6 +64,10 @@ export class SandboxCapacity {
     if (input.signal?.aborted) return Promise.reject(abortError());
     const active = this.#active.get(input.key);
     if (active) return Promise.resolve(active);
+    if (input.speculative && (!this.#reconciled || this.#queued.length > 0 ||
+        this.#active.size >= this.#maxActive - this.#maintenanceSlots - 1)) {
+      return Promise.reject(new Error("Speculative workspace capacity is unavailable."));
+    }
     const queued = this.#queuedByKey.get(input.key);
     if (queued) return this.#addCaller(queued, input.signal);
     if (this.#reconciled && this.#canAdmit(input.key) && !this.#queued.some((entry) => this.#canAdmit(entry.key))) {

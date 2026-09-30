@@ -381,7 +381,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
     const lifecycle = makeProviderLifecycleCoordinator();
-    for (const binding of yield* directory.listBindings()) {
+    const startupBindings = yield* directory.listBindings();
+    for (const binding of startupBindings) {
       if (binding.lifecycleGeneration !== undefined) {
         lifecycle.adoptCurrent(binding.threadId, binding.lifecycleGeneration);
       }
@@ -398,6 +399,103 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       runtimeEventBufferCapacity,
     );
     const runtimeEventProducerScope = yield* Scope.make("sequential");
+    const preparationScope = yield* Scope.make("sequential");
+    type Preparation = {
+      projectId: string; subject: string; repository: string; expiresAt: number;
+      generation?: string; ready: boolean; pending: boolean; preserveSession?: boolean; timer?: ReturnType<typeof setTimeout>;
+    };
+    const preparations = new Map<ThreadId, Preparation>();
+    let preparationsClosed = false;
+    const expirePreparation = (threadId: ThreadId, entry: Preparation) =>
+      lifecycle.runCurrent(threadId, () => Effect.gen(function* () {
+        if (preparations.get(threadId) !== entry) return;
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        if (binding && runtimePayloadRecord(binding.runtimePayload).workspacePreparation) {
+          const adapter = yield* registry.getByProvider(binding.provider);
+          if (entry.preserveSession) {
+            yield* (adapter.parkSession ?? adapter.stopSession)(threadId);
+            yield* directory.upsert({ threadId, provider: binding.provider, status: "stopped",
+              runtimePayload: { workspacePreparation: null } });
+          } else {
+            yield* adapter.stopSession(threadId);
+            yield* directory.remove(threadId);
+          }
+        }
+        preparations.delete(threadId);
+        yield* Effect.logInfo("unused workspace preparation retired", { threadId });
+      }));
+    const schedulePreparationExpiry = (threadId: ThreadId, entry: Preparation) => {
+      entry.timer = setTimeout(() => {
+        void Effect.runPromise(expirePreparation(threadId, entry).pipe(
+          Effect.catchCause(() => Effect.logWarning("workspace preparation cleanup deferred; recovery retained", { threadId }).pipe(
+            Effect.tap(() => Effect.sync(() => {
+              if (preparationsClosed || preparations.get(threadId) !== entry) return;
+              entry.expiresAt = Date.now() + 30_000;
+              schedulePreparationExpiry(threadId, entry);
+            })),
+          )),
+        ));
+      }, Math.max(1, entry.expiresAt - Date.now()));
+      entry.timer.unref?.();
+    };
+    for (const binding of startupBindings) {
+      const meta = runtimePayloadRecord(runtimePayloadRecord(binding.runtimePayload).workspacePreparation);
+      if (typeof meta.projectId !== "string" || typeof meta.subject !== "string" ||
+          typeof meta.repository !== "string" || typeof meta.expiresAt !== "number" || !Number.isFinite(meta.expiresAt)) continue;
+      // A controller restart must renew worker credentials/fences before claiming it.
+      const entry: Preparation = { projectId: meta.projectId, subject: meta.subject,
+        repository: meta.repository, expiresAt: meta.expiresAt, generation: binding.lifecycleGeneration,
+        preserveSession: meta.preserveSession === true, ready: false, pending: false };
+      preparations.set(binding.threadId, entry);
+      schedulePreparationExpiry(binding.threadId, entry);
+    }
+    const prepareWorkspace: NonNullable<ProviderServiceShape["prepareWorkspace"]> = (threadId, input, owner) =>
+      Effect.gen(function* () {
+        if (preparationsClosed || process.env.SYNARA_WORKSPACE_RUNTIME !== "daytona" || !input.repositoryBinding) return { started: false };
+        const repository = JSON.stringify(input.repositoryBinding);
+        const prior = preparations.get(threadId);
+        if (prior && (prior.projectId !== owner.projectId || prior.repository !== repository)) return { started: false };
+        if (prior?.pending || prior?.ready) return { started: true };
+        if (!prior && (preparations.size >= 8 || Array.from(preparations.values()).filter((entry) =>
+          entry.projectId === owner.projectId && entry.subject === owner.subject).length >= 2)) return { started: false };
+        const entry: Preparation = { ...owner, repository, preserveSession: prior?.preserveSession,
+          expiresAt: Date.now() + 5 * 60_000, ready: false, pending: true };
+        clearTimeout(prior?.timer);
+        preparations.set(threadId, entry);
+        schedulePreparationExpiry(threadId, entry);
+        yield* lifecycle.run(threadId, (lease) => Effect.gen(function* () {
+          if (preparations.get(threadId) !== entry) return;
+          const existing = Option.getOrUndefined(yield* directory.getBinding(threadId));
+          const adapter = yield* registry.getByProvider("pi");
+          if (!adapter.prepareWorkspace) { preparations.delete(threadId); clearTimeout(entry.timer); return; }
+          if (existing && !runtimePayloadRecord(existing.runtimePayload).workspacePreparation) {
+            if (existing.provider !== "pi" || !hasResumeCursor(existing.resumeCursor) ||
+                (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0 || (yield* adapter.hasSession(threadId))) {
+              preparations.delete(threadId); clearTimeout(entry.timer); return;
+            }
+            entry.preserveSession = true;
+          }
+          entry.generation = lease.generation;
+          yield* directory.upsert({ threadId, provider: "pi", status: "starting", lifecycleGeneration: lease.generation,
+            runtimePayload: { workspacePreparation: { ...owner, repository, expiresAt: entry.expiresAt,
+              preserveSession: entry.preserveSession === true } } });
+          lease.commit();
+          entry.ready = yield* adapter.prepareWorkspace({ ...input, lifecycleGeneration: lease.generation,
+            ...(existing?.resumeCursor ? { resumeCursor: existing.resumeCursor } : {}) });
+          if (!entry.ready) {
+            if (entry.preserveSession) yield* directory.upsert({ threadId, provider: "pi", status: "stopped",
+              runtimePayload: { workspacePreparation: null } });
+            else yield* directory.remove(threadId);
+            preparations.delete(threadId); clearTimeout(entry.timer); lease.retire();
+          }
+        })).pipe(
+          Effect.timeoutOption(Duration.seconds(120)),
+          Effect.catchCause(() => Effect.logWarning("workspace preparation deferred; first send retains normal recovery", { threadId })),
+          Effect.ensuring(Effect.sync(() => { entry.pending = false; })),
+          Effect.forkIn(preparationScope),
+        );
+        return { started: true };
+      });
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
     const liveRuntimeTaskIds = new Map<ThreadId, Set<string>>();
     const runtimeTaskSettlementWaiters = new Map<ThreadId, Set<() => void>>();
@@ -1414,10 +1512,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               binding.runtimeMode ?? "full-access",
             );
 
+            const prepared = preparations.get(threadId);
+            if (prepared) {
+              preparations.delete(threadId); clearTimeout(prepared.timer);
+              if (prepared.ready && prepared.generation) lease.adopt(prepared.generation);
+              yield* directory.upsert({ threadId, provider: binding.provider,
+                runtimePayload: { workspacePreparation: null } });
+            }
+            const startGeneration = prepared?.ready && prepared.generation ? prepared.generation : lease.generation;
+
             const resumed = yield* adapter.startSession({
               threadId,
               provider: binding.provider,
-              lifecycleGeneration: lease.generation,
+              lifecycleGeneration: startGeneration,
               ...(persistedCwd ? { cwd: persistedCwd } : {}),
               ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
               ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
@@ -1434,7 +1541,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             yield* withBindingWriteLock(
               threadId,
               upsertSessionBinding(resumed, threadId, {
-                lifecycleGeneration: lease.generation,
+                lifecycleGeneration: startGeneration,
               }).pipe(
                 Effect.andThen(
                   requiresCredentialRotation
@@ -1652,6 +1759,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ? readPersistedProviderOptions(persistedBinding.runtimePayload)
                 : undefined);
             const adapter = yield* registry.getByProvider(input.provider);
+            const prepared = preparations.get(threadId);
+            if (prepared) {
+              if (input.provider !== "pi" || JSON.stringify(input.repositoryBinding) !== prepared.repository)
+                return yield* toValidationError("ProviderService.startSession", "Prepared workspace belongs to different company coordinates.");
+              preparations.delete(threadId);
+              clearTimeout(prepared.timer);
+              if (prepared.ready && prepared.generation) lease.adopt(prepared.generation);
+              yield* directory.upsert({ threadId, provider: input.provider,
+                runtimePayload: { workspacePreparation: null } });
+            }
+            const startGeneration = prepared?.ready && prepared.generation ? prepared.generation : lease.generation;
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
               // Most providers use this outer deadline. Capacity-managed
@@ -1659,7 +1777,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // queue time does not consume their launch budget.
               const startInput = {
                 ...adapterStartInput,
-                lifecycleGeneration: lease.generation,
+                lifecycleGeneration: startGeneration,
                 ...(effectiveProviderOptions !== undefined
                   ? { providerOptions: effectiveProviderOptions }
                   : {}),
@@ -1711,7 +1829,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 upsertSessionBinding(session, threadId, {
                   modelSelection: input.modelSelection,
                   providerOptions: effectiveProviderOptions,
-                  lifecycleGeneration: lease.generation,
+                  lifecycleGeneration: startGeneration,
                 }).pipe(
                   Effect.andThen(
                     directory.upsert({
@@ -2836,6 +2954,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const closeRuntimeEvents = yield* Effect.cached(
       Effect.uninterruptible(
         Effect.sync(() => {
+          preparationsClosed = true;
+          for (const entry of preparations.values()) clearTimeout(entry.timer);
           for (const timer of runtimeIdleTimers.values()) {
             clearTimeout(timer);
           }
@@ -2850,6 +2970,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           runtimeIdleStopsInFlight.clear();
           stopIdleRuntimeSession = null;
         }).pipe(
+          Effect.andThen(Scope.close(preparationScope, Exit.void)),
           Effect.andThen(
             runStopAll().pipe(
               Effect.catchCause((cause) =>
@@ -2874,6 +2995,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     yield* Effect.addFinalizer(() => closeRuntimeEvents);
 
     return {
+      prepareWorkspace,
       startSession,
       forkThread,
       sendTurn,

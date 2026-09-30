@@ -2107,6 +2107,20 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.readPlugin(input), "Failed to read plugin"),
         [WS_METHODS.providerListModels]: (input) =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
+        [WS_METHODS.providerPrepareWorkspace]: (input) => rpcEffect(Effect.gen(function* () {
+          if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(input.threadId))
+            return { started: false };
+          const project = Option.getOrUndefined(yield* projectionReadModelQuery.getProjectShellById(input.projectId));
+          const thread = Option.getOrUndefined(yield* projectionReadModelQuery.getThreadShellById(input.threadId));
+          if (!project?.repositoryBinding || (thread && (thread.projectId !== input.projectId ||
+              thread.modelSelection.provider !== "pi" || thread.archivedAt)) || !providerService.prepareWorkspace ||
+              !(yield* serverSettings.getSettings).providers.pi.enabled) return { started: false };
+          const author = yield* CurrentWsMessageAuthor;
+          return yield* providerService.prepareWorkspace(input.threadId, {
+            threadId: input.threadId, provider: "pi", runtimeMode: "full-access",
+            repositoryBinding: project.repositoryBinding,
+          }, { projectId: input.projectId, subject: author?.subject ?? "local" });
+        }), "Workspace preparation deferred"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         [WS_METHODS.automationList]: (input) =>

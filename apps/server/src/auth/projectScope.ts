@@ -190,6 +190,15 @@ export function authorizeProjectScopedRpc(input: {
 }): Effect.Effect<boolean> {
   if (input.scope === undefined) return Effect.succeed(true);
   if (SCOPE_DENIED_METHODS.has(input.method)) return Effect.succeed(false);
+  if (input.method === "provider.prepareWorkspace") {
+    const projectId = stringField(input.payload, "projectId");
+    const threadId = stringField(input.payload, "threadId");
+    if (!projectId || !threadId || !input.scope.has(projectId as ProjectId)) return Effect.succeed(false);
+    return input.query.getThreadShellById(threadId as never).pipe(
+      Effect.map((thread) => Option.isNone(thread) || thread.value.projectId === projectId),
+      Effect.orElseSucceed(() => false),
+    );
+  }
   if (input.method === "provider.listModels") {
     if (!input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) {
       return Effect.succeed(false);

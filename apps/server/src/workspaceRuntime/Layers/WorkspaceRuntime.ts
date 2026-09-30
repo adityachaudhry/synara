@@ -346,6 +346,7 @@ export function makeWorkspaceRuntimeLive(
                     threadId: input.threadId ?? input.lifecycleGeneration,
                     lifecycleGeneration: input.lifecycleGeneration,
                     signal,
+                    speculative: input.speculative,
                   }),
                 catch: (cause) =>
                   new WorkspaceRuntimeError({
@@ -538,6 +539,7 @@ export function makeWorkspaceRuntimeLive(
             try: (signal) => options.capacity!.acquire({
               key: capacityKey, threadId: input.threadId ?? input.lifecycleGeneration,
               lifecycleGeneration: input.lifecycleGeneration, signal,
+              ...(input.speculative ? { speculative: true } : {}),
             }),
             catch: toRuntimeError("capacity.acquire", binding.runtimeId),
           })));

@@ -381,17 +381,20 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       const previous = activeRemote ?? persistedRemote;
       const migratingToDaytona = process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
         previous?.workspace.runtimeKind === "railway-sandbox";
-      const agentGatewayConnection = agentGatewayCredentials?.repositoryConnectionForThread(
-        input.threadId,
-        "pi",
-      );
+      const prepared = previous && previous.fence.lifecycleGeneration === lifecycleGeneration;
+      const preparedToken = prepared ? remoteGatewayTokenByThread.get(input.threadId) : undefined;
+      const agentGatewayConnection = preparedToken && agentGatewayCredentials
+        ? { url: agentGatewayCredentials.mcpEndpointUrl, bearerToken: preparedToken }
+        : agentGatewayCredentials?.repositoryConnectionForThread(input.threadId, "pi");
       const previousGatewayToken = remoteGatewayTokenByThread.get(input.threadId);
       const launch = () =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const provisionExit = yield* Effect.exit(
               restore(
-                previous && !migratingToDaytona
+                prepared
+                  ? Effect.succeed(previous)
+                  : previous && !migratingToDaytona
                   ? provisioner.restart(previous, {
                       threadId: input.threadId,
                       lifecycleGeneration,
@@ -496,6 +499,35 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
             ),
       ),
     ));
+
+  const prepareWorkspace: NonNullable<PiAdapterShape["prepareWorkspace"]> = (input) =>
+    withCheckpointBarrier(input.threadId, Effect.gen(function* () {
+      if (process.env.SYNARA_WORKSPACE_RUNTIME !== "daytona" || !input.repositoryBinding ||
+          !input.lifecycleGeneration || capacity?.snapshot().queued.length) return false;
+      const gateway = agentGatewayCredentials?.repositoryConnectionForThread(input.threadId, "pi");
+      const previous = remoteByThread.get(input.threadId) ?? (yield* loadPersistedRemote(input.threadId));
+      const legacyPiResumeSessionFile = extractLegacyPiResumeSessionFile(input.resumeCursor);
+      const provisionInput = {
+        threadId: input.threadId, lifecycleGeneration: input.lifecycleGeneration,
+        repositoryBinding: input.repositoryBinding, speculative: true,
+        ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
+        ...(gateway ? { agentGatewayConnection: gateway } : {}),
+      };
+      const binding = yield* (previous?.workspace.runtimeKind === "daytona-sandbox"
+        ? provisioner.restart(previous, provisionInput) : provisioner.start(provisionInput)).pipe(Effect.tapError(() => Effect.sync(() => {
+        if (gateway && agentGatewayCredentials) agentGatewayCredentials.revokeSessionToken(gateway.bearerToken);
+      })));
+      // Publish ownership before adoption. Recovery never depends on the browser staying open.
+      yield* persistRemoteBinding({ threadId: input.threadId, lifecycleGeneration: input.lifecycleGeneration, binding });
+      yield* provisioner.adopt(binding);
+      remoteByThread.set(input.threadId, binding);
+      if (gateway) remoteGatewayTokenByThread.set(input.threadId, gateway.bearerToken);
+      return true;
+    })).pipe(
+      observeProviderOperation("workspace.prepare", { threadId: input.threadId }),
+      Effect.mapError((cause) => cause instanceof ProviderAdapterRequestError ? cause :
+        adapterError("workspace.prepare", "Could not prepare the exclusive company workspace.", cause)),
+    );
 
   const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
     route(
@@ -933,6 +965,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     managesStartSessionTimeout: (input) =>
       capacity !== undefined && input.repositoryBinding !== undefined,
     startSession,
+    prepareWorkspace,
     sendTurn,
     reconcileRepository,
     listPersistenceCandidates,

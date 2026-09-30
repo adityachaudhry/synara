@@ -755,6 +755,7 @@ export function createWsNativeApi(): NativeApi {
       listPlugins: (input) => transport.request(WS_METHODS.providerListPlugins, input),
       readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
+      prepareWorkspace: (input) => transport.request(WS_METHODS.providerPrepareWorkspace, input),
       listAgents: (input) => transport.request(WS_METHODS.providerListAgents, input),
     },
     orchestration: {

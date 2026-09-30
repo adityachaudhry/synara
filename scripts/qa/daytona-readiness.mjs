@@ -13,6 +13,10 @@ const { default: WebSocket } = await import(require.resolve('ws'));
 assert(process.argv.includes('--run-dev'), 'Pass --run-dev for real, disposable dev trials');
 const model = process.argv.find(x => x.startsWith('--model='))?.slice(8) ?? 'anthropic/claude-opus-5';
 assert(/^[a-z0-9-]+\/[a-zA-Z0-9._:/-]+$/u.test(model), 'Use a provider-qualified Pi model slug');
+const models = process.argv.find(x => x.startsWith('--models='))?.slice(9).split(',') ?? [model];
+assert(models.length > 0 && models.every(x => /^[a-z0-9-]+\/[a-zA-Z0-9._:/-]+$/u.test(x)), 'Use provider-qualified Pi model slugs');
+const prepareMs = Number(process.argv.find(x => x.startsWith('--prepare-ms='))?.slice(13) ?? 0);
+assert(Number.isInteger(prepareMs) && prepareMs >= 0 && prepareMs <= 90000);
 const count = Number(process.argv.find(x => x.startsWith('--count='))?.split('=')[1] ?? 4);
 assert(Number.isInteger(count) && count > 0 && count <= 98);
 const coldBurst = Number(process.argv.find(x => x.startsWith('--cold-burst='))?.split('=')[1] ?? count);
@@ -31,7 +35,7 @@ const runId = randomUUID();
 const cleanupPath = process.argv.find(x => x.startsWith('--cleanup-from='))?.slice(15);
 const cleanupSource = cleanupPath ? JSON.parse(readFileSync(cleanupPath, 'utf8')) : undefined;
 assert(!cleanupSource || cleanupSource.projects.every(p => /^external-[a-f0-9-]+$/.test(p.id)) && cleanupSource.runId, 'Cleanup requires saved QA ownership evidence');
-const evidence = { checkedAt: new Date().toISOString(), runId, count, coldBurstSize: coldBurst, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES, model }, trials: [], cleanup: [] };
+const evidence = { checkedAt: new Date().toISOString(), runId, count, coldBurstSize: coldBurst, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES, model, models, prepareMs }, trials: [], cleanup: [] };
 const save = () => writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 });
 const http = async (route, token, body, method = 'POST') => {
   const r = await fetch(origin + route, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
@@ -135,11 +139,31 @@ try {
   const rpc = (tag, payload) => clientFor(payload).rpc(tag, payload);
   command = data => clientFor(data).rpc('orchestration.dispatchCommand', { commandId: randomUUID(), createdAt: new Date().toISOString(), ...data });
   if (!cleanupSource) {
+  const catalog = await clients.values().next().value.rpc('provider.listModels', { provider: 'pi' });
+  assert(models.every(model => catalog.models.some(entry => entry.slug === model)), 'Every selected model must be in actual Pi discovery');
+  evidence.selectedModels = catalog.models.filter(entry => models.includes(entry.slug)); save();
   for (let i = 0; i < count; i++) {
     const project = projects[count >= 25 && i < 10 ? 0 : i % projects.length];
-    const f = { threadId: randomUUID(), projectId: project.id, company: project.company, marker: randomUUID(), note: 'analysis/daytona-qa-' + runId + '-' + i + '.txt' };
+    const f = { threadId: randomUUID(), projectId: project.id, company: project.company, model: models[i % models.length], marker: randomUUID(), note: 'analysis/daytona-qa-' + runId + '-' + i + '.txt' };
     fixtures.push(f); evidence.fixtures = fixtures; save();
-    await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId, title: 'QA Daytona ' + i, modelSelection: { provider: 'pi', model, options: { thinkingLevel: 'minimal' } }, runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
+  }
+  if (prepareMs > 0) {
+    const started = Date.now();
+    evidence.preparations = await Promise.all(fixtures.map(async f => ({ threadId: f.threadId,
+      ...await rpc('provider.prepareWorkspace', { projectId: f.projectId, threadId: f.threadId }) })));
+    save(); console.log(JSON.stringify({ phase: 'preparation-requested', accepted: evidence.preparations.filter(x => x.started).length, total: count }));
+    assert(evidence.preparations.every(x => x.started), 'Expected preparations were not admitted');
+    const shell = await clients.values().next().value.rpc('orchestration.getShellSnapshot', {});
+    assert(!shell.threads.some(t => fixtures.some(f => f.threadId === t.id)), 'Preparing a draft must not publish empty chats');
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, prepareMs - (Date.now() - started))));
+    collectOwnedWorkers(); evidence.preparationWindowMs = Date.now() - started;
+    evidence.preparedWorkerIds = Object.fromEntries([...ownedByThread].map(([thread, ids]) => [thread, [...ids]])); save();
+    assert(fixtures.every(f => evidence.preparedWorkerIds[f.threadId]?.length === 1), 'Every admitted preparation must own one worker before the message');
+  }
+  for (const [i, f] of fixtures.entries()) {
+    await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId, title: 'QA Daytona ' + i,
+      modelSelection: { provider: 'pi', model: f.model, options: { thinkingLevel: 'low' } },
+      runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
   }
   const turn = async (f, kind, text) => {
     const messageId = randomUUID(); const start = Date.now();
@@ -158,9 +182,9 @@ try {
     }
     const t = snapshot?.thread?.latestTurn;
     const answer = snapshot?.thread?.messages?.filter(m => m.role === 'assistant').at(-1)?.text ?? '';
-    const trial = { kind, threadId: f.threadId, company: f.company, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, firstTextObservedMs, firstTextPollIntervalMs: 600, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind), runtimeErrors: snapshot?.thread?.activities?.filter(a => a.kind === 'runtime.error').map(a => ({ class: a.payload?.class, message: a.payload?.message })) };
+    const trial = { kind, threadId: f.threadId, company: f.company, model: f.model, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, firstTextObservedMs, firstTextPollIntervalMs: 600, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind), runtimeErrors: snapshot?.thread?.activities?.filter(a => a.kind === 'runtime.error').map(a => ({ class: a.payload?.class, message: a.payload?.message })) };
     trial.startFailures = snapshot?.thread?.activities?.filter(a => a.kind === 'provider.turn.start.failed' && Date.parse(a.createdAt) >= start - 2000).map(a => ({ detail: a.payload?.detail }));
-    evidence.trials.push(trial); save(); console.log(JSON.stringify({ phase: 'turn', kind, threadId: f.threadId, company: f.company, state: trial.state, readinessMs: trial.readinessMs, totalMs: trial.totalMs }));
+    evidence.trials.push(trial); save(); console.log(JSON.stringify({ phase: 'turn', kind, threadId: f.threadId, company: f.company, model: f.model, state: trial.state, readinessMs: trial.readinessMs, totalMs: trial.totalMs }));
     if (kind === 'profile-mcp') {
       trial.crunchbaseSearchCompleted = snapshot?.thread?.activities?.some(a => a.kind === 'tool.completed' && a.payload?.title === 'crunchbase_search' && Date.parse(a.createdAt) >= start - 2000);
       save();
@@ -180,10 +204,12 @@ try {
   evidence.coldFailures = cold.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []); save();
   assert.equal(evidence.coldFailures.length, 0, JSON.stringify(evidence.coldFailures));
   collectOwnedWorkers();
-  if (process.argv.includes('--profile-check')) await turn(fixtures[0], 'profile-mcp', `Use crunchbase_search once to check the company identity for ${fixtures[0].company}, with limit 1 if supported. Say whether the result contains a matching company; do not invent a match. Then read your private file ${fixtures[0].note} and include its exact token ${fixtures[0].marker}. Keep the answer brief; do not publish or edit any file.`);
+  if (process.argv.includes('--profile-check') || process.argv.includes('--profile-check-all')) for (const f of process.argv.includes('--profile-check-all') ? fixtures : [fixtures[0]])
+    await turn(f, 'profile-mcp', `Use crunchbase_search once to check the company identity for ${f.company}, with limit 1 if supported. Say whether the result contains a matching company; do not invent a match. Then read your private file ${f.note} and include its exact token ${f.marker}. Keep the answer brief; do not publish or edit any file.`);
   for (const f of fixtures) {
     const ids = [...(ownedByThread.get(f.threadId) ?? [])];
     assert.equal(ids.length, 1, 'A cold QA thread must have one directly mapped native worker');
+    if (prepareMs > 0) assert.equal(ids[0], evidence.preparedWorkerIds[f.threadId][0], 'The first send must use its prepared worker');
     const sandbox = await d.get(ids[0]);
     const other = companies.find(company => company !== f.company);
     const check = `const fs=require('node:fs');process.setgroups([]);process.setgid(10001);process.setuid(10001);const denied=p=>{try{fs.accessSync(p,fs.constants.R_OK);return false}catch{return true}};const checks={uid:process.getuid()===10001,rootDenied:denied('/root'),sudoDenied:require('node:child_process').spawnSync('sudo',['-n','true'],{stdio:'ignore'}).status!==0,controllerCredentialDenied:denied('/opt/synara/provider-worker.json'),repositoryCredentialDenied:denied('/root/.synara-repository-credential.gitconfig'),storageCredentialDenied:denied('/root/.synara-s3-lfs.passwd'),otherCompanyAbsent:!fs.existsSync(${JSON.stringify('/workspace/repository/companies/' + other)}),privateMarker:fs.readFileSync(${JSON.stringify('/workspace/repository/companies/' + f.company + '/' + f.note)},'utf8').trim()===${JSON.stringify(f.marker)}};console.log(JSON.stringify(checks));if(Object.values(checks).some(x=>!x))process.exit(1)`;

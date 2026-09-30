@@ -56,6 +56,11 @@ export interface ProviderRuntimeEventPumpHealth {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly prepareWorkspace?: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+    owner: { readonly projectId: string; readonly subject: string },
+  ) => Effect.Effect<{ readonly started: boolean }, ProviderServiceError>;
   /**
    * Start a provider session.
    */

@@ -4,7 +4,7 @@
 // Exports: provider discovery schemas and inferred types used by the WS/native API.
 
 import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas";
+import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderOptionDescriptor } from "./model";
 
 const ProviderDiscoveryKind = Schema.Literals([
@@ -249,6 +249,10 @@ export const ProviderListModelsInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
+
+export const ProviderPrepareWorkspaceInput = Schema.Struct({ projectId: ProjectId, threadId: ThreadId });
+export type ProviderPrepareWorkspaceInput = typeof ProviderPrepareWorkspaceInput.Type;
+export interface ProviderPrepareWorkspaceResult { readonly started: boolean }
 
 export const ProviderReasoningEffortDescriptor = Schema.Struct({
   value: TrimmedNonEmptyString,

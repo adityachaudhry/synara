@@ -933,6 +933,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             })
           : undefined;
         const workspace = yield* workspaceRuntime.create({
+          ...(input.speculative ? { speculative: true } : {}),
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
           ...(checkpointName ? { checkpointName } : {}),
@@ -1109,6 +1110,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           if (!missing) {
             yield* retireWorkspace(binding, "worker generation replaced", "reuse");
             const resumed = yield* Effect.exit(workspaceRuntime.resume(binding.workspace, {
+              ...(input.speculative ? { speculative: true } : {}),
               threadId: input.threadId,
               lifecycleGeneration: input.lifecycleGeneration,
               ...(options.environment ? { environment: options.environment } : {}),

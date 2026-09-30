@@ -20,6 +20,7 @@ export interface WorkspaceRuntimeInventoryRecord {
 }
 
 export interface WorkspaceRuntimeCreateInput {
+  readonly speculative?: boolean;
   /** Internal readers/archivers share the total limit but have reserved progress slots. */
   readonly maintenance?: boolean;
   readonly threadId?: string;
@@ -90,7 +91,7 @@ export interface WorkspaceRuntimeShape {
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
   readonly resume?: (
     binding: WorkspaceRuntimeBinding,
-    input: Pick<WorkspaceRuntimeCreateInput, "threadId" | "lifecycleGeneration" | "onCapacityAdmitted" | "maintenance"> & Partial<Pick<WorkspaceRuntimeCreateInput, "environment">>,
+    input: Pick<WorkspaceRuntimeCreateInput, "threadId" | "lifecycleGeneration" | "onCapacityAdmitted" | "maintenance" | "speculative"> & Partial<Pick<WorkspaceRuntimeCreateInput, "environment">>,
   ) => Effect.Effect<WorkspaceRuntimeBinding, WorkspaceRuntimeError>;
   readonly adopt: (binding: WorkspaceRuntimeBinding) => Effect.Effect<void, WorkspaceRuntimeError>;
   readonly exec: (
