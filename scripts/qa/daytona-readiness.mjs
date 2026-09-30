@@ -13,6 +13,8 @@ const { default: WebSocket } = await import(require.resolve('ws'));
 assert(process.argv.includes('--run-dev'), 'Pass --run-dev for real, disposable dev trials');
 const count = Number(process.argv.find(x => x.startsWith('--count='))?.split('=')[1] ?? 4);
 assert(Number.isInteger(count) && count > 0 && count <= 98);
+const coldBurst = Number(process.argv.find(x => x.startsWith('--cold-burst='))?.split('=')[1] ?? count);
+assert(Number.isInteger(coldBurst) && coldBurst > 0 && coldBurst <= count);
 const root = path.resolve(process.argv.find(x => x.startsWith('--output='))?.slice(9) ?? 'output/daytona-readiness');
 mkdirSync(root, { recursive: true });
 const vars = JSON.parse(execFileSync('railway', ['variable', 'list', '--json', '-p', '2fb578c6-304e-4a97-abd4-38b3897d9030', '-e', 'dev', '-s', 'synara-gitea-dev'], { encoding: 'utf8' }));
@@ -27,7 +29,7 @@ const runId = randomUUID();
 const cleanupPath = process.argv.find(x => x.startsWith('--cleanup-from='))?.slice(15);
 const cleanupSource = cleanupPath ? JSON.parse(readFileSync(cleanupPath, 'utf8')) : undefined;
 assert(!cleanupSource || cleanupSource.projects.every(p => /^external-[a-f0-9-]+$/.test(p.id)) && cleanupSource.runId, 'Cleanup requires saved QA ownership evidence');
-const evidence = { checkedAt: new Date().toISOString(), runId, count, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES }, trials: [], cleanup: [] };
+const evidence = { checkedAt: new Date().toISOString(), runId, count, coldBurstSize: coldBurst, config: { preferredTarget: vars.SYNARA_DAYTONA_TARGET, target, snapshot, maxActive: vars.SYNARA_DAYTONA_MAX_ACTIVE_SANDBOXES }, trials: [], cleanup: [] };
 const save = () => writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 });
 const http = async (route, token, body, method = 'POST') => {
   const r = await fetch(origin + route, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
@@ -57,7 +59,7 @@ const collectOwnedWorkers = () => {
 };
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 let command;
-let ws;
+const clients = new Map();
 let pool;
 let ownedPool = false;
 try {
@@ -86,30 +88,50 @@ try {
   }
   evidence.projects = projects; save();
   const session = await http('/api/auth/external/session', vars.SYNARA_EXTERNAL_AUTH_SECRET, { subject: 'daytona-readiness-' + runId, email: 'daytona-readiness@glasswing.invalid', allowedProjectIds: projects.map(p => p.id), expiresAt: new Date(Date.now() + 840000).toISOString(), nonce: randomUUID() });
-  const ticket = await http('/api/auth/ws-token', session.sessionToken);
   const negotiated = await fetch(origin + '/ws/negotiate?x-synara-client-build=0.7.3&x-synara-protocol-epoch=1&x-synara-protocol-min-revision=1&x-synara-protocol-max-revision=1').then(r => r.json());
-  ws = new WebSocket(origin.replace('https:', 'wss:') + '/ws?' + new URLSearchParams({ wsToken: ticket.token, 'x-synara-client-build': '0.7.3', 'x-synara-protocol-epoch': '1', 'x-synara-protocol-revision': '1', 'x-synara-server-instance': negotiated.serverInstanceId }), { headers: { Origin: 'https://glasswing-web-dev-0e4d.up.railway.app' } });
-  let sequence = 0;
-  const pending = new Map();
-  ws.on('message', raw => { for (const x of [JSON.parse(String(raw))].flat()) {
-    if (x._tag === 'Ping') ws.send(JSON.stringify({ _tag: 'Pong' }));
-    if (x._tag === 'Chunk') ws.send(JSON.stringify({ _tag: 'Ack', requestId: x.requestId }));
-    if (x._tag === 'Exit') { const p = pending.get(String(x.requestId)); if (p) { pending.delete(String(x.requestId)); clearTimeout(p.timer); const failure = x.exit.cause?.find(c => c._tag === 'Fail')?.error; x.exit._tag === 'Success' ? p.resolve(x.exit.value) : p.reject(Object.assign(Error(JSON.stringify(x.exit).slice(0, 1500)), { code: failure?.code, retryable: failure?.retryable, retryAfterMs: failure?.retryAfterMs })); } }
-  } });
-  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  const rpcOnce = (tag, payload) => new Promise((resolve, reject) => { const id = String(++sequence); const timer = setTimeout(() => { pending.delete(id); reject(Error('RPC deadline: ' + tag)); }, 30000); pending.set(id, { resolve, reject, timer }); ws.send(JSON.stringify({ _tag: 'Request', id, tag, payload, headers: [] })); });
-  const rpc = async (tag, payload) => {
-    for (let attempt = 0; ; attempt++) {
-      try { return await rpcOnce(tag, payload); }
-      catch (error) {
-        const delay = tag === 'orchestration.getThreadDetailSnapshot' ? getUnaryRpcCapacityRetryDelayMs(error, attempt) : null;
-        if (delay === null) throw error;
-        evidence.snapshotReadRetries = (evidence.snapshotReadRetries ?? 0) + 1; save();
-        await new Promise(r => setTimeout(r, delay));
+  // One independent browser connection per company, sharing no request ledger.
+  for (const project of projects) {
+    const ticket = await http('/api/auth/ws-token', session.sessionToken);
+    const ws = new WebSocket(origin.replace('https:', 'wss:') + '/ws?' + new URLSearchParams({ wsToken: ticket.token, 'x-synara-client-build': '0.7.3', 'x-synara-protocol-epoch': '1', 'x-synara-protocol-revision': '1', 'x-synara-server-instance': negotiated.serverInstanceId }), { headers: { Origin: 'https://glasswing-web-dev-0e4d.up.railway.app' } });
+    let sequence = 0;
+    const pending = new Map();
+    ws.on('message', raw => { for (const x of [JSON.parse(String(raw))].flat()) {
+      if (x._tag === 'Ping') ws.send(JSON.stringify({ _tag: 'Pong' }));
+      if (x._tag === 'Chunk') ws.send(JSON.stringify({ _tag: 'Ack', requestId: x.requestId }));
+      if (x._tag === 'Exit') { const p = pending.get(String(x.requestId)); if (p) { pending.delete(String(x.requestId)); clearTimeout(p.timer); const failure = x.exit.cause?.find(c => c._tag === 'Fail')?.error; x.exit._tag === 'Success' ? p.resolve(x.exit.value) : p.reject(Object.assign(Error(JSON.stringify(x.exit).slice(0, 1500)), { code: failure?.code, retryable: failure?.retryable, retryAfterMs: failure?.retryAfterMs })); } }
+    } });
+    const rpcOnce = (tag, payload) => new Promise((resolve, reject) => {
+      if (ws.readyState !== WebSocket.OPEN) { reject(Error('QA client disconnected')); return; }
+      const id = String(++sequence); const timer = setTimeout(() => { pending.delete(id); reject(Error('RPC deadline: ' + tag)); }, 30000);
+      pending.set(id, { resolve, reject, timer }); ws.send(JSON.stringify({ _tag: 'Request', id, tag, payload, headers: [] }));
+    });
+    const rpc = async (tag, payload) => {
+      for (let attempt = 0; ; attempt++) {
+        try { return await rpcOnce(tag, payload); }
+        catch (error) {
+          // Match wsTransport: only explicit pre-handler capacity rejection is safe
+          // to retry. The same commandId/payload is retained; no timeout/model retry.
+          const delay = getUnaryRpcCapacityRetryDelayMs(error, attempt);
+          if (delay === null) throw error;
+          const counts = evidence.capacityRetriesByMethod ??= {};
+          counts[tag] = (counts[tag] ?? 0) + 1;
+          if (tag === 'orchestration.getThreadDetailSnapshot') evidence.snapshotReadRetries = (evidence.snapshotReadRetries ?? 0) + 1;
+          save(); await new Promise(r => setTimeout(r, delay));
+        }
       }
-    }
+    };
+    clients.set(project.id, { ws, rpc });
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  }
+  evidence.websocketClientCount = clients.size; save();
+  const clientFor = data => {
+    const projectId = data.projectId ?? fixtures.find(f => f.threadId === data.threadId)?.projectId;
+    const client = clients.get(projectId);
+    assert(client, 'QA request has no owned company client');
+    return client;
   };
-  command = data => rpc('orchestration.dispatchCommand', { commandId: randomUUID(), createdAt: new Date().toISOString(), ...data });
+  const rpc = (tag, payload) => clientFor(payload).rpc(tag, payload);
+  command = data => clientFor(data).rpc('orchestration.dispatchCommand', { commandId: randomUUID(), createdAt: new Date().toISOString(), ...data });
   if (!cleanupSource) {
   for (let i = 0; i < count; i++) {
     const project = projects[count >= 25 && i < 10 ? 0 : i % projects.length];
@@ -128,23 +150,31 @@ try {
       const userIndex = messages.findIndex(m => m.id === messageId);
       if (firstTextObservedMs === null && userIndex >= 0 && messages.slice(userIndex + 1).some(m => m.role === 'assistant' && m.text)) firstTextObservedMs = Date.now() - start;
       const t = snapshot?.thread?.latestTurn;
+      if (userIndex >= 0 && snapshot?.thread?.activities?.some(a => a.kind === 'provider.turn.start.failed' && Date.parse(a.createdAt) >= start - 2000)) break;
       if (snapshot?.thread?.messages?.some(m => m.id === messageId) && t?.completedAt && Date.parse(t.requestedAt) >= start - 2000) break;
       await new Promise(r => setTimeout(r, 600));
     }
     const t = snapshot?.thread?.latestTurn;
     const answer = snapshot?.thread?.messages?.filter(m => m.role === 'assistant').at(-1)?.text ?? '';
     const trial = { kind, threadId: f.threadId, company: f.company, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, firstTextObservedMs, firstTextPollIntervalMs: 600, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind), runtimeErrors: snapshot?.thread?.activities?.filter(a => a.kind === 'runtime.error').map(a => ({ class: a.payload?.class, message: a.payload?.message })) };
+    trial.startFailures = snapshot?.thread?.activities?.filter(a => a.kind === 'provider.turn.start.failed' && Date.parse(a.createdAt) >= start - 2000).map(a => ({ detail: a.payload?.detail }));
     evidence.trials.push(trial); save(); console.log(JSON.stringify({ phase: 'turn', kind, threadId: f.threadId, company: f.company, state: trial.state, readinessMs: trial.readinessMs, totalMs: trial.totalMs }));
     if (kind === 'profile-mcp') {
       trial.crunchbaseSearchCompleted = snapshot?.thread?.activities?.some(a => a.kind === 'tool.completed' && a.payload?.title === 'crunchbase_search' && Date.parse(a.createdAt) >= start - 2000);
       save();
       assert(trial.crunchbaseSearchCompleted, 'Configured profile must execute the real Crunchbase search tool');
     }
-    assert(t?.completedAt && t.state === 'completed', 'Turn failed: ' + trial.state + ' ' + JSON.stringify(trial.runtimeErrors));
+    assert(t?.completedAt && t.state === 'completed', 'Turn failed: ' + trial.state + ' ' + JSON.stringify({ runtimeErrors: trial.runtimeErrors, startFailures: trial.startFailures }));
     assert(answer.includes(f.marker), 'Private thread marker missing from response');
     return trial;
   };
-  const cold = await Promise.allSettled(fixtures.map(f => turn(f, 'new', `Dev file readiness check for ${f.company}. In ONE execution tool call, find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and file check results, briefly.`)));
+  const cold = [];
+  for (let start = 0; start < fixtures.length; start += coldBurst) {
+    const batch = await Promise.allSettled(fixtures.slice(start, start + coldBurst).map(f => turn(f, 'new', `Dev file readiness check for ${f.company}. In ONE execution tool call, find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and file check results, briefly.`)));
+    cold.push(...batch);
+    if (batch.some(r => r.status === 'rejected')) break;
+  }
+  evidence.coldSkippedCount = fixtures.length - cold.length;
   evidence.coldFailures = cold.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []); save();
   assert.equal(evidence.coldFailures.length, 0, JSON.stringify(evidence.coldFailures));
   collectOwnedWorkers();
@@ -218,14 +248,14 @@ finally {
     for (const item of items) {
       const id = type === 'project.delete' ? item.id : item.threadId;
       try {
-        assert(command && ws?.readyState === WebSocket.OPEN, 'Reconnect with the scoped QA session to finish cleanup');
+        assert(command, 'Reconnect with the scoped QA session to finish cleanup');
         await command({ type, [key]: id });
         evidence.cleanup.push({ [key]: id, deletionRequested: true });
       } catch (error) { evidence.cleanup.push({ [key]: id, deletionRequested: false, error: error.message }); }
       save();
     }
   }
-  ws?.close();
+  for (const client of clients.values()) client.ws.close();
   for (const id of new Set([...ownedByThread.values()].flatMap(ids => [...ids]))) {
     let state = 'unknown';
     const deadline = Date.now() + 90000;
