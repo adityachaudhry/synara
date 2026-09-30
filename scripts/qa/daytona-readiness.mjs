@@ -47,19 +47,27 @@ const before = new Set();
 for await (const s of d.list({ labels: { 'synara-managed': 'true' } })) before.add(s.id);
 const fixtures = [];
 const projects = [];
+const createdThreads = new Set();
 const ownedByThread = new Map();
 const collectOwnedWorkers = () => {
   const logs = execFileSync('railway', ['logs', '-p', '2fb578c6-304e-4a97-abd4-38b3897d9030', '-e', 'dev', '-s', 'synara-gitea-dev', '--since', evidence.checkedAt, '--lines', '5000', '--filter', 'provider.operation', '--json'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  const rows = [];
+  const threadByGeneration = new Map();
   for (const line of logs.split('\n')) {
     try {
       const message = JSON.parse(line).message;
       const row = JSON.parse(message.slice(message.indexOf('{')));
+      rows.push(row);
       const thread = row.threadId ?? row.workerThreadId;
+      if (row.lifecycleGeneration && fixtures.some(f => f.threadId === thread)) threadByGeneration.set(row.lifecycleGeneration, thread);
+    } catch {} // Structured QA ownership only; other log lines do not establish it.
+  }
+  for (const row of rows) {
+      const thread = row.threadId ?? row.workerThreadId ?? threadByGeneration.get(row.lifecycleGeneration);
       if (row.sandboxId && fixtures.some(f => f.threadId === thread)) {
         if (!ownedByThread.has(thread)) ownedByThread.set(thread, new Set());
         ownedByThread.get(thread).add(row.sandboxId);
       }
-    } catch {} // Structured QA ownership only; other log lines do not establish it.
   }
   evidence.ownedByThread = Object.fromEntries([...ownedByThread].map(([thread, ids]) => [thread, [...ids]])); save();
 };
@@ -164,6 +172,7 @@ try {
     await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId, title: 'QA Daytona ' + i,
       modelSelection: { provider: 'pi', model: f.model, options: { thinkingLevel: 'low' } },
       runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
+    createdThreads.add(f.threadId);
   }
   const turn = async (f, kind, text) => {
     const messageId = randomUUID(); const start = Date.now();
@@ -182,6 +191,7 @@ try {
     }
     const t = snapshot?.thread?.latestTurn;
     const answer = snapshot?.thread?.messages?.filter(m => m.role === 'assistant').at(-1)?.text ?? '';
+    writeFileSync(path.join(root, f.threadId + '-' + kind + '.snapshot.json'), JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 });
     const trial = { kind, threadId: f.threadId, company: f.company, model: f.model, state: t?.state, requestedAt: t?.requestedAt, startedAt: t?.startedAt, completedAt: t?.completedAt, readinessMs: t?.startedAt ? Date.parse(t.startedAt) - Date.parse(t.requestedAt) : null, firstTextObservedMs, firstTextPollIntervalMs: 600, totalMs: Date.now() - start, markerMatched: answer.includes(f.marker), activityKinds: snapshot?.thread?.activities?.slice(-12).map(a => a.kind), runtimeErrors: snapshot?.thread?.activities?.filter(a => a.kind === 'runtime.error').map(a => ({ class: a.payload?.class, message: a.payload?.message })) };
     trial.startFailures = snapshot?.thread?.activities?.filter(a => a.kind === 'provider.turn.start.failed' && Date.parse(a.createdAt) >= start - 2000).map(a => ({ detail: a.payload?.detail }));
     evidence.trials.push(trial); save(); console.log(JSON.stringify({ phase: 'turn', kind, threadId: f.threadId, company: f.company, model: f.model, state: trial.state, readinessMs: trial.readinessMs, totalMs: trial.totalMs }));
@@ -196,7 +206,7 @@ try {
   };
   const cold = [];
   for (let start = 0; start < fixtures.length; start += coldBurst) {
-    const batch = await Promise.allSettled(fixtures.slice(start, start + coldBurst).map(f => turn(f, 'new', `Dev file readiness check for ${f.company}. In ONE execution tool call, find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and file check results, briefly.`)));
+    const batch = await Promise.allSettled(fixtures.slice(start, start + coldBurst).map(f => turn(f, 'new', `Dev file readiness check for ${f.company}. Find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Python3 and Node are available; correct any tool error before finishing. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and file check results, briefly.`)));
     cold.push(...batch);
     if (batch.some(r => r.status === 'rejected')) break;
   }
@@ -214,6 +224,7 @@ try {
     const other = companies.find(company => company !== f.company);
     const check = `const fs=require('node:fs');process.setgroups([]);process.setgid(10001);process.setuid(10001);const denied=p=>{try{fs.accessSync(p,fs.constants.R_OK);return false}catch{return true}};const checks={uid:process.getuid()===10001,rootDenied:denied('/root'),sudoDenied:require('node:child_process').spawnSync('sudo',['-n','true'],{stdio:'ignore'}).status!==0,controllerCredentialDenied:denied('/opt/synara/provider-worker.json'),repositoryCredentialDenied:denied('/root/.synara-repository-credential.gitconfig'),storageCredentialDenied:denied('/root/.synara-s3-lfs.passwd'),otherCompanyAbsent:!fs.existsSync(${JSON.stringify('/workspace/repository/companies/' + other)}),privateMarker:fs.readFileSync(${JSON.stringify('/workspace/repository/companies/' + f.company + '/' + f.note)},'utf8').trim()===${JSON.stringify(f.marker)}};console.log(JSON.stringify(checks));if(Object.values(checks).some(x=>!x))process.exit(1)`;
     const result = await sandbox.process.executeCommand('sudo -n -E sh -lc ' + quote('node -e ' + quote(check)), undefined, undefined, 15);
+    evidence.trials.push({ kind: 'native-isolation-command', threadId: f.threadId, sandboxId: ids[0], exitCode: result.exitCode, output: result.result }); save();
     assert.equal(result.exitCode, 0, 'Native UID/credential/company isolation command failed');
     const checks = JSON.parse(result.result);
     evidence.trials.push({ kind: 'native-isolation', threadId: f.threadId, sandboxId: ids[0], checks }); save();
@@ -252,6 +263,12 @@ try {
   assert.equal(beforeStop.exitCode, 0, 'Owned writer state could not be observed before stop');
   const beforeTick = JSON.parse(beforeStop.result).tick;
   await command({ type: 'thread.session.stop', threadId: fixtures[0].threadId });
+  if (prepareMs > 0) {
+    const preparation = await rpc('provider.prepareWorkspace', { projectId: first.projectId, threadId: first.threadId });
+    evidence.preparations.push({ threadId: first.threadId, kind: 'stopped-resume', ...preparation }); save();
+    assert(preparation.started, 'Stopped conversation preparation was not admitted');
+    await new Promise(resolve => setTimeout(resolve, prepareMs));
+  }
   await turn(fixtures[0], 'stopped-resume', `Read your private file ${fixtures[0].note} and its companion ${fixtures[0].note}.writer; reply with exact token ${fixtures[0].marker} and the writer tick, briefly.`);
   const restored = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: first.threadId, path: writerPath }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) });
   assert(restored.ok, 'Stopped writer bytes were not restored');
@@ -269,6 +286,17 @@ finally {
   if (fixtures.length) {
     try { collectOwnedWorkers(); }
     catch (error) { evidence.cleanup.push({ ownershipReadFailed: true, error: error.message }); save(); }
+  }
+  // A failed draft check has no orchestration thread to authorize normal deletion.
+  // Materialize only this run's disposable QA fixture so the ordinary fenced
+  // retirement path can reclaim it immediately rather than waiting for expiry.
+  if (prepareMs > 0 && command) for (const f of fixtures.filter(f => !createdThreads.has(f.threadId))) {
+    try {
+      await command({ type: 'thread.create', threadId: f.threadId, projectId: f.projectId,
+        title: 'QA preparation cleanup', modelSelection: { provider: 'pi', model: f.model ?? model },
+        runtimeMode: 'full-access', interactionMode: 'default', branch: null, worktreePath: null });
+      evidence.cleanup.push({ threadId: f.threadId, cleanupThreadCreated: true }); save();
+    } catch (error) { evidence.cleanup.push({ threadId: f.threadId, cleanupThreadCreated: false, error: error.message }); save(); }
   }
   // Let the controller retire only the uniquely owned QA threads. Do not infer
   // ownership from a before/after inventory when users can create chats concurrently.
