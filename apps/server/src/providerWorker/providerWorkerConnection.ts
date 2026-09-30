@@ -2,7 +2,7 @@ import {
   ProviderWorkerClientFrame,
   type ProviderWorkerServerFrame,
 } from "@synara/contracts";
-import { Duration, Effect, Schema, Semaphore } from "effect";
+import { Deferred, Duration, Effect, Schema } from "effect";
 
 import { PROVIDER_WORKER_PROTOCOL_REJECTED_CLOSE_CODE } from "./closeCodes";
 import { ProviderWorkerBrokerError, ProviderWorkerTransportError } from "./Errors";
@@ -60,7 +60,7 @@ export function runProviderWorkerConnection(input: {
   return Effect.gen(function* () {
     let registeredFence: ProviderWorkerFence | undefined;
     let registrationTimedOut = false;
-    const receiveLock = Semaphore.makeUnsafe(1);
+    let previousFrame: Effect.Effect<void, ProviderWorkerTransportError> = Effect.void;
 
     const brokerConnection: ProviderWorkerConnection = {
       send: (frame: ProviderWorkerServerFrame) =>
@@ -80,9 +80,14 @@ export function runProviderWorkerConnection(input: {
       close: () => input.socket.close(1000, "Provider worker connection retired"),
     };
 
-    const handleFrame = (raw: string | Uint8Array) =>
-      receiveLock.withPermits(1)(
-        decodeFrame(raw).pipe(
+    const handleFrame = (raw: string | Uint8Array) => {
+      // runRaw forks each handler. Reserve arrival order before those fibers
+      // run; a newly scheduled semaphore taker can overtake a waiting frame.
+      const predecessor = previousFrame;
+      const completed = Deferred.makeUnsafe<void, ProviderWorkerTransportError>();
+      previousFrame = Deferred.await(completed);
+      return predecessor.pipe(
+        Effect.andThen(decodeFrame(raw).pipe(
           Effect.flatMap((frame) =>
             Effect.gen(function* () {
               if (!registeredFence) {
@@ -128,8 +133,10 @@ export function runProviderWorkerConnection(input: {
               "Provider worker protocol rejected",
             ),
           ),
-        ),
+        )),
+        Effect.onExit((exit) => Deferred.done(completed, exit).pipe(Effect.asVoid)),
       );
+    };
 
     yield* Effect.sleep(
       Duration.millis(input.registrationTimeoutMs ?? 10_000),

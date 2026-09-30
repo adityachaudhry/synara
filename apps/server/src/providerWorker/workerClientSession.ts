@@ -57,7 +57,14 @@ export function makeProviderWorkerClientSession<TError>(input: {
             ? cause
             : clientError("event.outbox", "Failed to retain provider event.", cause),
       }).pipe(
-        Effect.flatMap((frame) => (registered ? sendUnlocked(frame) : Effect.void)),
+        Effect.flatMap((frame) => registered
+          ? sendUnlocked(frame).pipe(Effect.catch(() => {
+              // The event is already retained. Keep the single event pump alive
+              // while reconnecting so subsequent model events remain replayable.
+              registered = false;
+              return input.socket.close(1001, "Provider worker event transport reconnecting");
+            }))
+          : Effect.void),
       ),
     );
 
@@ -114,12 +121,16 @@ export function makeProviderWorkerClientSession<TError>(input: {
                 registered = true;
               }).pipe(
                 Effect.andThen(
-                  Effect.forEach(input.outbox.pending(), sendUnlocked, { discard: true }),
+                  Effect.suspend(() =>
+                    Effect.forEach(input.outbox.pending(), sendUnlocked, { discard: true }),
+                  ),
                 ),
                 Effect.andThen(
-                  Effect.forEach(input.requestLedger.pending(), sendUnlocked, {
-                    discard: true,
-                  }),
+                  Effect.suspend(() =>
+                    Effect.forEach(input.requestLedger.pending(), sendUnlocked, {
+                      discard: true,
+                    }),
+                  ),
                 ),
               ),
             );
