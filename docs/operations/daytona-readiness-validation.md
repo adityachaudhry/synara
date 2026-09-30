@@ -97,7 +97,7 @@ The subsequent four-client 50 run with cold bursts of ten reached 50 provider tu
 
 ## September 30 US restoration and same-adapter failback
 
-At 09:56 UTC, the available-class API included US containers and both matching `5f99335a` pools had two ready workers without errors. No billing or entitlement setting was changed by this chat. The vendor support reply remains unverified while the Mac is locked; execution success does not establish reserved US capacity or entitlement stability.
+At 09:56 UTC, the available-class API included US containers and both matching `5f99335a` pools had two ready workers without errors. No billing or entitlement setting was changed by this chat. The September30 2:29 a.m. Pacific vendor reply is now verified through Outlook/Edge: “should be all set.” A fresh read-only check at12:42 p.m. Pacific confirms US/EU containers and matching pools ready2. Reserved concurrency, refill latency and entitlement guarantees were not specified; the reply resolves the restoration request.
 
 The configured dev adapter at `30a649ae2` selected US. A disposable native lifecycle check passed at 10:12 UTC: allocation/setup 545 ms, stop/start with fresh environment 1.208 s, and archive/resume with the exact private marker plus fresh environment 3.093 s. Its owned disk returned 404. An initial run completed the lifecycle but its redundant cleanup reader failed on a stale list record whose disk was already deleted; the reader was corrected to accept only a direct not-found result and the clean repeat passed.
 
