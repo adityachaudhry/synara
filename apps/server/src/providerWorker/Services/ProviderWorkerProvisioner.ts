@@ -15,6 +15,8 @@ export interface ProviderWorkerProvisionInput {
   readonly threadId: ThreadId;
   readonly lifecycleGeneration: string;
   readonly cwd?: string;
+  /** Exact recognized legacy Pi history that must survive the UID transition. */
+  readonly legacyPiResumeSessionFile?: string;
   readonly repositoryBinding?: ProjectRepositoryBinding;
   readonly agentGatewayConnection?: AgentGatewayMcpConnection;
   readonly onCapacityAdmitted?: () => void;

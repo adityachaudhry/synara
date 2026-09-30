@@ -2673,12 +2673,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         retireRuntimeIdleGeneration(input.threadId);
       });
 
-    const listSessions: ProviderServiceShape["listSessions"] = () =>
+    const listSessions: ProviderServiceShape["listSessions"] = (threadId) =>
       Effect.gen(function* () {
         const activeSessions = (yield* Effect.forEach(adapters, (adapter) =>
-          adapter.listSessions(),
+          adapter.listSessions(threadId),
         )).flatMap((sessions) => sessions);
-        const persistedBindings = yield* directory.listThreadIds().pipe(
+        const persistedBindings = yield* (threadId === undefined
+          ? directory.listThreadIds()
+          : Effect.succeed([...new Set(activeSessions.map((session) => session.threadId))])).pipe(
           Effect.flatMap((threadIds) =>
             Effect.forEach(
               threadIds,

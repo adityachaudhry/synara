@@ -28,6 +28,7 @@ import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { makeKeyedLock } from "../keyedLock";
+import { extractLegacyPiResumeSessionFile } from "./PiAdapter.ts";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -376,6 +377,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       }
 
       const lifecycleGeneration = input.lifecycleGeneration ?? randomLifecycleGeneration();
+      const legacyPiResumeSessionFile = extractLegacyPiResumeSessionFile(input.resumeCursor);
       const previous = activeRemote ?? persistedRemote;
       const migratingToDaytona = process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
         previous?.workspace.runtimeKind === "railway-sandbox";
@@ -393,6 +395,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                   ? provisioner.restart(previous, {
                       threadId: input.threadId,
                       lifecycleGeneration,
+                      ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding,
                       ...(agentGatewayConnection === undefined
@@ -402,6 +405,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                   : provisioner.start({
                       threadId: input.threadId,
                       lifecycleGeneration,
+                      ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding,
                       ...(agentGatewayConnection === undefined

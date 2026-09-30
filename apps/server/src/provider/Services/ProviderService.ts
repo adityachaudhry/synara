@@ -173,9 +173,11 @@ export interface ProviderServiceShape {
   /**
    * List active provider sessions.
    *
-   * Aggregates runtime session lists from all registered adapters.
+   * Aggregates runtime session lists from all registered adapters. An optional
+   * session-owning thread id hints adapter discovery; adapters may return more
+   * sessions. Binding hydration is limited to returned sessions when hinted.
    */
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+  readonly listSessions: (threadId?: ThreadId) => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
    * Read static capabilities for a provider adapter.

@@ -1,6 +1,7 @@
 import { makeRepositoryIsolationPlan, makeVerifiedRepositoryRefreshPlan } from "../repositoryIsolation";
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { sanitizeUnmappedProviderData } from "../../provider/unmappedProviderEvents";
+import { extractLegacyPiResumeSessionFile } from "../../provider/Layers/PiAdapter.ts";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -57,6 +58,44 @@ const DEFAULT_CWD = "/workspace";
 const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+/** Preserve an existing copy only when it is byte-identical to the authoritative legacy file. */
+export function legacyPiSessionCopyCommand(source?: string): string {
+  if (source && extractLegacyPiResumeSessionFile(source) !== source) throw new Error("Invalid legacy Pi session path.");
+  const target = source ? `/workspace${source.slice("/root".length)}` : undefined;
+  const script = `const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
+const source=${JSON.stringify(source) ?? "undefined"},target=${JSON.stringify(target) ?? "undefined"};
+const sourceRoot='/root/.pi/agent/sessions',targetRoot='/workspace/.pi/agent/sessions';
+function directoryBoundary(dir){
+ let current=path.parse(dir).root;
+ for(const part of dir.slice(current.length).split('/')){
+  current=path.join(current,part);let info;
+  try{info=fs.lstatSync(current);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+  if(!info.isDirectory()||info.isSymbolicLink()||fs.realpathSync(current)!==current)throw Error('Unsafe Pi history directory; original retained');
+ }
+}
+function sessionTree(dir){
+ for(const name of fs.readdirSync(dir)){
+  const file=path.join(dir,name),info=fs.lstatSync(file);
+  if(info.isDirectory())sessionTree(file);
+  else if(!info.isFile()||info.nlink!==1)throw Error('Unsafe Pi history link; original retained');
+ }
+}
+// Check both trees before root creates files or follows a destination directory.
+for(const root of [sourceRoot,targetRoot]){directoryBoundary(root);if(fs.existsSync(root))sessionTree(root);}
+if(source){
+directoryBoundary(path.dirname(target));
+const original=fs.lstatSync(source);
+if(!original.isFile()||original.nlink!==1||!original.size||fs.realpathSync(source)!==source)throw Error('Legacy Pi history is unavailable or unsafe');
+const bytes=fs.readFileSync(source),entries=bytes.toString('utf8').split('\\n').filter(line=>line.trim()).map(line=>JSON.parse(line)),header=entries[0];
+if(!header||header.type!=='session'||typeof header.id!=='string'||!header.id||typeof header.cwd!=='string'||!header.cwd||!Number.isInteger(header.version??1)||(header.version??1)<1||(header.version??1)>3)throw Error('Legacy Pi history has an incompatible header');
+if(!fs.existsSync(target)){fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(source,target,fs.constants.COPYFILE_EXCL);}
+if(!fs.lstatSync(target).isFile()||fs.lstatSync(target).nlink!==1||fs.realpathSync(target)!==target||!bytes.equals(fs.readFileSync(target))||!bytes.equals(fs.readFileSync(source)))throw Error('Legacy Pi history copy conflicts; original retained');
+}
+fs.mkdirSync(targetRoot,{recursive:true});
+if(fs.existsSync(sourceRoot))cp.execFileSync('cp',['-an',sourceRoot+'/.',targetRoot+'/']);`;
+  return `node -e ${shellQuote(script)}`;
+}
 
 function workerLaunchCommand(homeDir: string, artifactDigest: string, photonDigest?: string) {
   const logsDir = `${homeDir}/state/logs`;
@@ -564,6 +603,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly lifecycleGeneration: string;
       readonly cwd: string;
       readonly homeDir: string;
+      readonly legacyPiResumeSessionFile?: string;
       readonly repositoryBinding?: NonNullable<
         Parameters<ProviderWorkerProvisionerShape["start"]>[0]["repositoryBinding"]
       >;
@@ -726,10 +766,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         if (unprivileged) {
           const prepared = yield* workspaceRuntime.exec(input.workspace, {
-            command: `mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi/agent/sessions && if [ -d /root/.pi/agent/sessions ]; then cp -an /root/.pi/agent/sessions/. /workspace/.pi/agent/sessions/; fi && chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi${input.unprivileged ? "" : ` && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace`}`,
+            command: `${legacyPiSessionCopyCommand(input.legacyPiResumeSessionFile)} && mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} && chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi${input.unprivileged ? "" : ` && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace`}`,
             timeoutSeconds: 60,
           });
-          if (prepared.exitCode !== 0 || prepared.timedOut)
+          if (prepared.exitCode !== 0 || prepared.timedOut || prepared.truncated)
             return yield* provisionError("workspace.user", "Could not prepare the unprivileged worker.", undefined, fence.sandboxId);
           yield* workspaceRuntime.writeFile(input.workspace, {
             path: "/opt/synara/agent-gitconfig",
@@ -917,6 +957,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             lifecycleGeneration: input.lifecycleGeneration,
             cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
             homeDir: saved?.binding.homeDir ?? DEFAULT_HOME_DIR,
+            ...(input.legacyPiResumeSessionFile ? { legacyPiResumeSessionFile: input.legacyPiResumeSessionFile } : {}),
             allowUnavailable: companyOnly,
             unprivileged: mountedCompany,
             ...(saved?.binding.repositoryCheckout ? { previousCheckout: saved.binding.repositoryCheckout } : {}),
@@ -1101,6 +1142,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                 lifecycleGeneration: input.lifecycleGeneration,
                 cwd: checkout.cwd,
                 homeDir: binding.homeDir,
+                ...(input.legacyPiResumeSessionFile ? { legacyPiResumeSessionFile: input.legacyPiResumeSessionFile } : {}),
                 repositoryBinding,
                 checkoutCommand: checkout.command,
                 ...(binding.repositoryCheckout ? { previousCheckout: binding.repositoryCheckout } : {}),

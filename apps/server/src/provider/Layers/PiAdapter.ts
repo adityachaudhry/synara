@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import {
   spawn as spawnChildProcess,
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 
 import type {
   BashOperations,
@@ -974,7 +975,7 @@ function findModelInRegistry(
     .find((model) => model.id === parsed.id || `${model.provider}/${model.id}` === parsed.id);
 }
 
-function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
+export function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
   if (typeof resumeCursor === "string" && resumeCursor.trim().length > 0) {
     return resumeCursor;
   }
@@ -989,6 +990,56 @@ function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+export function extractLegacyPiResumeSessionFile(resumeCursor: unknown): string | undefined {
+  const file = extractResumeSessionFile(resumeCursor);
+  const prefix = "/root/.pi/agent/sessions/";
+  return file?.startsWith(prefix) && file.endsWith(".jsonl") &&
+    !/[\\\\\u0000]/u.test(file) && file.slice(prefix.length).split("/").every((part) => part && part !== "." && part !== "..")
+    ? file : undefined;
+}
+
+/** Validate before SDK.open: the SDK treats a missing file as a new empty session. */
+export async function validatePiResumeSessionFile(file: string, currentVersion: number): Promise<string> {
+  const info = await lstat(file);
+  if (!info.isFile() || info.nlink !== 1 || info.size === 0 || await realpath(file) !== file) {
+    throw new Error("Pi resume history must be a nonempty independent regular file without symlink ancestors.");
+  }
+  const handle = await open(file, "r");
+  const stream = handle.createReadStream({ encoding: "utf8", autoClose: false });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  let identity: string | undefined;
+  let readError: unknown;
+  stream.on("error", (cause) => { readError = cause; lines.close(); });
+  try {
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof entry.type !== "string") {
+        throw new Error("Pi resume history contains an invalid entry.");
+      }
+      if (!identity) {
+        const version = entry.version ?? 1;
+        if (entry.type !== "session" || typeof entry.id !== "string" ||
+            !/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(entry.id) ||
+            !Number.isInteger(version) || Number(version) < 1 || Number(version) > currentVersion ||
+            typeof entry.cwd !== "string" || !entry.cwd) {
+          throw new Error("Pi resume history has an incompatible session header.");
+        }
+        identity = entry.id;
+      } else if (entry.type === "session") {
+        throw new Error("Pi resume history contains multiple session headers.");
+      }
+    }
+    if (readError) throw readError;
+    if (!identity) throw new Error("Pi resume history has no session header.");
+    return identity;
+  } finally {
+    lines.close();
+    stream.destroy();
+    await handle.close();
+  }
 }
 
 function getSessionFile(session: PiAgentSession): string | undefined {
@@ -2429,10 +2480,27 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             : {}),
         });
         const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
-        const sessionFile = extractResumeSessionFile(input.resumeCursor);
+        const unprivilegedWorker = process.getuid?.() === 10001 && process.env.HOME === "/workspace";
+        const legacySessionFile = unprivilegedWorker ? extractLegacyPiResumeSessionFile(input.resumeCursor) : undefined;
+        const sessionFile = legacySessionFile
+          ? `/workspace${legacySessionFile.slice("/root".length)}`
+          : extractResumeSessionFile(input.resumeCursor);
+        const managedResumeFile = unprivilegedWorker && sessionFile?.startsWith("/workspace/.pi/agent/sessions/") &&
+          extractLegacyPiResumeSessionFile(`/root${sessionFile.slice("/workspace".length)}`);
+        const resumeIdentity = managedResumeFile ? yield* Effect.tryPromise({
+          try: () => validatePiResumeSessionFile(sessionFile!, piSdk.CURRENT_SESSION_VERSION),
+          catch: (cause) => new ProviderAdapterRequestError({
+            provider: PROVIDER, method: "session/start", detail: "Pi history could not be safely resumed; its original is retained.", cause,
+          }),
+        }) : undefined;
         const sessionManager = sessionFile
           ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
           : piSdk.SessionManager.create(cwd);
+        if (resumeIdentity && sessionManager.getSessionId() !== resumeIdentity) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER, method: "session/start", detail: "Pi session identity changed during resume.",
+          });
+        }
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =

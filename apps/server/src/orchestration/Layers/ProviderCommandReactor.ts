@@ -982,7 +982,8 @@ const make = Effect.gen(function* () {
     const providerThread = yield* resolveProviderSessionThread(threadId);
     const sessionThreadId = providerThread?.id ?? threadId;
     const session = yield* providerService
-      .listSessions().pipe(
+      .listSessions(sessionThreadId)
+      .pipe(
         observeProviderOperation("session.lookup", { threadId }),
         Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)),
       );
@@ -1275,7 +1276,8 @@ const make = Effect.gen(function* () {
 
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
-        .listSessions().pipe(
+        .listSessions(threadId)
+        .pipe(
           observeProviderOperation("session.lookup", { threadId }),
           Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)),
         );

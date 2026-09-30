@@ -38,6 +38,23 @@ const before = new Set();
 for await (const s of d.list({ labels: { 'synara-managed': 'true' } })) before.add(s.id);
 const fixtures = [];
 const projects = [];
+const ownedByThread = new Map();
+const collectOwnedWorkers = () => {
+  const logs = execFileSync('railway', ['logs', '-p', '2fb578c6-304e-4a97-abd4-38b3897d9030', '-e', 'dev', '-s', 'synara-gitea-dev', '--since', evidence.checkedAt, '--lines', '5000', '--filter', 'provider.operation', '--json'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  for (const line of logs.split('\n')) {
+    try {
+      const message = JSON.parse(line).message;
+      const row = JSON.parse(message.slice(message.indexOf('{')));
+      const thread = row.threadId ?? row.workerThreadId;
+      if (row.sandboxId && fixtures.some(f => f.threadId === thread)) {
+        if (!ownedByThread.has(thread)) ownedByThread.set(thread, new Set());
+        ownedByThread.get(thread).add(row.sandboxId);
+      }
+    } catch {} // Structured QA ownership only; other log lines do not establish it.
+  }
+  evidence.ownedByThread = Object.fromEntries([...ownedByThread].map(([thread, ids]) => [thread, [...ids]])); save();
+};
+const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 let command;
 let ws;
 let pool;
@@ -113,6 +130,19 @@ try {
   const cold = await Promise.allSettled(fixtures.map(f => turn(f, 'new', `Dev file readiness check for ${f.company}. In ONE execution tool call, find one real file under inbox (prefer an image or PDF), read its bytes and report basename, size and SHA256. Write the exact private token ${f.marker} to ${f.note}. Do not publish, push Git, run diligence, research, email or edit existing files. Reply with your token and file check results, briefly.`)));
   evidence.coldFailures = cold.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []); save();
   assert.equal(evidence.coldFailures.length, 0, JSON.stringify(evidence.coldFailures));
+  collectOwnedWorkers();
+  for (const f of fixtures) {
+    const ids = [...(ownedByThread.get(f.threadId) ?? [])];
+    assert.equal(ids.length, 1, 'A cold QA thread must have one directly mapped native worker');
+    const sandbox = await d.get(ids[0]);
+    const other = companies.find(company => company !== f.company);
+    const check = `const fs=require('node:fs');process.setgroups([]);process.setgid(10001);process.setuid(10001);const denied=p=>{try{fs.accessSync(p,fs.constants.R_OK);return false}catch{return true}};const checks={uid:process.getuid()===10001,rootDenied:denied('/root'),sudoDenied:require('node:child_process').spawnSync('sudo',['-n','true'],{stdio:'ignore'}).status!==0,controllerCredentialDenied:denied('/opt/synara/provider-worker.json'),repositoryCredentialDenied:denied('/root/.synara-repository-credential.gitconfig'),storageCredentialDenied:denied('/root/.synara-s3-lfs.passwd'),otherCompanyAbsent:!fs.existsSync(${JSON.stringify('/workspace/repository/companies/' + other)}),privateMarker:fs.readFileSync(${JSON.stringify('/workspace/repository/companies/' + f.company + '/' + f.note)},'utf8').trim()===${JSON.stringify(f.marker)}};console.log(JSON.stringify(checks));if(Object.values(checks).some(x=>!x))process.exit(1)`;
+    const result = await sandbox.process.executeCommand('sudo -n -E sh -lc ' + quote('node -e ' + quote(check)), undefined, undefined, 15);
+    assert.equal(result.exitCode, 0, 'Native UID/credential/company isolation command failed');
+    const checks = JSON.parse(result.result);
+    evidence.trials.push({ kind: 'native-isolation', threadId: f.threadId, sandboxId: ids[0], checks }); save();
+    assert.equal(result.exitCode, 0, 'Native UID/credential/company isolation failed');
+  }
   for (let repeat = 0; repeat < 3; repeat++) await Promise.all(fixtures.map(f => turn(f, 'warm-' + repeat, `Read only your private file ${f.note}; reply with its exact token ${f.marker}, the company name and nothing else. Do not call any other tool.`)));
   for (const f of fixtures) {
     const response = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: f.threadId, path: '/workspace/repository/companies/' + f.company + '/' + f.note }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) });
@@ -120,9 +150,38 @@ try {
     evidence.trials.push({ kind: 'private-preview', threadId: f.threadId, status: response.status, markerMatched: body.trim() === f.marker }); save();
     assert(response.ok && body.trim() === f.marker, 'Private file differs; HTTP ' + response.status);
   }
+  if (fixtures.length > 1) {
+    const limited = await http('/api/auth/external/session', vars.SYNARA_EXTERNAL_AUTH_SECRET, { subject: 'daytona-readiness-limited-' + runId, email: 'daytona-readiness@glasswing.invalid', allowedProjectIds: [fixtures[0].projectId], expiresAt: new Date(Date.now() + 840000).toISOString(), nonce: randomUUID() });
+    const other = fixtures.find(f => f.projectId !== fixtures[0].projectId);
+    if (other) {
+      const denied = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: other.threadId, path: '/workspace/repository/companies/' + other.company + '/' + other.note }), { headers: { Authorization: 'Bearer ' + limited.sessionToken }, signal: AbortSignal.timeout(30000) });
+      evidence.trials.push({ kind: 'cross-project-preview-denied', status: denied.status }); save();
+      assert.equal(denied.status, 403, 'A scoped company session must not read another QA company');
+    }
+  }
   // Deliberate lifecycle faults apply only to the uniquely named QA threads.
+  const first = fixtures[0];
+  const worker = await d.get([...ownedByThread.get(first.threadId)][0]);
+  const writerPath = '/workspace/repository/companies/' + first.company + '/' + first.note + '.writer';
+  const writer = `const fs=require('node:fs'),p=${JSON.stringify(writerPath)};let tick=0;setInterval(()=>{fs.writeFileSync(p+'.pending',JSON.stringify({marker:${JSON.stringify(first.marker)},tick:++tick}));fs.renameSync(p+'.pending',p)},100)`;
+  const launch = `const{spawn}=require('node:child_process');process.setgroups([]);process.setgid(10001);process.setuid(10001);spawn('node',['-e',${JSON.stringify(writer)}],{detached:true,stdio:'ignore'}).unref()`;
+  const started = await worker.process.executeCommand('sudo -n -E sh -lc ' + quote('node -e ' + quote(launch)), undefined, undefined, 15);
+  assert.equal(started.exitCode, 0, 'Owned detached writer launch failed');
+  await new Promise(r => setTimeout(r, 400));
+  const beforeStop = await worker.process.executeCommand('sudo -n -E sh -lc ' + quote('node -e ' + quote(`console.log(require('node:fs').readFileSync(${JSON.stringify(writerPath)},'utf8'))`)), undefined, undefined, 15);
+  assert.equal(beforeStop.exitCode, 0, 'Owned writer state could not be observed before stop');
+  const beforeTick = JSON.parse(beforeStop.result).tick;
   await command({ type: 'thread.session.stop', threadId: fixtures[0].threadId });
-  await turn(fixtures[0], 'stopped-resume', `Read your private file ${fixtures[0].note}; reply with exact token ${fixtures[0].marker} and nothing else.`);
+  await turn(fixtures[0], 'stopped-resume', `Read your private file ${fixtures[0].note} and its companion ${fixtures[0].note}.writer; reply with exact token ${fixtures[0].marker} and the writer tick, briefly.`);
+  const restored = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: first.threadId, path: writerPath }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) });
+  assert(restored.ok, 'Stopped writer bytes were not restored');
+  const bytes = await restored.json();
+  assert(bytes.marker === first.marker && bytes.tick >= beforeTick && beforeTick > 0, 'Latest observed detached writer state missing');
+  await new Promise(r => setTimeout(r, 500));
+  const stable = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: first.threadId, path: writerPath }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) }).then(r => r.json());
+  assert.deepEqual(stable, bytes, 'Detached writer survived retirement');
+  evidence.trials.push({ kind: 'detached-writer-stop-restore', threadId: first.threadId, beforeTick, restoredTick: bytes.tick, stable: true });
+  collectOwnedWorkers();
   evidence.passed = true; save();
   }
 } catch (error) { evidence.error = error.message; save(); throw error; }
@@ -141,6 +200,16 @@ finally {
     }
   }
   ws?.close();
+  for (const id of new Set([...ownedByThread.values()].flatMap(ids => [...ids]))) {
+    let state = 'unknown';
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      try { state = (await d.get(id)).state; }
+      catch (error) { if (error.statusCode === 404 || error.status === 404 || error.response?.status === 404) { state = 'destroyed'; break; } throw error; }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    evidence.cleanup.push({ sandboxId: id, physicalState: state }); save();
+  }
   if (ownedPool && pool) {
     try { await d.warmPool.delete(pool.id); evidence.cleanup.push({ warmPoolId: pool.id, deleted: true }); }
     catch (error) { evidence.cleanup.push({ warmPoolId: pool.id, deleted: false, error: error.message }); }
