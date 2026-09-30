@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { availableDaytonaContainerTargets } from '../../apps/server/src/workspaceRuntime/daytonaRegions.ts';
+import { getUnaryRpcCapacityRetryDelayMs } from '../../apps/web/src/lib/expensiveReadRetry.ts';
 const require = createRequire(new URL('../../apps/server/package.json', import.meta.url));
 const { Daytona } = await import(require.resolve('@daytona/sdk'));
 const { default: WebSocket } = await import(require.resolve('ws'));
@@ -93,10 +94,21 @@ try {
   ws.on('message', raw => { for (const x of [JSON.parse(String(raw))].flat()) {
     if (x._tag === 'Ping') ws.send(JSON.stringify({ _tag: 'Pong' }));
     if (x._tag === 'Chunk') ws.send(JSON.stringify({ _tag: 'Ack', requestId: x.requestId }));
-    if (x._tag === 'Exit') { const p = pending.get(String(x.requestId)); if (p) { pending.delete(String(x.requestId)); clearTimeout(p.timer); x.exit._tag === 'Success' ? p.resolve(x.exit.value) : p.reject(Error(JSON.stringify(x.exit).slice(0, 1500))); } }
+    if (x._tag === 'Exit') { const p = pending.get(String(x.requestId)); if (p) { pending.delete(String(x.requestId)); clearTimeout(p.timer); const failure = x.exit.cause?.find(c => c._tag === 'Fail')?.error; x.exit._tag === 'Success' ? p.resolve(x.exit.value) : p.reject(Object.assign(Error(JSON.stringify(x.exit).slice(0, 1500)), { code: failure?.code, retryable: failure?.retryable, retryAfterMs: failure?.retryAfterMs })); } }
   } });
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  const rpc = (tag, payload) => new Promise((resolve, reject) => { const id = String(++sequence); const timer = setTimeout(() => { pending.delete(id); reject(Error('RPC deadline: ' + tag)); }, 30000); pending.set(id, { resolve, reject, timer }); ws.send(JSON.stringify({ _tag: 'Request', id, tag, payload, headers: [] })); });
+  const rpcOnce = (tag, payload) => new Promise((resolve, reject) => { const id = String(++sequence); const timer = setTimeout(() => { pending.delete(id); reject(Error('RPC deadline: ' + tag)); }, 30000); pending.set(id, { resolve, reject, timer }); ws.send(JSON.stringify({ _tag: 'Request', id, tag, payload, headers: [] })); });
+  const rpc = async (tag, payload) => {
+    for (let attempt = 0; ; attempt++) {
+      try { return await rpcOnce(tag, payload); }
+      catch (error) {
+        const delay = tag === 'orchestration.getThreadDetailSnapshot' ? getUnaryRpcCapacityRetryDelayMs(error, attempt) : null;
+        if (delay === null) throw error;
+        evidence.snapshotReadRetries = (evidence.snapshotReadRetries ?? 0) + 1; save();
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  };
   command = data => rpc('orchestration.dispatchCommand', { commandId: randomUUID(), createdAt: new Date().toISOString(), ...data });
   if (!cleanupSource) {
   for (let i = 0; i < count; i++) {
@@ -143,7 +155,11 @@ try {
     evidence.trials.push({ kind: 'native-isolation', threadId: f.threadId, sandboxId: ids[0], checks }); save();
     assert.equal(result.exitCode, 0, 'Native UID/credential/company isolation failed');
   }
-  for (let repeat = 0; repeat < 3; repeat++) await Promise.all(fixtures.map(f => turn(f, 'warm-' + repeat, `Read only your private file ${f.note}; reply with its exact token ${f.marker}, the company name and nothing else. Do not call any other tool.`)));
+  for (let repeat = 0; repeat < 3; repeat++) {
+    const results = await Promise.allSettled(fixtures.map(f => turn(f, 'warm-' + repeat, `Read only your private file ${f.note}; reply with its exact token ${f.marker}, the company name and nothing else. Do not call any other tool.`)));
+    const failures = results.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []);
+    assert.equal(failures.length, 0, JSON.stringify(failures));
+  }
   for (const f of fixtures) {
     const response = await fetch(origin + '/api/chat-persistence/workspace-file?' + new URLSearchParams({ threadId: f.threadId, path: '/workspace/repository/companies/' + f.company + '/' + f.note }), { headers: { Authorization: 'Bearer ' + session.sessionToken }, signal: AbortSignal.timeout(30000) });
     const body = await response.text();
@@ -186,6 +202,10 @@ try {
   }
 } catch (error) { evidence.error = error.message; save(); throw error; }
 finally {
+  if (fixtures.length) {
+    try { collectOwnedWorkers(); }
+    catch (error) { evidence.cleanup.push({ ownershipReadFailed: true, error: error.message }); save(); }
+  }
   // Let the controller retire only the uniquely owned QA threads. Do not infer
   // ownership from a before/after inventory when users can create chats concurrently.
   for (const [type, items, key] of [['thread.delete', fixtures, 'threadId'], ['project.delete', projects, 'projectId']]) {
@@ -218,6 +238,7 @@ finally {
   const after = [];
   for await (const sandbox of d.list({ labels: { 'synara-managed': 'true' } })) if (!before.has(sandbox.id)) after.push({ id: sandbox.id, state: sandbox.state });
   evidence.newManagedDisksAtExit = after; // Includes concurrent users; never delete them from this inventory.
+  if (evidence.cleanup.some(c => c.ownershipReadFailed || c.deletionRequested === false || c.deleted === false || c.physicalState && c.physicalState !== 'destroyed')) evidence.passed = false;
   save();
   console.log(JSON.stringify({ phase: 'done', passed: evidence.passed ?? false, evidence: path.join(root, 'evidence.json') }));
 }
