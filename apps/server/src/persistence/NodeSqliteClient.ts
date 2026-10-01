@@ -26,6 +26,20 @@ import * as Statement from "effect/unstable/sql/Statement";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
+function measureSqlOperation<A>(sql: string, operation: string, run: () => A): A {
+  const started = performance.now();
+  try {
+    return run();
+  } finally {
+    const durationMs = Math.round(performance.now() - started);
+    if (durationMs >= 250) console.warn("sqlite statement slow", {
+      durationMs, operation,
+      // Hash SQL structure only; parameters and user content remain private.
+      queryHash: createHash("sha256").update(sql).digest("hex"),
+    });
+  }
+}
+
 export const TypeId: TypeId = "~local/sqlite-node/SqliteClient";
 
 export type TypeId = "~local/sqlite-node/SqliteClient";
@@ -111,7 +125,7 @@ const makeWithDatabase = (
         timeToLive: options.prepareCacheTTL ?? Duration.minutes(10),
         lookup: (sql: string) =>
           Effect.try({
-            try: () => db.prepare(sql),
+            try: () => measureSqlOperation(sql, "prepare", () => db.prepare(sql)),
             catch: (cause) => new SqlError({ cause, message: "Failed to prepare statement" }),
           }),
       });
@@ -122,23 +136,15 @@ const makeWithDatabase = (
         raw: boolean,
       ) =>
         Effect.withFiber<ReadonlyArray<any>, SqlError>((fiber) => {
-          statement.setReadBigInts(Boolean(ServiceMap.get(fiber.services, Client.SafeIntegers)));
-          const started = performance.now();
           try {
-            if (hasRows(statement)) {
-              return Effect.succeed(statement.all(...(params as any)));
-            }
-            const result = statement.run(...(params as any));
-            return Effect.succeed(raw ? (result as unknown as ReadonlyArray<any>) : []);
+            return Effect.succeed(measureSqlOperation(statement.sourceSQL, "execute", () => {
+              statement.setReadBigInts(Boolean(ServiceMap.get(fiber.services, Client.SafeIntegers)));
+              if (hasRows(statement)) return statement.all(...(params as any));
+              const result = statement.run(...(params as any));
+              return raw ? (result as unknown as ReadonlyArray<any>) : [];
+            }));
           } catch (cause) {
             return Effect.fail(new SqlError({ cause, message: "Failed to execute statement" }));
-          } finally {
-            const durationMs = Math.round(performance.now() - started);
-            if (durationMs >= 250) console.warn("sqlite statement slow", {
-              durationMs,
-              // Identify the query without logging SQL values or user content.
-              queryHash: createHash("sha256").update(statement.sourceSQL).digest("hex"),
-            });
           }
         });
 
@@ -150,7 +156,7 @@ const makeWithDatabase = (
           Cache.get(prepareCache, sql),
           (statement) =>
             Effect.try({
-              try: () => {
+              try: () => measureSqlOperation(sql, "values", () => {
                 if (hasRows(statement)) {
                   statement.setReturnArrays(true);
                   // Safe to cast to array after we've setReturnArrays(true)
@@ -160,7 +166,7 @@ const makeWithDatabase = (
                 }
                 statement.run(...(params as any));
                 return [];
-              },
+              }),
               catch: (cause) => new SqlError({ cause, message: "Failed to execute statement" }),
             }),
           (statement) =>
