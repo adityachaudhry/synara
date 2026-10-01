@@ -16,5 +16,10 @@ export type ClaudeAgentSdkModule = typeof import("@anthropic-ai/claude-agent-sdk
  * Types must keep using `import type` — they are erased and cost nothing.
  */
 export const loadClaudeAgentSdk: () => Promise<ClaudeAgentSdkModule> = lazyModule(
-  () => import("@anthropic-ai/claude-agent-sdk"),
+  () => {
+    // SDK libc detection calls getReport synchronously. Reverse DNS on active
+    // sockets blocked the shared controller for 35s; libc metadata needs no DNS.
+    if (process.report) process.report.excludeNetwork = true;
+    return import("@anthropic-ai/claude-agent-sdk");
+  },
 );
