@@ -1,4 +1,5 @@
 import http from "node:http";
+import { readFileSync } from "node:fs";
 import type { ListenOptions, Socket } from "node:net";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
@@ -32,6 +33,16 @@ function handleClientSocketError(this: Socket): void {
 
 function protectClientSocket(socket: Socket): void {
   socket.on("error", handleClientSocketError);
+}
+
+function schedulingWaitMs(): number | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const queuedNs = Number(readFileSync("/proc/self/schedstat", "utf8").trim().split(/\s+/u)[1]);
+    return Number.isFinite(queuedNs) ? queuedNs / 1_000_000 : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -141,6 +152,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   loopDelay.enable();
   let previousCpu = process.cpuUsage();
   let previousTick = performance.now();
+  let previousSchedulingWait = schedulingWaitMs();
   const loopTimer = setInterval(() => {
     const now = performance.now();
     const intervalMs = Math.round(now - previousTick);
@@ -148,6 +160,10 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
     previousTick = now;
     const cpu = process.cpuUsage(previousCpu);
     previousCpu = process.cpuUsage();
+    const schedulingWait = schedulingWaitMs();
+    const intervalSchedulingWaitMs = schedulingWait !== undefined && previousSchedulingWait !== undefined
+      ? Math.round(schedulingWait - previousSchedulingWait) : undefined;
+    previousSchedulingWait = schedulingWait;
     if (loopDelay.max > 500_000_000 || timerDelayMs > 500) {
       console.warn("server event loop delayed", {
         maxDelayMs: Math.round(loopDelay.max / 1_000_000),
@@ -155,6 +171,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
         // timer interval, not necessarily to the histogram's largest delay.
         timerDelayMs, intervalMs,
         intervalCpuMs: Math.round((cpu.user + cpu.system) / 1_000),
+        intervalSchedulingWaitMs,
       });
       if (timerDelayMs > 500) stallProfiles.capture(timerDelayMs);
     }

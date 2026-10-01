@@ -45,10 +45,10 @@ export function startStallProfiles() {
           }
           return { sampledMs: Math.round(us / 1_000), stack };
         });
-        console.warn("server stall profile", {
+        console.warn("server stall profile", JSON.stringify({
           intervalMs: Math.round(now - started), timerDelayMs: delayMs || Math.round(now - started - 60_000),
           maxSamplingGapMs: Math.round(maxSamplingGapUs / 1_000), top,
-        });
+        }));
       }
       if (active) {
         await session.post("Profiler.start");
