@@ -156,6 +156,9 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
               });
               break;
             } catch (cause) {
+              console.warn(JSON.stringify({ event: "daytona.create.failed", operationId: input.operationId, target,
+                ...(cause instanceof DaytonaError ? { error: cause.name, statusCode: cause.statusCode, code: cause.code,
+                  source: cause.source, detail: cause.message.replace(/https?:\/\/\S+/gu, "[url]").slice(0, 1000) } : { error: "unknown" }) }));
               if (config.fallbackTarget || config.warmPoolSize > 0) blockedTargets.add(target);
               // A readiness/transport failure may own a disk: keep its intent, never allocate twice.
               if (!regionDenied(cause)) throw cause;

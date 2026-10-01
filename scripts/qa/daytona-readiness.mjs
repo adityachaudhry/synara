@@ -364,3 +364,5 @@ finally {
   save();
   console.log(JSON.stringify({ phase: 'done', passed: evidence.passed ?? false, evidence: path.join(root, 'evidence.json') }));
 }
+// Native SDK command sockets may stay open after every owned worker is verified destroyed.
+process.exit(evidence.passed ? 0 : 1);
