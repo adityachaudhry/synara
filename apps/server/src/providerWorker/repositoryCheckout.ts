@@ -36,7 +36,7 @@ for(const rel of ['commondir','worktrees','objects/info/alternates','objects/inf
 const active=path.join(metadata,'config');
 for(const name of ['config','config.worktree']){const file=path.join(metadata,name);if(!fs.existsSync(file))continue;const st=fs.lstatSync(file);if(!st.isFile()||st.nlink!==1||fs.realpathSync(file)!==file)throw Error('Unsafe private Git config; original retained');}
 const entries=cp.execFileSync('git',['config','--file',active,'--no-includes','--null','--list']).toString().split('\\0').filter(Boolean);
-for(const entry of entries){const i=entry.indexOf('\\n'),key=entry.slice(0,i),value=entry.slice(i+1);if((key==='core.repositoryformatversion'&&value!=='0')||key.startsWith('extensions.'))throw Error('Unsupported private Git format; original retained');}
+for(const entry of entries){const i=entry.indexOf('\\n'),key=entry.slice(0,i),value=entry.slice(i+1);if((key==='core.repositoryformatversion'&&!['0','1'].includes(value))||key.startsWith('extensions.'))throw Error('Unsupported private Git format; original retained');}
 const original=fs.readFileSync(active);
 if(!original.equals(Buffer.from(config))){const saved=active+'.synara-original-'+crypto.createHash('sha256').update(original).digest('hex');if(!fs.existsSync(saved))fs.writeFileSync(saved,original,{flag:'wx',mode:0o600});else if(!fs.lstatSync(saved).isFile()||fs.lstatSync(saved).nlink!==1||!fs.readFileSync(saved).equals(original))throw Error('Private Git config recovery copy conflicts; original retained');const temporary=active+'.synara-'+crypto.randomUUID();fs.writeFileSync(temporary,config,{flag:'wx',mode:0o644});fs.renameSync(temporary,active);}
 `;

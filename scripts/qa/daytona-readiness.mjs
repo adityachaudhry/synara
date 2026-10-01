@@ -216,8 +216,6 @@ try {
   evidence.coldFailures = cold.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []); save();
   assert.equal(evidence.coldFailures.length, 0, JSON.stringify(evidence.coldFailures));
   collectOwnedWorkers();
-  if (process.argv.includes('--profile-check') || process.argv.includes('--profile-check-all')) for (const f of process.argv.includes('--profile-check-all') ? fixtures : [fixtures[0]])
-    await turn(f, 'profile-mcp', `Use crunchbase_search once to check the company identity for ${f.company}, with limit 1 if supported. Say whether the result contains a matching company; do not invent a match. Then read your private file ${f.note} and include its exact token ${f.marker}. Keep the answer brief; do not publish or edit any file.`);
   for (const f of fixtures) {
     const ids = [...(ownedByThread.get(f.threadId) ?? [])];
     assert.equal(ids.length, 1, 'A cold QA thread must have one directly mapped native worker');
@@ -260,6 +258,8 @@ try {
       }
     }
   }
+  if (process.argv.includes('--profile-check') || process.argv.includes('--profile-check-all')) for (const f of process.argv.includes('--profile-check-all') ? fixtures : [fixtures[0]])
+    await turn(f, 'profile-mcp', `Use crunchbase_search once to check the company identity for ${f.company}, with limit 1 if supported. Say whether the result contains a matching company; do not invent a match. Then read your private file ${f.note} and include its exact token ${f.marker}. Keep the answer brief; do not publish or edit any file.`);
   for (let repeat = 0; repeat < 3; repeat++) {
     const results = await Promise.allSettled(fixtures.map(f => turn(f, 'warm-' + repeat, `Read only your private file ${f.note}; reply with its exact token ${f.marker}, the company name and nothing else. Do not call any other tool.`)));
     const failures = results.flatMap((r, i) => r.status === 'rejected' ? [{ threadId: fixtures[i].threadId, error: r.reason.message }] : []);
