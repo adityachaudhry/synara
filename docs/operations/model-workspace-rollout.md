@@ -5,10 +5,10 @@ Sonnet, Sol and Astra, prepare sandboxes when a workspace opens, prove the
 release in dev and an isolated production rehearsal, then promote through CI.
 Production data and its rollback copies must survive every step. No unit tests.
 
-## Verified dev release: September 30, 2026
+## Verified dev release: October 1, 2026
 
-Canonical `glasswingos/dev` application `a7f73f3783e3db83774e56c1215ddad72d3c18d4`
-is live and healthy through [Actions 36784508540](https://github.com/adityachaudhry/synara/actions/runs/36784508540).
+Canonical `glasswingos/dev` application `fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374`
+is live and healthy through [Actions36810203135](https://github.com/adityachaudhry/synara/actions/runs/36810203135). Dev now uses a verified copy of production business data and chats; original dev recovery copies and home remain retained.
 Glasswing `dev` picker `86dbdb7cae66cba9be08e853dd0ad81a9d6698ae` shipped through
 [Actions 36780559190](https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36780559190).
 Pi is pinned to 0.99.2, MCP adapter 4.0.0, web access 0.34.0.
@@ -24,12 +24,26 @@ private previews and cross-project403 passed. First send used each exact prepare
 worker. A detached writer's latest observed state survived stop/preparation/resume.
 All five owned worker IDs were directly confirmed destroyed after ordinary cleanup.
 
-Prepared first-send readiness was 1.811–3.546 seconds (five samples); prepared
-stopped resume was 1.422 seconds. Warm readiness has 15 samples and a maximum of
-5.743 seconds. These are readiness times, not total answer times or production
+The hardened repeat passed another26 turns. Prepared first-send readiness was
+1.981–3.481 seconds (five samples); prepared stopped resume was3.050 seconds.
+Warm readiness has15 samples, median1.264 seconds and p95 5.550 seconds. Native
+UID10001 rename/write checks protect repository parents, Git metadata and the root
+launcher log. The real364-byte HubFlow LFS body downloads and remounts with exact
+SHA256. The initial hardening rejected the native clone's format1/noextensions;
+that failed trial is retained and the shared guard was corrected. These are readiness times, not total answer times or production
 parity. The older two full 25-conversation passes remain useful baseline evidence;
 there is no new successful 50/98 or soak claim. See
 [structured results](model-workspace-evidence.json).
+
+**Current release checkpoint, October 1, 04:50 UTC:** production has **not** been deployed. Dev Synara `fbfb692df` is live through canonical [Actions36810203135](https://github.com/adityachaudhry/synara/actions/runs/36810203135). The latest real run passed **25 concurrent conversations across four companies, 102 successful model turns**, native private-file/credential/company isolation, previews, cross-project403, stopped-writer restoration, an actual interrupted turn and a successful following turn. All25 owned native disks returned404. Cold readiness median12.662s/p95 20.492s; warm median2.535s/p95 7.406s. These unprepared25-chat timings are separate from the five-model prepared first-send1.981–3.481s evidence.
+
+The earlier repeat completed96/100 turns and exposed OpenAI TPM429 plus premature Pi turn cleanup. The shared adapter now keeps ownership until the native prompt promise settles. The passing repeat had no actual429 records, so it proves the normal/reuse/cancellation path, not retry success under429. Earlier failed trials remain retained. Six verified superseded release pool definitions were set to zero, releasing12 unclaimed spares while retaining definitions, checkpoints and every business disk. Actual US disk quota is300GiB; production US/EU capacity remains to be verified.
+
+**The requested dev browser acceptance passed at04:25 UTC:** real email-code sign-in, the exact five-model picker, Workspace navigation dispatching hydration before a message, a Sol reply reading the real deck, temporary Markdown and PDF artifacts rendered in the side panel, source-deck preview, reopening the chat and an Opus follow-up reading the retained note. The actual Download click returned the1260-byte PDF with its registered SHA256. Nothing was published to company files. This observes the hydration request/start; exact first-send adoption of prepared workers is separately proved by the five-model API trial.
+
+**The original-chat reverse rehearsal passed** through canonical [Actions36816066674](https://github.com/adityachaudhry/synara/actions/runs/36816066674), attempt2, with Railway execution, PRIVATE networking and production-style local LFS. Both copied chats kept the same native Pi session IDs; all177,285 original history bytes, all prior UI messages, the newest private markers and the original Outbox PDF hash verified as UID10001. Native histories now have31 and57 records. Both sessions were parked and source recovery resources retained. Attempt1 stopped before deployment because the Daytona ISOLATED setting conflicted with Railway private hosts; matching production PRIVATE networking corrected it. Dev Daytona restoration is now queued through canonical CI.
+
+All65 persisted dev sessions were stopped before changing providers. Fresh native label lookups found no disk for either of the two aged failed DEV QA creation intents; both uncertain intents are retained, with no direct database deletion or active creation moved. The remaining production steps are isolated account/key/funding and verified US/EU capacity, the final writer-drained backup, canonical CI promotion, and a live production browser check. The specific production key and one-time$500 funding approvals remain pending; conditional deployment itself is already authorized. Production stays unchanged. This checkpoint supersedes older current-state and running-trial statements below.
 
 The real trial exposed two defects and verified their correction. Workers now
 provide Debian's standard `python` to Python3 alias. Incoming worker frames reserve
@@ -63,11 +77,19 @@ a one-time $500 wallet top-up; spending approval is pending and automatic top-up
 are disabled. No production key or runtime switch has been made. Keep this separate
 from the dev organization's shared quota and recovery inventory.
 
-Complete native/private-state forward and reverse restoration, isolated runtime
-resources, bounded higher-load/fault/queue/restart trials, the full release review,
-and final writer-drained copies before promotion. The dev refresh preflight passes
-with distinct databases, Git/LFS and S3 stores; actual replacement still requires a
-verified stopped controller/native-writer cohort. Conditional rollout authorization
+Dev browser acceptance, the five-model prepared trial, the25-conversation repeat,
+and original-history forward/reverse restoration have passed. Finish isolated
+production resources and capacity checks, final writer-drained copies, canonical
+CI promotion and the live production browser check. The dev business refresh completed through canonical Actions36800889286 and
+verified all28 business tables, Git refs, S3 manifests and19 full artifact/archive
+bodies. All43 native exports registered in dev with independent full GET/SHA
+verification. The copied controller home activated through canonical CI and
+retains all70 chat rows,235 message rows,69 session rows and53 private pointers,
+while keeping dev authentication/signing identity and rebinding81 projects to dev
+Gitea. Two original production-native conversations now resume in dev with the same
+native session IDs, every original history byte unchanged, all prior UI messages
+and a private Outbox PDF retained, plus new private markers. Reverse migration
+and the latest25-conversation/cancellation repeat passed. Conditional rollout authorization
 persists. All app shipping must use canonical branches and GitHub Actions.
 
 The authenticated provider catalogs and official documentation currently identify
@@ -113,3 +135,5 @@ Sources: [Claude models](https://platform.claude.com/docs/en/models/overview),
 [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
 [Pi release](https://pi.dev/changelog),
 [Rivet architecture](https://rivet.dev/docs/architecture/).
+
+Privileged Git format handling follows [Git's repository-version contract](https://git-scm.com/docs/repository-version): formats0/1 without extensions share a layout. Unknown extensions remain rejected; imported configuration stays inert recovery data before root Git runs.

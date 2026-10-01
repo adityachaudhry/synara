@@ -177,6 +177,7 @@ try {
     createdThreads.add(f.threadId);
   }
   const turn = async (f, kind, text) => {
+    const previousTurnId = (await rpc('orchestration.getThreadDetailSnapshot', { threadId: f.threadId })).thread.latestTurn?.turnId;
     const messageId = randomUUID(); const start = Date.now();
     await command({ type: 'thread.turn.start', threadId: f.threadId, message: { messageId, role: 'user', text, attachments: [] }, runtimeMode: 'full-access', interactionMode: 'default' });
     let snapshot;
@@ -188,7 +189,7 @@ try {
       if (firstTextObservedMs === null && userIndex >= 0 && messages.slice(userIndex + 1).some(m => m.role === 'assistant' && m.text)) firstTextObservedMs = Date.now() - start;
       const t = snapshot?.thread?.latestTurn;
       if (userIndex >= 0 && snapshot?.thread?.activities?.some(a => a.kind === 'provider.turn.start.failed' && Date.parse(a.createdAt) >= start - 2000)) break;
-      if (snapshot?.thread?.messages?.some(m => m.id === messageId) && t?.completedAt && Date.parse(t.requestedAt) >= start - 2000) break;
+      if (snapshot?.thread?.messages?.some(m => m.id === messageId) && t?.turnId !== previousTurnId && t?.completedAt && Date.parse(t.requestedAt) >= start - 2000) break;
       await new Promise(r => setTimeout(r, 600));
     }
     const t = snapshot?.thread?.latestTurn;
@@ -309,6 +310,35 @@ try {
   assert.deepEqual(stable, bytes, 'Detached writer survived retirement');
   evidence.trials.push({ kind: 'detached-writer-stop-restore', threadId: first.threadId, beforeTick, restoredTick: bytes.tick, stable: true });
   collectOwnedWorkers();
+  if (process.argv.includes('--audit-native-retries')) for (const f of fixtures) {
+    const sandbox = await d.get([...(ownedByThread.get(f.threadId) ?? [])].at(-1));
+    const probe = `const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');process.setgroups([]);process.setgid(10001);process.setuid(10001);let entries=[];const walk=dir=>{for(const n of fs.readdirSync(dir)){const p=path.join(dir,n),s=fs.lstatSync(p);if(s.isDirectory())walk(p);else if(s.isFile()&&p.endsWith('.jsonl')){const text=fs.readFileSync(p,'utf8');if(text.includes(${JSON.stringify(f.marker)}))entries=text.trim().split('\\n').map(x=>JSON.parse(x));}}};walk('/workspace/.pi/agent/sessions');assert(entries.length);const messages=entries.filter(e=>e.type==='message'&&e.message.role==='assistant');const errors=messages.filter(e=>e.message.stopReason==='error');const omitted=new Set(entries.filter(e=>e.type==='context_edit'&&e.replacement===null).map(e=>e.targetId));const rateLimitErrors=errors.filter(e=>/rate.limit|429|tokens per min/iu.test(e.message.errorMessage??''));const result={assistantRecords:messages.length,errorRecords:errors.length,rateLimitErrors:rateLimitErrors.length,omittedRateLimitErrors:rateLimitErrors.filter(e=>omitted.has(e.id)).length,finalStopReason:messages.at(-1)?.message.stopReason};assert(result.finalStopReason!=='error'&&result.finalStopReason!=='aborted');console.log(JSON.stringify(result));`;
+    const result = await sandbox.process.executeCommand('sudo -n -E sh -lc ' + quote('node -e ' + quote(probe)), undefined, undefined, 30);
+    assert.equal(result.exitCode, 0, 'Native history must finish successfully after retries/cancellation');
+    evidence.trials.push({ kind: 'native-retry-history', threadId: f.threadId, sandboxId: sandbox.id, ...JSON.parse(result.result) }); save();
+  }
+  if (process.argv.includes('--cancel-check')) {
+    const previousTurnId = (await rpc('orchestration.getThreadDetailSnapshot', { threadId: first.threadId })).thread.latestTurn?.turnId;
+    const messageId = randomUUID(), started = Date.now();
+    await command({ type: 'thread.turn.start', threadId: first.threadId, message: { messageId, role: 'user', text: 'Use bash to sleep for 30 seconds, then read your private token. Do not edit any file.', attachments: [] }, runtimeMode: 'full-access', interactionMode: 'default' });
+    let pending;
+    while (Date.now() - started < 60000) {
+      const snapshot = await rpc('orchestration.getThreadDetailSnapshot', { threadId: first.threadId });
+      if (snapshot.thread.messages.some(m => m.id === messageId) && snapshot.thread.latestTurn?.turnId !== previousTurnId && snapshot.thread.latestTurn?.startedAt && Date.parse(snapshot.thread.latestTurn.requestedAt) >= started - 2000) { pending = snapshot.thread.latestTurn; break; }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    assert(pending && !pending.completedAt, 'Cancellation needs the actual newly running QA turn');
+    await command({ type: 'thread.turn.interrupt', threadId: first.threadId, turnId: pending.turnId });
+    let interrupted;
+    while (Date.now() - started < 90000) {
+      interrupted = (await rpc('orchestration.getThreadDetailSnapshot', { threadId: first.threadId })).thread.latestTurn;
+      if (interrupted?.turnId === pending.turnId && interrupted?.completedAt) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    evidence.trials.push({ kind: 'actual-turn-interrupt', threadId: first.threadId, state: interrupted?.state, totalMs: Date.now() - started }); save();
+    assert.equal(interrupted?.state, 'interrupted', 'Native cancellation must settle the original turn');
+    await turn(first, 'after-interrupt', `Read only ${first.note}; reply with its exact token ${first.marker}.`);
+  }
   evidence.passed = true; save();
   }
 } catch (error) { evidence.error = error.message; save(); throw error; }
