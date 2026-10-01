@@ -36,7 +36,7 @@ socket.on('message', raw => {
 });
 await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
 try {
-  for (const [index, tag] of ['orchestration.getShellSnapshot', 'provider.listModels'].entries()) {
+  for (const [index, tag] of ['server.refreshProviders', 'orchestration.getShellSnapshot', 'provider.listModels'].entries()) {
     const started = performance.now();
     const result = await new Promise((resolve, reject) => {
       const id = String(index + 1);
@@ -46,6 +46,6 @@ try {
     });
     if (tag === 'orchestration.getShellSnapshot' && !result.projects.some(p => p.id === project.projectId)) throw Error('Authorized company is absent from the shell');
     if (tag === 'provider.listModels' && !result.models.length) throw Error('Model catalog is empty');
-    console.log(JSON.stringify({ environment, tag, ms: Math.round(performance.now() - started), projects: result.projects?.length, models: result.models?.length }));
+    console.log(JSON.stringify({ environment, tag, ms: Math.round(performance.now() - started), providers: result.providers?.length, projects: result.projects?.length, models: result.models?.length }));
   }
 } finally { socket.close(); }
