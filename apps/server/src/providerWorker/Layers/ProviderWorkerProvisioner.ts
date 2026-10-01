@@ -54,6 +54,7 @@ const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 const WORKER_ARTIFACT_ARCHIVE_PATH = `${WORKER_ARTIFACT_PATH}.gz`;
 const WORKER_PHOTON_WASM_PATH = "/opt/synara/photon_rs_bg.wasm";
 const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
+const WORKER_LOG_PATH = "/opt/synara/worker.log";
 const DEFAULT_CWD = "/workspace";
 const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
@@ -97,9 +98,7 @@ if(fs.existsSync(sourceRoot))cp.execFileSync('cp',['-an',sourceRoot+'/.',targetR
   return `node -e ${shellQuote(script)}`;
 }
 
-function workerLaunchCommand(homeDir: string, artifactDigest: string, photonDigest?: string) {
-  const logsDir = `${homeDir}/state/logs`;
-  const workerLogPath = `${logsDir}/worker.log`;
+function workerLaunchCommand(artifactDigest: string, photonDigest?: string) {
   const extractArtifact = [
     'const fs=require("node:fs")',
     'const zlib=require("node:zlib")',
@@ -110,7 +109,7 @@ function workerLaunchCommand(homeDir: string, artifactDigest: string, photonDige
     `if(require("node:crypto").createHash("sha256").update(fs.readFileSync(target)).digest("hex")!==${JSON.stringify(artifactDigest)})throw Error("Worker artifact digest mismatch")`,
     ...(photonDigest ? [`if(require("node:crypto").createHash("sha256").update(fs.readFileSync(${JSON.stringify(WORKER_PHOTON_WASM_PATH)})).digest("hex")!==${JSON.stringify(photonDigest)})throw Error("Worker Photon WASM digest mismatch")`] : []),
   ].join(";");
-  return `mkdir -p ${shellQuote(logsDir)} && { node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)}; } >> ${shellQuote(workerLogPath)} 2>&1`;
+  return `{ node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)}; } >> ${shellQuote(WORKER_LOG_PATH)} 2>&1`;
 }
 
 function agentGatewayUrl(controlUrl: string): string {
@@ -766,7 +765,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         if (unprivileged) {
           const prepared = yield* workspaceRuntime.exec(input.workspace, {
-            command: `${legacyPiSessionCopyCommand(input.legacyPiResumeSessionFile)} && mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} && chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi${input.unprivileged ? "" : ` && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} /workspace`}`,
+            command: `${legacyPiSessionCopyCommand(input.legacyPiResumeSessionFile)} && mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} && chown 0:0 /workspace /workspace/.synara && chmod 755 /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi${input.repositoryBinding ? ` && chown 0:0 /workspace/repository && chmod 755 /workspace/repository && if [ -d /workspace/repository/.git ]; then chown -R 0:0 /workspace/repository/.git && chmod 755 /workspace/repository/.git && chmod -R go-w /workspace/repository/.git; fi${input.unprivileged ? "" : ` && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.cwd)}`}` : ""}`,
             timeoutSeconds: 60,
           });
           if (prepared.exitCode !== 0 || prepared.timedOut || prepared.truncated)
@@ -801,7 +800,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: workerLaunchCommand(input.homeDir, artifactDigest, photonDigest),
+          command: workerLaunchCommand(artifactDigest, photonDigest),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {
@@ -810,7 +809,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         yield* broker.waitForConnection(fence).pipe(
           Effect.onError(() => workspaceRuntime.exec(input.workspace, {
-            command: `tail -c 12000 ${shellQuote(`${input.homeDir}/state/logs/worker.log`)} 2>/dev/null`,
+            command: `tail -c 12000 ${shellQuote(WORKER_LOG_PATH)} 2>/dev/null`,
             timeoutSeconds: 3,
           }).pipe(
             Effect.timeout(Duration.seconds(5)),

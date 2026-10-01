@@ -381,7 +381,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       const previous = activeRemote ?? persistedRemote;
       const migratingToDaytona = process.env.SYNARA_WORKSPACE_RUNTIME === "daytona" &&
         previous?.workspace.runtimeKind === "railway-sandbox";
-      const prepared = previous && previous.fence.lifecycleGeneration === lifecycleGeneration;
+      const prepared = activeRemote && activeRemote.workspace.runtimeKind === "daytona-sandbox" &&
+        activeRemote.fence.lifecycleGeneration === lifecycleGeneration;
       const preparedToken = prepared ? remoteGatewayTokenByThread.get(input.threadId) : undefined;
       const agentGatewayConnection = preparedToken && agentGatewayCredentials
         ? { url: agentGatewayCredentials.mcpEndpointUrl, bearerToken: preparedToken }

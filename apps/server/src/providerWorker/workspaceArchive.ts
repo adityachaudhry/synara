@@ -3,7 +3,7 @@ import path from "node:path";
 import { Effect } from "effect";
 import type { WorkspaceRuntimeBinding, WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import { artifactApiClient } from "./artifactPublisher.ts";
-import { REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout.ts";
+import { preparePrivilegedRepository, PRIVILEGED_GIT_ENV, REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 import { S3_LFS_MOUNT_ROOT } from "./s3LfsMount.ts";
 export type WorkspaceArchiveRuntime = Pick<WorkspaceRuntimeShape, "create" | "exec" | "writeFile" | "destroy">;
@@ -111,6 +111,8 @@ def mounted_pointers(base,mounts):
  if not mounts: return {}
  root=cfg['checkoutRoot']; company=cfg['companyPath']; prefix=root+'/'+company+'/'
  if any(not ('/'+name).startswith(prefix) for name in mounts): raise ValueError('LFS mount outside company checkout')
+ if not cfg.get('gitPreparation'): raise ValueError('Missing privileged Git preparation')
+ subprocess.run(['sh','-c',cfg['gitPreparation']],check=True,stdout=subprocess.DEVNULL)
  def git(args,data=None):
   return subprocess.run(['git','-c','safe.directory='+root,'-C',root,*args],input=data,stdout=subprocess.PIPE,
    stderr=subprocess.PIPE,check=True,env={**os.environ,'GIT_NO_LAZY_FETCH':'1','GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_GLOBAL':'/dev/null'}).stdout
@@ -225,7 +227,7 @@ def digest():
  return {'sha256':h.hexdigest(),'sizeBytes':size}
 
 if action=='pack':
- mounts=workspace_mounts(); before=inventory(mounts[1]); pointers=mounted_pointers(*mounts)
+ mounts=workspace_mounts(); pointers=mounted_pointers(*mounts); before=inventory(mounts[1])
  count=0; payload=0
  def selected(member):
   global count,payload
@@ -279,11 +281,14 @@ const run = Effect.fn(function* (runtime: WorkspaceArchiveRuntime, workspace: Wo
   const excluded = ["opt/synara/provider-worker.json", "tmp/synara-repository-credential.gitconfig",
     path.posix.join(binding.homeDir, "state/secrets").replace(/^\//u, "")];
   if (action === "pack") excluded.push(path.posix.join(binding.homeDir, "state/logs").replace(/^\//u, ""));
+  const repository = binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding;
   yield* runtime.writeFile(workspace, { path: `${folder}/config.json`, mode: 0o600,
     data: JSON.stringify({ excluded, checkoutRoot: REPOSITORY_CHECKOUT_ROOT, mountRoot: S3_LFS_MOUNT_ROOT,
-      companyPath: (binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding)?.path, ...extra }) });
+      companyPath: repository?.path,
+      ...(repository ? { gitPreparation: preparePrivilegedRepository(REPOSITORY_CHECKOUT_ROOT,
+        `${repository.origin}/${repository.owner}/${repository.repository}.git`) } : {}), ...extra }) });
   const result = yield* runtime.exec(workspace, {
-    command: `python3 ${quote(`${folder}/transfer.py`)} ${quote(`${folder}/config.json`)} ${quote(action)}`,
+    command: `${PRIVILEGED_GIT_ENV}; python3 ${quote(`${folder}/transfer.py`)} ${quote(`${folder}/config.json`)} ${quote(action)}`,
     timeoutSeconds: 600,
   });
   // Never copy Python network exceptions or signed URLs into controller logs.

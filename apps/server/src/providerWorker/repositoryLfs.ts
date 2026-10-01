@@ -89,11 +89,9 @@ function updateAttributes() {
         if (fs.existsSync(target)) {
           const stat = fs.lstatSync(target);
           if (!stat.isFile()) throw Error("Company LFS path is not a regular file: " + file.name);
-          if (stat.size > 1024) {
+          if (stat.size > 1024 || fs.readFileSync(target, "utf8") !== file.pointer) {
             if (!await matches(target, file)) throw Error("Local company binary edits preserved without overwrite: " + file.name);
             fs.writeFileSync(target, file.pointer);
-          } else if (fs.readFileSync(target, "utf8") !== file.pointer) {
-            throw Error("Local company binary edits preserved without overwrite: " + file.name);
           }
         } else {
           fs.writeFileSync(target, file.pointer);

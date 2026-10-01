@@ -7,6 +7,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { availableDaytonaContainerTargets } from '../../apps/server/src/workspaceRuntime/daytonaRegions.ts';
 import { getUnaryRpcCapacityRetryDelayMs } from '../../apps/web/src/lib/expensiveReadRetry.ts';
+import { hydrateLfs, uncoverLfs, preparePrivilegedRepository, makeRepositoryCredentialConfig, REPOSITORY_CREDENTIAL_CONFIG_PATH } from '../../apps/server/src/providerWorker/repositoryCheckout.ts';
+import { S3_LFS_MOUNT_ROOT } from '../../apps/server/src/providerWorker/s3LfsMount.ts';
 const require = createRequire(new URL('../../apps/server/package.json', import.meta.url));
 const { Daytona } = await import(require.resolve('@daytona/sdk'));
 const { default: WebSocket } = await import(require.resolve('ws'));
@@ -91,7 +93,7 @@ try {
     console.log(JSON.stringify({ phase: 'pool', ...evidence.pool })); save();
     assert(!pool.errorReason && pool.currentSize === pool.pool, 'Warm pool did not become ready');
   }
-  const companies = ['chipsage', 'amorphiq', 'ansatz-labs', 'abraxas'];
+  const companies = ['chipsage', 'amorphiq', 'hubflow', 'abraxas'];
   if (cleanupSource) {
     projects.push(...cleanupSource.projects);
     fixtures.push(...(cleanupSource.fixtures ?? []));
@@ -222,13 +224,41 @@ try {
     if (prepareMs > 0) assert.equal(ids[0], evidence.preparedWorkerIds[f.threadId][0], 'The first send must use its prepared worker');
     const sandbox = await d.get(ids[0]);
     const other = companies.find(company => company !== f.company);
-    const check = `const fs=require('node:fs');process.setgroups([]);process.setgid(10001);process.setuid(10001);const denied=p=>{try{fs.accessSync(p,fs.constants.R_OK);return false}catch{return true}};const checks={uid:process.getuid()===10001,rootDenied:denied('/root'),sudoDenied:require('node:child_process').spawnSync('sudo',['-n','true'],{stdio:'ignore'}).status!==0,controllerCredentialDenied:denied('/opt/synara/provider-worker.json'),repositoryCredentialDenied:denied('/root/.synara-repository-credential.gitconfig'),storageCredentialDenied:denied('/root/.synara-s3-lfs.passwd'),otherCompanyAbsent:!fs.existsSync(${JSON.stringify('/workspace/repository/companies/' + other)}),privateMarker:fs.readFileSync(${JSON.stringify('/workspace/repository/companies/' + f.company + '/' + f.note)},'utf8').trim()===${JSON.stringify(f.marker)}};console.log(JSON.stringify(checks));if(Object.values(checks).some(x=>!x))process.exit(1)`;
+    const check = `const fs=require('node:fs');process.setgroups([]);process.setgid(10001);process.setuid(10001);const denied=(p,mode=fs.constants.R_OK)=>{try{fs.accessSync(p,mode);return false}catch{return true}};const renameDenied=p=>{const to=p+'.qa-'+${JSON.stringify(runId)};try{fs.renameSync(p,to);fs.renameSync(to,p);return false}catch(error){if(fs.existsSync(to))throw error;return ['EACCES','EPERM','EBUSY'].includes(error.code)}};const checks={uid:process.getuid()===10001,rootDenied:denied('/root'),sudoDenied:require('node:child_process').spawnSync('sudo',['-n','true'],{stdio:'ignore'}).status!==0,controllerCredentialDenied:denied('/opt/synara/provider-worker.json'),repositoryCredentialDenied:denied('/root/.synara-repository-credential.gitconfig'),storageCredentialDenied:denied('/root/.synara-s3-lfs.passwd'),workspaceParentProtected:denied('/workspace',fs.constants.W_OK),privateHomeParentProtected:denied('/workspace/.synara',fs.constants.W_OK),repositoryParentProtected:denied('/workspace/repository',fs.constants.W_OK),gitMetadataProtected:denied('/workspace/repository/.git',fs.constants.W_OK),rootLogProtected:denied('/opt/synara/worker.log',fs.constants.W_OK),repositoryReplacementDenied:renameDenied('/workspace/repository'),gitReplacementDenied:renameDenied('/workspace/repository/.git'),otherCompanyAbsent:!fs.existsSync(${JSON.stringify('/workspace/repository/companies/' + other)}),privateMarker:fs.readFileSync(${JSON.stringify('/workspace/repository/companies/' + f.company + '/' + f.note)},'utf8').trim()===${JSON.stringify(f.marker)}};console.log(JSON.stringify(checks));if(Object.values(checks).some(x=>!x))process.exit(1)`;
     const result = await sandbox.process.executeCommand('sudo -n -E sh -lc ' + quote('node -e ' + quote(check)), undefined, undefined, 15);
     evidence.trials.push({ kind: 'native-isolation-command', threadId: f.threadId, sandboxId: ids[0], exitCode: result.exitCode, output: result.result }); save();
     assert.equal(result.exitCode, 0, 'Native UID/credential/company isolation command failed');
     const checks = JSON.parse(result.result);
     evidence.trials.push({ kind: 'native-isolation', threadId: f.threadId, sandboxId: ids[0], checks }); save();
     assert.equal(result.exitCode, 0, 'Native UID/credential/company isolation failed');
+    if (f.company === 'hubflow') {
+      // Actual 364-byte company material: native download -> S3 bind -> exact body.
+      const checkout = '/workspace/repository', companyPath = 'companies/hubflow';
+      const file = companyPath + '/inbox/box/HubFlow Seed - Dataroom/Customer Testimonials/EASE Case Study.html';
+      const repositoryUrl = vars.SYNARA_GITEA_ORIGIN + '/' + vars.SYNARA_GITEA_OWNER + '/' + vars.SYNARA_GITEA_REPOSITORY + '.git';
+      assert(vars.SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION, 'QA needs the configured DEV repository credential');
+      const credential = makeRepositoryCredentialConfig({ origin: vars.SYNARA_GITEA_ORIGIN }, vars.SYNARA_PROVIDER_WORKER_REPOSITORY_AUTHORIZATION);
+      const writeCredential = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(REPOSITORY_CREDENTIAL_CONFIG_PATH)},${JSON.stringify(credential)},{flag:'wx',mode:0o600})`;
+      const verify = `const fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require('node:crypto');const body=fs.readFileSync(${JSON.stringify(checkout + '/' + file)});assert.equal(body.length,364);assert.equal(crypto.createHash('sha256').update(body).digest('hex'),'ecbb4447ef0d53c9ee414d6f9e1f0e5c73d8475f8fb411364611712c4762914b');console.log('verified real 364-byte LFS body')`;
+      const plans = [
+        { kind: 'small-lfs-native-download', command: [
+          preparePrivilegedRepository(checkout, repositoryUrl),
+          uncoverLfs(checkout, companyPath, S3_LFS_MOUNT_ROOT, file),
+          hydrateLfs(checkout, companyPath, repositoryUrl, vars.SYNARA_GITEA_ORIGIN, REPOSITORY_CREDENTIAL_CONFIG_PATH, undefined, file),
+          'node -e ' + quote(verify),
+        ].join(' && ') },
+        { kind: 'small-lfs-valid-body-remount', command: [
+          hydrateLfs(checkout, companyPath, repositoryUrl, vars.SYNARA_GITEA_ORIGIN, REPOSITORY_CREDENTIAL_CONFIG_PATH, S3_LFS_MOUNT_ROOT, file),
+          'node -e ' + quote(verify),
+        ].join(' && ') },
+      ];
+      for (const plan of plans) {
+        const protectedCommand = 'set -eu; node -e ' + quote(writeCredential) + '; trap ' + quote('rm -f ' + quote(REPOSITORY_CREDENTIAL_CONFIG_PATH)) + ' EXIT; ' + plan.command;
+        const result = await sandbox.process.executeCommand('sudo -n -E sh -lc ' + quote(protectedCommand), undefined, undefined, 120);
+        evidence.trials.push({ kind: plan.kind, threadId: f.threadId, sandboxId: ids[0], exitCode: result.exitCode, output: result.result }); save();
+        assert.equal(result.exitCode, 0, plan.kind + ' failed against the real company object');
+      }
+    }
   }
   for (let repeat = 0; repeat < 3; repeat++) {
     const results = await Promise.allSettled(fixtures.map(f => turn(f, 'warm-' + repeat, `Read only your private file ${f.note}; reply with its exact token ${f.marker}, the company name and nothing else. Do not call any other tool.`)));

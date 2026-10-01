@@ -412,7 +412,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         if (binding && runtimePayloadRecord(binding.runtimePayload).workspacePreparation) {
           const adapter = yield* registry.getByProvider(binding.provider);
-          if (entry.preserveSession) {
+          // A successful Pi launch may outlive a transient metadata-write failure.
+          if (yield* adapter.hasSession(threadId)) {
+            yield* directory.upsert({ threadId, provider: binding.provider,
+              runtimePayload: { workspacePreparation: null } });
+          } else if (entry.preserveSession || hasResumeCursor(binding.resumeCursor)) {
             yield* (adapter.parkSession ?? adapter.stopSession)(threadId);
             yield* directory.upsert({ threadId, provider: binding.provider, status: "stopped",
               runtimePayload: { workspacePreparation: null } });
@@ -422,7 +426,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }
         }
         preparations.delete(threadId);
-        yield* Effect.logInfo("unused workspace preparation retired", { threadId });
+        yield* Effect.logInfo("workspace preparation released", { threadId });
       }));
     const schedulePreparationExpiry = (threadId: ThreadId, entry: Preparation) => {
       entry.timer = setTimeout(() => {
@@ -476,7 +480,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             entry.preserveSession = true;
           }
           entry.generation = lease.generation;
-          yield* directory.upsert({ threadId, provider: "pi", status: "starting", lifecycleGeneration: lease.generation,
+          // Keep the old stopped worker's fence coherent until the adapter publishes its full replacement.
+          yield* directory.upsert({ threadId, provider: "pi", status: "stopped",
+            ...(existing ? {} : { lifecycleGeneration: lease.generation }),
             runtimePayload: { workspacePreparation: { ...owner, repository, expiresAt: entry.expiresAt,
               preserveSession: entry.preserveSession === true } } });
           lease.commit();
@@ -1514,12 +1520,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
             const prepared = preparations.get(threadId);
             if (prepared) {
-              preparations.delete(threadId); clearTimeout(prepared.timer);
               if (prepared.ready && prepared.generation) lease.adopt(prepared.generation);
-              yield* directory.upsert({ threadId, provider: binding.provider,
-                runtimePayload: { workspacePreparation: null } });
             }
             const startGeneration = prepared?.ready && prepared.generation ? prepared.generation : lease.generation;
+            // Adoption is one attempt; a failed launch must renew the retired worker's generation.
+            if (prepared) prepared.ready = false;
 
             const resumed = yield* adapter.startSession({
               threadId,
@@ -1544,12 +1549,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 lifecycleGeneration: startGeneration,
               }).pipe(
                 Effect.andThen(
-                  requiresCredentialRotation
+                  requiresCredentialRotation || prepared
                     ? directory.upsert({
                         threadId,
                         provider: binding.provider,
                         runtimePayload: {
-                          [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                          ...(requiresCredentialRotation ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false } : {}),
+                          ...(prepared ? { workspacePreparation: null } : {}),
                         },
                       })
                     : Effect.void,
@@ -1557,6 +1563,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ),
             );
             lease.commit();
+            if (prepared) { preparations.delete(threadId); clearTimeout(prepared.timer); }
             return adapter;
           }),
         );
@@ -1763,13 +1770,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             if (prepared) {
               if (input.provider !== "pi" || JSON.stringify(input.repositoryBinding) !== prepared.repository)
                 return yield* toValidationError("ProviderService.startSession", "Prepared workspace belongs to different company coordinates.");
-              preparations.delete(threadId);
-              clearTimeout(prepared.timer);
               if (prepared.ready && prepared.generation) lease.adopt(prepared.generation);
-              yield* directory.upsert({ threadId, provider: input.provider,
-                runtimePayload: { workspacePreparation: null } });
             }
             const startGeneration = prepared?.ready && prepared.generation ? prepared.generation : lease.generation;
+            if (prepared) prepared.ready = false;
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
               // Most providers use this outer deadline. Capacity-managed
@@ -1837,12 +1841,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       provider: session.provider,
                       runtimePayload: {
                         [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                        ...(prepared ? { workspacePreparation: null } : {}),
                       },
                     }),
                   ),
                 ),
               );
               lease.commit();
+              if (prepared) { preparations.delete(threadId); clearTimeout(prepared.timer); }
               if (
                 replacementFence !== undefined &&
                 providerInterruptionFences.get(threadId) === replacementFence

@@ -18,7 +18,7 @@ import {
 } from "../providerPersistence.ts";
 import type { WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import { ProviderWorkerProvisioningError } from "./Errors.ts";
-import { REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout.ts";
+import { preparePrivilegedRepository, REPOSITORY_CHECKOUT_ROOT } from "./repositoryCheckout.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -67,8 +67,10 @@ const listCheckoutChangedPaths = Effect.fnUntraced(function* (input: {
   if (!repositoryBinding || input.binding.repositoryUnavailable) return [];
   const root = REPOSITORY_CHECKOUT_ROOT;
   const scopedPath = repositoryBinding.path;
+  const repositoryUrl = `${repositoryBinding.origin}/${repositoryBinding.owner}/${repositoryBinding.repository}.git`;
   const command = [
-    `git -C ${shellQuote(root)} diff --name-only -z --diff-filter=ACMRTUXB ${shellQuote(input.binding.repositoryCheckout!.commit)} -- ${shellQuote(scopedPath)}`,
+    preparePrivilegedRepository(root, repositoryUrl),
+    `git -C ${shellQuote(root)} diff --no-ext-diff --no-textconv --name-only -z --diff-filter=ACMRTUXB ${shellQuote(input.binding.repositoryCheckout!.commit)} -- ${shellQuote(scopedPath)}`,
     `git -C ${shellQuote(root)} ls-files --others --exclude-standard -z -- ${shellQuote(scopedPath)}`,
   ].join(" && ");
   const result = yield* input.workspaceRuntime.exec(input.binding.workspace, {

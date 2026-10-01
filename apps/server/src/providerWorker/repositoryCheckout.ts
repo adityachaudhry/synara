@@ -16,10 +16,37 @@ const PREVIOUS_COMMIT_MARKER = "__SYNARA_PREVIOUS_COMMIT__=";
 const CHANGED_FILES_MARKER = "__SYNARA_CHANGED_FILES__=";
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
+// Inherited by nested Git/LFS processes, including plans with a temporary credential config.
+export const PRIVILEGED_GIT_ENV = "export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=http:https GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false";
+
+/** Keep imported configuration as recovery data; root Git reads only our active configuration. */
+export function preparePrivilegedRepository(checkoutRoot: string, repositoryUrl: string): string {
+  const url = new URL(repositoryUrl);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+    throw new Error("Privileged repository access requires an HTTP(S) URL without credentials.");
+  const config = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tsparseCheckout = true\n\tsparseCheckoutCone = true\n\thooksPath = /dev/null\n\tfsmonitor = false\n[remote "origin"]\n\turl = ${JSON.stringify(repositoryUrl)}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n\tpromisor = true\n\tpartialclonefilter = blob:none\n[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n`;
+  const script = `const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto');
+const root=${JSON.stringify(checkoutRoot)},config=${JSON.stringify(config)},metadata=path.join(root,'.git');
+function directory(file){const st=fs.lstatSync(file);if(!st.isDirectory()||st.isSymbolicLink()||fs.realpathSync(file)!==file)throw Error('Unsupported repository directory; original retained');}
+for(let dir=root;dir!=='/';dir=path.dirname(dir))directory(dir);
+directory(metadata);
+function metadataTree(dir){for(const name of fs.readdirSync(dir)){const file=path.join(dir,name),st=fs.lstatSync(file);if(st.isDirectory()&&!st.isSymbolicLink())metadataTree(file);else if(!st.isFile()||st.nlink!==1)throw Error('Unsupported private Git link; original retained');}}
+metadataTree(metadata);
+for(const rel of ['commondir','worktrees','objects/info/alternates','objects/info/http-alternates','info/grafts'])if(fs.existsSync(path.join(metadata,rel)))throw Error('Unsupported private Git layout; original retained');
+const active=path.join(metadata,'config');
+for(const name of ['config','config.worktree']){const file=path.join(metadata,name);if(!fs.existsSync(file))continue;const st=fs.lstatSync(file);if(!st.isFile()||st.nlink!==1||fs.realpathSync(file)!==file)throw Error('Unsafe private Git config; original retained');}
+const entries=cp.execFileSync('git',['config','--file',active,'--no-includes','--null','--list']).toString().split('\\0').filter(Boolean);
+for(const entry of entries){const i=entry.indexOf('\\n'),key=entry.slice(0,i),value=entry.slice(i+1);if((key==='core.repositoryformatversion'&&value!=='0')||key.startsWith('extensions.'))throw Error('Unsupported private Git format; original retained');}
+const original=fs.readFileSync(active);
+if(!original.equals(Buffer.from(config))){const saved=active+'.synara-original-'+crypto.createHash('sha256').update(original).digest('hex');if(!fs.existsSync(saved))fs.writeFileSync(saved,original,{flag:'wx',mode:0o600});else if(!fs.lstatSync(saved).isFile()||fs.lstatSync(saved).nlink!==1||!fs.readFileSync(saved).equals(original))throw Error('Private Git config recovery copy conflicts; original retained');const temporary=active+'.synara-'+crypto.randomUUID();fs.writeFileSync(temporary,config,{flag:'wx',mode:0o644});fs.renameSync(temporary,active);}
+`;
+  return `{ ${PRIVILEGED_GIT_ENV}; node -e ${shellQuote(script)}; }`;
+}
+
 export function hydrateLfs(checkoutRoot: string, companyPath: string, repositoryUrl: string, sourceOrigin: string, credentialConfigPath?: string, mountRoot?: string, onlyPath?: string): string {
   const script = repositoryLfsScript({ checkoutRoot, companyPath, repositoryUrl, sourceOrigin,
     ...(credentialConfigPath ? { credentialConfigPath } : {}), ...(mountRoot ? { mountRoot } : {}), ...(onlyPath ? { onlyPath } : {}) });
-  return `GIT_TERMINAL_PROMPT=0 ${credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(credentialConfigPath)} ` : ""}node -e ${shellQuote(script)}`;
+  return `${preparePrivilegedRepository(checkoutRoot, repositoryUrl)} && GIT_TERMINAL_PROMPT=0 ${credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(credentialConfigPath)} ` : ""}node -e ${shellQuote(script)}`;
 }
 
 export function uncoverLfs(checkoutRoot: string, companyPath: string, mountRoot?: string, onlyPath?: string): string {
@@ -56,9 +83,10 @@ export function makeRepositoryCheckoutPlan(input: {
   const sparseGit = `${authenticatedGit} -c core.sparseCheckout=true -c core.sparseCheckoutCone=true`;
   const sparsePath = path.posix.join(checkoutRoot, ".git", "info", "sparse-checkout");
   const command = [
-    "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
+    `set -eu; export GIT_LFS_SKIP_SMUDGE=1; ${PRIVILEGED_GIT_ENV}`,
     `mkdir -p ${shellQuote(checkoutRoot)}`,
     `${input.credentialConfigPath ? `GIT_CONFIG_GLOBAL=${shellQuote(input.credentialConfigPath)} ` : ""}GIT_TERMINAL_PROMPT=0 git clone ${input.companyOnly ? `--single-branch --branch ${shellQuote(executionRef)} ` : ""}--no-checkout --depth=1 --filter=blob:none --config core.sparseCheckout=true --config core.sparseCheckoutCone=true ${shellQuote(repositoryUrl)} ${shellQuote(checkoutRoot)}`,
+    preparePrivilegedRepository(checkoutRoot, repositoryUrl),
     `mkdir -p ${shellQuote(path.posix.dirname(sparsePath))}`,
     `printf '%s' ${shellQuote(sparseCheckoutPattern(input.binding.path))} > ${shellQuote(sparsePath)}`,
     input.companyOnly
@@ -116,7 +144,7 @@ export function makeRepositoryReconcilePlan(input: {
   const restoreSelectedOnFailure = `if [ "$stash_created" = 1 ]; then ${git} stash pop --index --quiet >/dev/null 2>&1 || true; fi`;
   const discardSelectedOnSuccess = `if [ "$stash_created" = 1 ]; then ${git} stash drop --quiet 'stash@{0}' >/dev/null 2>&1 || true; fi`;
   const command = [
-    "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
+    `set -eu; export GIT_LFS_SKIP_SMUDGE=1; ${preparePrivilegedRepository(checkoutRoot, repositoryUrl)}`,
     `previous="$(${git} rev-parse HEAD)"`,
     `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(input.commit)}`,
     uncoverLfs(checkoutRoot, input.binding.path, input.mountRoot),
@@ -161,7 +189,7 @@ export function makeRepositoryRefreshPlan(input: {
   return {
     cwd: path.posix.join(checkoutRoot, input.binding.path),
     command: [
-      "set -eu; export GIT_LFS_SKIP_SMUDGE=1",
+      `set -eu; export GIT_LFS_SKIP_SMUDGE=1; ${preparePrivilegedRepository(checkoutRoot, repositoryUrl)}`,
       `previous="$(${git} rev-parse HEAD)"`,
       `if ${git} remote get-url origin >/dev/null 2>&1; then ${git} remote set-url origin ${shellQuote(repositoryUrl)}; fi`,
       `${authenticatedGit} fetch --no-tags --filter=blob:none ${shellQuote(repositoryUrl)} ${shellQuote(executionRef)}`,
