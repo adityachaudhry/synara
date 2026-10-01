@@ -60,8 +60,8 @@
     "eu": 2,
     "us": 2
   },
-  "productionPromoted": false,
-  "devDataRefreshExecuted": false,
+  "productionPromoted": true,
+  "devDataRefreshExecuted": true,
   "privateReceiptsRoot": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration",
   "limits": [
     "Five latest-model conversations; no new 50/98 or soak pass",
@@ -70,9 +70,9 @@
     "Independent model load budgets, production Daytona funding and private migration/reverse proof remain open"
   ],
   "latestOperationCheckpoint": {
-    "verifiedAtUtc": "2026-10-01T04:50:42.058282+00:00",
-    "devApplicationCommit": "fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374",
-    "devActions": "https://github.com/adityachaudhry/synara/actions/runs/36810203135",
+    "verifiedAtUtc": "2026-10-01T07:17:10.975505+00:00",
+    "devApplicationCommit": "4fceb8202e999c9321d2e19d6bc77c007c620627",
+    "devActions": "https://github.com/adityachaudhry/synara/actions/runs/36817023734",
     "hardenedFiveModelTrial": {
       "verifiedAt": "2026-10-01T02:34:04.149811+00:00",
       "runId": "43d9b176-632b-43ed-b65b-2966ea688fc4",
@@ -158,7 +158,7 @@
       "receipt": "output/model-hydration/hardened-concurrent-25/native-allocation-probe.receipt.json"
     },
     "devDataRefreshExecuted": true,
-    "productionPromoted": false,
+    "productionPromoted": true,
     "reverseMigration": {
       "verifiedAt": "2026-10-01T04:50:42.058282+00:00",
       "passed": true,
@@ -236,7 +236,7 @@
       "businessDisksPreserved": true,
       "unknownOlderPoolsPreserved": true,
       "actualUsDiskQuotaGiB": 300,
-      "productionQuotaVerified": false
+      "productionQuotaVerified": true
     },
     "browserAcceptance": {
       "verifiedAt": "2026-10-01T04:25:49.171127+00:00",
@@ -287,11 +287,7 @@
       "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/browser-acceptance/receipt.json",
       "hydrationCoverage": "Real browser dispatch and started response before first message; exact prepared-worker consumption separately proved by five-model trial."
     },
-    "pending": [
-      "Isolated production Daytona key, funding and actual US/EU capacity",
-      "Final writer-drained production backup and canonical CI promotion",
-      "Live production browser verification"
-    ],
+    "pending": [],
     "originalPrivateStateReverse": {
       "verifiedAt": "2026-10-01T04:50:42.058282+00:00",
       "passed": true,
@@ -318,10 +314,748 @@
       "coverageLimit": "Verifies every original native history byte, all prior UI messages, newest private markers and original PDF bytes; does not separately hash every forward-added native record."
     },
     "devRestoration": {
-      "status": "pending canonical CI",
+      "status": "success",
       "runtime": "daytona",
+      "commit": "4fceb8202e999c9321d2e19d6bc77c007c620627",
+      "actionsUrl": "https://github.com/adityachaudhry/synara/actions/runs/36817023734",
+      "networkIsolation": "ISOLATED",
       "s3Lfs": true,
-      "networkIsolation": "ISOLATED"
-    }
-  }
+      "matchingReadySparesPerRegion": 2
+    },
+    "workAccounts": {
+      "railwayIdentity": "aditya@glasswing.vc",
+      "railwayWorkspace": "Glasswing",
+      "railwayProject": "v3",
+      "daytonaOrganization": "Glasswing Ventures",
+      "daytonaOrganizationId": "ddeabfdc-9838-4c08-83a4-e12ba87edb11",
+      "dedicatedProductionKeyStored": true,
+      "newBillingSetupRequired": false,
+      "sharedQuotaAndSandboxTrustBoundary": true,
+      "usLimits": {
+        "cpu": 100,
+        "ramGiB": 200,
+        "diskGiB": 300
+      },
+      "euLimits": {
+        "cpu": 250,
+        "ramGiB": 500,
+        "diskGiB": 2000
+      },
+      "normalProductionSlots": 25,
+      "maintenanceSlots": 2,
+      "exclusivePoolOwner": false,
+      "capacitySupportIssue": 19388,
+      "capacityFollowupSent": true
+    },
+    "productionCutover": {
+      "glasswingCommit": "4327194c29df9d3920051c8474ad5f3e633cadc2",
+      "glasswingActions": "https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36825282207",
+      "glasswingActionsResult": "success",
+      "synaraCandidate": "f529b366803d01bc2dc9b838fc94bc4a5fda3a33",
+      "synaraActions": "https://github.com/adityachaudhry/synara/actions/runs/36825790168",
+      "synaraActionsResult": "success",
+      "candidateTreesExactlyReviewedDev": true,
+      "bothGitHistoriesRetained": true,
+      "localApplicationDeployments": false,
+      "finalControllerBackup": {
+        "tables": 49,
+        "auxiliaryFiles": 125,
+        "bytes": 73019392,
+        "sha256": "ee26a75d59a1f54e37d3eb9db12cd5ade2c26833f51ecd9675ad827da68a984a",
+        "sameLiveHomeRetained": true,
+        "databaseReplaced": false
+      },
+      "finalStoreBackups": {
+        "businessTables": 28,
+        "giteaTables": 116,
+        "gitRefs": 126,
+        "sourceVolumesRetained": true
+      },
+      "productionPrivateArchives": {
+        "historicalCount": 43,
+        "historicalBytes": 1125852216,
+        "freshActiveDiskCount": 1,
+        "freshActiveDiskBytes": 14580894,
+        "allFullDownloadShaVerified": true,
+        "originalCheckpointsRetained": true
+      },
+      "nativeLfs": {
+        "bucket": "organized-crate-5eyu-d1-7r0",
+        "prefix": "gitea-lfs/",
+        "nativeBackend": "minio",
+        "historicalBodies": 1317,
+        "historicalBytes": 2370831939,
+        "allFullGetShaVerified": true,
+        "finalLocalSourceShaVerified": true,
+        "destinationUnchangedAtFinalDrain": true,
+        "oldNativeDownloadVerified": true,
+        "newBinaryNativeUploadDownloadAndS3ShaVerified": true,
+        "originalLocalBodiesRetained": true,
+        "canonicalGitRefsChanged": false
+      },
+      "portableCompanyS3WorkspacesEnabled": false,
+      "synaraCommit": "f529b366803d01bc2dc9b838fc94bc4a5fda3a33",
+      "embeddedUi": {
+        "synaraCommit": "f529b366803d01bc2dc9b838fc94bc4a5fda3a33",
+        "packageSha256": "bdbf57d6ff173116ddf7fa24e90cf1fa3e583c8782a1687d16a336fb9fe6fc6c",
+        "publishActions": "https://github.com/adityachaudhry/synara/actions/runs/36825790129",
+        "publishActionsResult": "success",
+        "webActions": "https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36826036741",
+        "webActionsResult": "success",
+        "resolvedSourceMatchesController": true
+      }
+    },
+    "preCutoverProduction": {},
+    "production": {
+      "promoted": true,
+      "daytonaKeyCreated": true,
+      "daytonaFundingRequired": false,
+      "daytonaFundingPerformed": false,
+      "oldRailwayRuntimeRetained": true,
+      "workspaceRuntime": "daytona",
+      "liveHealth": {
+        "health": {
+          "status": 200,
+          "body": {
+            "status": "ok",
+            "startupReady": true,
+            "pushBusReady": true,
+            "keybindingsReady": true,
+            "terminalSubscriptionsReady": true,
+            "orchestrationSubscriptionsReady": true,
+            "projection": {
+              "state": "healthy",
+              "inFlight": false,
+              "retryAttempts": 0,
+              "hasFailure": false,
+              "highWaterSequence": 24854,
+              "lagByProjector": {},
+              "missingProjectors": []
+            }
+          }
+        },
+        "version": {
+          "status": 200,
+          "body": {
+            "release": "glasswing-synara-production-20260903.1",
+            "commit": "f529b366803d01bc2dc9b838fc94bc4a5fda3a33",
+            "protocolVersion": 1
+          }
+        },
+        "verifiedAt": "2026-10-01T06:43:44.133Z"
+      },
+      "liveHome": "/data/userdata/glasswingos-current",
+      "liveDatabaseReplaced": false
+    },
+    "productionBrowserAcceptance": {
+      "verifiedAt": "2026-10-01T07:13:27.423Z",
+      "origin": "https://app.glasswing.vc",
+      "identity": "aditya@glasswing.vc",
+      "modelPicker": [
+        "Fable 5.1",
+        "Opus 5.5",
+        "Sonnet 5.5",
+        "GPT-6.1 Sol",
+        "GPT-6 Astra"
+      ],
+      "navigationPreparationRpc": "provider.prepareWorkspace",
+      "navigationPreparationBeforeAnyMessage": true,
+      "solRealDeckRead": true,
+      "temporaryMarkdownPreview": true,
+      "temporaryPdfPreview": true,
+      "originalCompanyDeckPagesVisuallyRendered": [
+        1,
+        2
+      ],
+      "savedToCompany": false,
+      "newArtifactThreadId": "e4b8a0db-9db0-4c3f-81bc-29ca87d0516d",
+      "newArtifactMarker": "GW-PROD-20261001",
+      "expiredPreparationSeconds": 432.033,
+      "preparationLeaseSeconds": 300,
+      "freshPreparedNavigationToSendSeconds": 14.594,
+      "freshPreparedThreadId": "2f8e0444-6cb0-4701-879e-e1e73f8c543e",
+      "freshPreparedMarkerInAnswer": true,
+      "originalConversationId": "36762722-b75d-42dd-9212-e22e7daaf6a3",
+      "originalConversationMessagesVisible": true,
+      "originalPrivatePdfVisuallyRendered": true,
+      "opusHistoryContinuation": true,
+      "originalPdfPageCountInAnswer": 78,
+      "originalHistoryMarkerInAnswer": true,
+      "downloadReceipt": "download.receipt.json",
+      "nativeHistoryReceipt": "original-native-history.receipt.json",
+      "screenshots": [
+        "markdown-preview.png",
+        "pdf-preview.png",
+        "prepared-response.png",
+        "original-history-continuation.png"
+      ],
+      "unitTestsRun": false,
+      "complete": true,
+      "download": {
+        "downloadedByActualBrowserClick": true,
+        "absolutePath": "/Users/adityachaudhry/Downloads/production-acceptance-20261001.pdf",
+        "bytes": 8491,
+        "sha256": "20bfbc9a64dac322063fb13f1dc0659b11650b05cdff956fd92f56f093c7e597",
+        "registeredBodyHashMatched": true
+      },
+      "nativeHistory": {
+        "verifiedAt": "2026-10-01T07:11:04.806Z",
+        "controllerCommit": "f529b366803d01bc2dc9b838fc94bc4a5fda3a33",
+        "threadId": "36762722-b75d-42dd-9212-e22e7daaf6a3",
+        "workspaceRuntime": "daytona",
+        "nativeRuntimeId": "e33bde7a-4af0-4c2a-88ef-9c25d26261f8",
+        "turns": [
+          {
+            "thread_id": "e4b8a0db-9db0-4c3f-81bc-29ca87d0516d",
+            "state": "completed",
+            "requested_at": "2026-10-01T06:49:52.966Z",
+            "started_at": "2026-10-01T06:50:03.808Z",
+            "completed_at": "2026-10-01T06:50:45.026Z",
+            "readinessMs": 10842
+          },
+          {
+            "thread_id": "2f8e0444-6cb0-4701-879e-e1e73f8c543e",
+            "state": "completed",
+            "requested_at": "2026-10-01T07:07:01.922Z",
+            "started_at": "2026-10-01T07:07:04.728Z",
+            "completed_at": "2026-10-01T07:07:24.972Z",
+            "readinessMs": 2806
+          },
+          {
+            "thread_id": "36762722-b75d-42dd-9212-e22e7daaf6a3",
+            "state": "completed",
+            "requested_at": "2026-10-01T07:08:45.500Z",
+            "started_at": "2026-10-01T07:09:14.867Z",
+            "completed_at": "2026-10-01T07:09:40.974Z",
+            "readinessMs": 29367
+          }
+        ],
+        "nativeProofExitCode": 0,
+        "complete": true,
+        "nativeProof": {
+          "uid": 10001,
+          "nativeSessionId": "01a0e9fc-40b0-70eb-907d-e38179f00388",
+          "originalPrefixBytes": 85502,
+          "originalPrefixSha256": "99e22e62e77cd778bfb45eed9faf53f254be1b2ffb4cefb206a8d26486290684",
+          "nativeEntries": 54,
+          "originalEntries": 44,
+          "privateFiles": [
+            {
+              "path": "/workspace/.synara/outbox/Hamiltonic_Diligence_Report.pdf",
+              "bytes": 241303,
+              "sha256": "b5bc6d3738e6c2aefbe96740a993b99268b0d4784611d22e0361779ce6e2cdc6"
+            }
+          ],
+          "productionMarkerVerified": true
+        }
+      },
+      "readinessCoverage": "One production send 14.594s after fresh workspace preparation navigation; exact worker adoption is separately proved by the dev five-model trials."
+    },
+    "originalProductionControllerDataPreserved": {
+      "productionCommit": "f529b366803d01bc2dc9b838fc94bc4a5fda3a33",
+      "sameOriginalHome": true,
+      "checks": {
+        "projection_projects": {
+          "originalRows": 82,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "projection_threads": {
+          "originalRows": 70,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "projection_thread_messages": {
+          "originalRows": 235,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "message_text_segments": {
+          "originalRows": 48,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "projection_thread_proposed_plans": {
+          "originalRows": 0,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "orchestration_events": {
+          "originalRows": 24832,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "orchestration_command_receipts": {
+          "originalRows": 24727,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "managed_attachment_blobs": {
+          "originalRows": 4,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "external_mcp_integrations": {
+          "originalRows": 0,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        },
+        "external_mcp_integration_projects": {
+          "originalRows": 0,
+          "allOriginalRowsRetained": true,
+          "originalValuesVerified": true
+        }
+      },
+      "complete": true
+    },
+    "finalRailwayServices": {
+      "verifiedAt": "2026-10-01T07:12:59.747079+00:00",
+      "projectId": "2fb578c6-304e-4a97-abd4-38b3897d9030",
+      "production": [
+        {
+          "name": "glasswing-web",
+          "latestDeployment": {
+            "id": "18956307-7ab9-48a1-aebf-95faa5827ea6",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "18956307-7ab9-48a1-aebf-95faa5827ea6",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Postgres-mIAq",
+          "latestDeployment": {
+            "id": "591c5d6f-c125-41ed-90c9-792264fd430f",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "591c5d6f-c125-41ed-90c9-792264fd430f",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "synara-gitea-production",
+          "latestDeployment": {
+            "id": "1a1b0960-8def-4cce-a984-9eb1e57769e0",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "1a1b0960-8def-4cce-a984-9eb1e57769e0",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-api",
+          "latestDeployment": {
+            "id": "fd7d15b6-3355-4c04-9ed8-e2992c795d67",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "fd7d15b6-3355-4c04-9ed8-e2992c795d67",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Postgres",
+          "latestDeployment": {
+            "id": "95fe399e-3bf7-4e30-90bc-340a7896069c",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "95fe399e-3bf7-4e30-90bc-340a7896069c",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-prometheus",
+          "latestDeployment": {
+            "id": "c5fdd07f-565a-4cbc-82ab-717d2750414b",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "c5fdd07f-565a-4cbc-82ab-717d2750414b",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-otel-collector",
+          "latestDeployment": {
+            "id": "2457ae5f-6ef7-46db-917e-616442f510f3",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "2457ae5f-6ef7-46db-917e-616442f510f3",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-grafana",
+          "latestDeployment": {
+            "id": "28a93f0b-da41-412b-92b6-9f912358f692",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "28a93f0b-da41-412b-92b6-9f912358f692",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-worker",
+          "latestDeployment": {
+            "id": "2d50cfa8-4354-4d5c-81b2-4a54f2955171",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "2d50cfa8-4354-4d5c-81b2-4a54f2955171",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING",
+                "RUNNING",
+                "RUNNING",
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-sync",
+          "latestDeployment": {
+            "id": "59d38913-9616-4c2c-9464-115464d745bd",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "59d38913-9616-4c2c-9464-115464d745bd",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "supertokens",
+          "latestDeployment": {
+            "id": "b14eb4b2-bd4d-4c63-96a3-0aa7e00cf5e5",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "b14eb4b2-bd4d-4c63-96a3-0aa7e00cf5e5",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-gitea-production",
+          "latestDeployment": {
+            "id": "8e9ca12c-9c28-4544-9ea4-32ac7e3bfc7f",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "8e9ca12c-9c28-4544-9ea4-32ac7e3bfc7f",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-tempo",
+          "latestDeployment": {
+            "id": "69af01cf-6ef4-48f5-8960-293956cfd6f8",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "69af01cf-6ef4-48f5-8960-293956cfd6f8",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        }
+      ],
+      "dev": [
+        {
+          "name": "glasswing-worker",
+          "latestDeployment": {
+            "id": "4c7ad27f-58a6-4cff-8fd5-65e78da39224",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "4c7ad27f-58a6-4cff-8fd5-65e78da39224",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING",
+                "RUNNING",
+                "RUNNING",
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "supertokens",
+          "latestDeployment": {
+            "id": "1f487bd9-d642-4c63-ad01-ed0dd434dd18",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "1f487bd9-d642-4c63-ad01-ed0dd434dd18",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-otel-collector",
+          "latestDeployment": {
+            "id": "e36af384-5fd1-49dd-8440-a153e32d75e1",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "e36af384-5fd1-49dd-8440-a153e32d75e1",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-api",
+          "latestDeployment": {
+            "id": "99721fc7-1b97-457a-873f-7d9ad7d5d261",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "99721fc7-1b97-457a-873f-7d9ad7d5d261",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Postgres",
+          "latestDeployment": {
+            "id": "add8948f-b26c-40f9-8ae9-56d1bb80b6da",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "add8948f-b26c-40f9-8ae9-56d1bb80b6da",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-grafana",
+          "latestDeployment": {
+            "id": "e281a797-2142-4191-bda7-761c48d96e63",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "e281a797-2142-4191-bda7-761c48d96e63",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-tempo",
+          "latestDeployment": {
+            "id": "dad2ae2a-8c55-4260-844f-1f5d9d962240",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "dad2ae2a-8c55-4260-844f-1f5d9d962240",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-prometheus",
+          "latestDeployment": {
+            "id": "7212304e-9044-4a49-abd7-9b1bb1001e0b",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "7212304e-9044-4a49-abd7-9b1bb1001e0b",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-gitea",
+          "latestDeployment": {
+            "id": "ffa1eaaa-f373-43d8-8a6e-ea09a7673707",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "ffa1eaaa-f373-43d8-8a6e-ea09a7673707",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Postgres-RJdH",
+          "latestDeployment": {
+            "id": "50a300e7-6098-444d-b0e7-b4048d6c78a1",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "50a300e7-6098-444d-b0e7-b4048d6c78a1",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-sync",
+          "latestDeployment": {
+            "id": "de84be40-0c8b-4193-ac95-7af366a73d53",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "de84be40-0c8b-4193-ac95-7af366a73d53",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "synara-gitea-dev",
+          "latestDeployment": {
+            "id": "3acafa8c-ffeb-42ad-ab84-098954f5bffb",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "3acafa8c-ffeb-42ad-ab84-098954f5bffb",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "glasswing-web",
+          "latestDeployment": {
+            "id": "aa4ccd78-dc8a-411a-824a-94e9602c6645",
+            "status": "SUCCESS"
+          },
+          "activeDeployments": [
+            {
+              "id": "aa4ccd78-dc8a-411a-824a-94e9602c6645",
+              "status": "SUCCESS",
+              "instanceStatuses": [
+                "RUNNING"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "temporaryWorkSshAccess": {
+      "revokedAtUtc": "2026-10-01T07:17:10.975505+00:00",
+      "identity": "aditya@glasswing.vc",
+      "name": "codex-glasswing-work-production-20261001",
+      "fingerprint": "SHA256:/RcaiwWGVH3fcPBxYaxrRdpnYNW6/TfnUoCDVd6myAc",
+      "registrationRemoved": true,
+      "readBackRegisteredKeys": 0,
+      "localPrivateRecoveryFilesRetained": true
+    },
+    "expansionBacklog": [
+      "US quota alignment and entitlement stability support reply in existing issue19388",
+      "50/100-conversation acceptance and representative soak before raising production admission",
+      "Actual429 retry and Stop-during-backoff trial; latest pass observed no429",
+      "Broader save/source-refresh race and stalled-backup fault coverage",
+      "Eleven pre-existing archived private-state gaps remain explicit; saved rows and source recovery resources retained"
+    ]
+  },
+  "evidenceInterpretation": "latestOperationCheckpoint is the authoritative current release. Other dated trial and inventory sections are retained historical evidence; their old current-state statements do not describe this release.",
+  "currentVerifiedAtUtc": "2026-10-01T07:17:10.975505+00:00",
+  "productionPromotionAtOriginalTrial": false
 }

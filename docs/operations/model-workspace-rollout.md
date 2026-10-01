@@ -1,139 +1,37 @@
 # Model and workspace rollout
 
-Authorized September 30, 2026: upgrade Pi, expose only the latest Fable, Opus,
-Sonnet, Sol and Astra, prepare sandboxes when a workspace opens, prove the
-release in dev and an isolated production rehearsal, then promote through CI.
-Production data and its rollback copies must survive every step. No unit tests.
+**Production release and browser acceptance complete, October 1, 2026.** The user authorized Pi/model upgrades, preparation on Workspace navigation, dev production-data refresh, real browser acceptance and production promotion. All operations use existing Glasswing work accounts; all application deployment uses canonical GitHub Actions. Do not add or run unit tests.
 
-## Verified dev release: October 1, 2026
+**Release verified October 1, 2026, 07:13 UTC: production is deployed and healthy.** Glasswing `4327194c` shipped API/worker/sync/Gitea through [Actions 36825282207](https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36825282207). Synara controller `f529b3668` shipped through [Actions 36825790168](https://github.com/adityachaudhry/synara/actions/runs/36825790168); the matching embedded UI published through [Actions 36825790129](https://github.com/adityachaudhry/synara/actions/runs/36825790129) and reached the web through [Actions 36826036741](https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36826036741). Production release trees exactly match the reviewed dev trees; both Git histories are retained. All 13 long-lived services in each environment have successful running deployments.
 
-Canonical `glasswingos/dev` application `fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374`
-is live and healthy through [Actions36810203135](https://github.com/adityachaudhry/synara/actions/runs/36810203135). Dev now uses a verified copy of production business data and chats; original dev recovery copies and home remain retained.
-Glasswing `dev` picker `86dbdb7cae66cba9be08e853dd0ad81a9d6698ae` shipped through
-[Actions 36780559190](https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36780559190).
-Pi is pinned to 0.99.2, MCP adapter 4.0.0, web access 0.34.0.
-The actual Edge dev journey signed in with a delivered email code, displayed
-exactly the five requested models, and began hydration on Workspace navigation
-without a model call. Its unsent draft worker expired and returned direct ID 404.
+Both environments run Pi chats on **Daytona, US preferred with EU fallback**; their controllers, business services, Gitea and databases remain on Railway. Workspace navigation starts preparation before a message. The production picker exposes only Fable 5.1, Opus 5.5, Sonnet 5.5, GPT-6.1 Sol and GPT-6 Astra, using Pi 0.99.2. Live production browser acceptance passed: authenticated Glasswing identity, Sol reading the actual deck, temporary Markdown/PDF side-panel previews, original-file previews, an actual PDF download with matching SHA256, and an Opus continuation of an existing chat. The production prepared first send was ready in **2.806 seconds**. The existing chat kept the same native Pi session ID, all **85,502 original history bytes** and its **241,303-byte private PDF** unchanged. No acceptance artifact was saved to company files.
 
-The complete trial passed 26 model turns across five simultaneous conversations
-and four companies, including two conversations within ChipSage. All five models
-read real company material, wrote and read separate private markers, and called
-the real Crunchbase tool. Native UID, root/sudo/credential/company isolation,
-private previews and cross-project403 passed. First send used each exact prepared
-worker. A detached writer's latest observed state survived stop/preparation/resume.
-All five owned worker IDs were directly confirmed destroyed after ordinary cleanup.
+The production database stayed at its original home; it was not replaced. Post-cutover comparison retained all **70 original chats, 235 messages, 48 message segments, 82 projects, 24,832 event rows, 24,727 command receipts and four attachment rows**. Final writer-drained backups cover the controller, all 28 business tables, all 116 Gitea tables, 126 Git refs and S3 manifests. All 1,317 historical LFS bodies (2,370,831,939 bytes) passed full GET/SHA verification before native S3 storage cutover, with final source hashes and unchanged destination metadata checked after drain. Old native LFS downloads and a new binary upload/download passed; original local LFS, volumes and checkpoints remain retained. Forty-three historical private archives plus one fresh legacy-disk capture were registered with full-body hash verification.
 
-The hardened repeat passed another26 turns. Prepared first-send readiness was
-1.981–3.481 seconds (five samples); prepared stopped resume was3.050 seconds.
-Warm readiness has15 samples, median1.264 seconds and p95 5.550 seconds. Native
-UID10001 rename/write checks protect repository parents, Git metadata and the root
-launcher log. The real364-byte HubFlow LFS body downloads and remounts with exact
-SHA256. The initial hardening rejected the native clone's format1/noextensions;
-that failed trial is retained and the shared guard was corrected. These are readiness times, not total answer times or production
-parity. The older two full 25-conversation passes remain useful baseline evidence;
-there is no new successful 50/98 or soak claim. See
-[structured results](model-workspace-evidence.json).
+Dev has the requested production-data playground copy and retained its own authentication identity and original recovery stores. Its current controller is `4fceb8202`, healthy through [Actions 36817023734](https://github.com/adityachaudhry/synara/actions/runs/36817023734). The latest real workload passed **25 concurrent chats across four companies, 102 successful model turns**, isolation, previews, cross-project403, stopped-writer recovery and actual interruption/following-turn checks. Two original copied histories passed forward and reverse restoration with all 177,285 original bytes unchanged.
 
-**Current release checkpoint, October 1, 04:50 UTC:** production has **not** been deployed. Dev Synara `fbfb692df` is live through canonical [Actions36810203135](https://github.com/adityachaudhry/synara/actions/runs/36810203135). The latest real run passed **25 concurrent conversations across four companies, 102 successful model turns**, native private-file/credential/company isolation, previews, cross-project403, stopped-writer restoration, an actual interrupted turn and a successful following turn. All25 owned native disks returned404. Cold readiness median12.662s/p95 20.492s; warm median2.535s/p95 7.406s. These unprepared25-chat timings are separate from the five-model prepared first-send1.981–3.481s evidence.
+All operations use the existing **Glasswing Ventures Daytona organization** and **Glasswing Railway workspace/v3 project**, authenticated as **aditya@glasswing.vc**. No new card or billing account was needed. Production admits **25 normal chats plus two maintenance slots**, with two matching spare workers per region and exclusive pool cleanup disabled. Dev/prod share the organization quota and trust boundary: US 100 CPU / 200 GiB RAM / 300 GiB disk; EU 250/500/2000. A dedicated key does not isolate quota. The capacity/stability request is sent in existing support issue 19388. The temporary work SSH registration was revoked and the empty registry verified.
 
-The earlier repeat completed96/100 turns and exposed OpenAI TPM429 plus premature Pi turn cleanup. The shared adapter now keeps ownership until the native prompt promise settles. The passing repeat had no actual429 records, so it proves the normal/reuse/cancellation path, not retry success under429. Earlier failed trials remain retained. Six verified superseded release pool definitions were set to zero, releasing12 unclaimed spares while retaining definitions, checkpoints and every business disk. Actual US disk quota is300GiB; production US/EU capacity remains to be verified.
+**Coverage limits:** 100 simultaneous conversations, a representative soak, sub 800 ms readiness in every state and statistically proved zero latency regression are not established. Preparation expires after five minutes: the expired-lease production send took 10.842s to ready; first recovery of the old chat took 29.367s. Eleven pre-existing archived private-state gaps remain explicit with saved rows and source backups retained. See [readiness](daytona-production-readiness.md) and [the dated structured evidence](current-system-evidence.json) for exact coverage and future expansion work.
 
-**The requested dev browser acceptance passed at04:25 UTC:** real email-code sign-in, the exact five-model picker, Workspace navigation dispatching hydration before a message, a Sol reply reading the real deck, temporary Markdown and PDF artifacts rendered in the side panel, source-deck preview, reopening the chat and an Opus follow-up reading the retained note. The actual Download click returned the1260-byte PDF with its registered SHA256. Nothing was published to company files. This observes the hydration request/start; exact first-send adoption of prepared workers is separately proved by the five-model API trial.
+## Runtime and model behavior
 
-**The original-chat reverse rehearsal passed** through canonical [Actions36816066674](https://github.com/adityachaudhry/synara/actions/runs/36816066674), attempt2, with Railway execution, PRIVATE networking and production-style local LFS. Both copied chats kept the same native Pi session IDs; all177,285 original history bytes, all prior UI messages, the newest private markers and the original Outbox PDF hash verified as UID10001. Native histories now have31 and57 records. Both sessions were parked and source recovery resources retained. Attempt1 stopped before deployment because the Daytona ISOLATED setting conflicted with Railway private hosts; matching production PRIVATE networking corrected it. Dev Daytona restoration is now queued through canonical CI.
+Pi 0.99.2, MCP adapter 4.0.0 and web access 0.34.0 are pinned. The picker contains only `anthropic/claude-fable-5-1`, `anthropic/claude-opus-5-5`, `anthropic/claude-sonnet-5-5`, `openai/gpt-6.1-sol` and `openai/gpt-6-astra`. OpenAI and Anthropic are enabled from work credentials; no keys are recorded in docs.
 
-All65 persisted dev sessions were stopped before changing providers. Fresh native label lookups found no disk for either of the two aged failed DEV QA creation intents; both uncertain intents are retained, with no direct database deletion or active creation moved. The remaining production steps are isolated account/key/funding and verified US/EU capacity, the final writer-drained backup, canonical CI promotion, and a live production browser check. The specific production key and one-time$500 funding approvals remain pending; conditional deployment itself is already authorized. Production stays unchanged. This checkpoint supersedes older current-state and running-trial statements below.
+Workspace preparation starts for the draft thread ID before a model turn or empty chat is published. The controller derives company coordinates from the authorized project and uses its existing per-thread lifecycle lock. First send adopts the prepared generation; every turn rechecks the company revision. Prepared workers remain exclusive to one company/conversation, have five-minute leases and bounded speculative admission, and yield to real queued work. Metadata supports restart cleanup without deleting uncertain disks or original pointers.
 
-The real trial exposed two defects and verified their correction. Workers now
-provide Debian's standard `python` to Python3 alias. Incoming worker frames reserve
-arrival order before Effect forks handlers; replay reads the latest retained frames
-under the send lock. Transport failures retain output for reconnect. The complete
-repeat had **zero worker frame rejections**, while strict sequence validation and
-persist-before-ack remain in place. No unit tests were added or run.
+The existing coordinator handles persisted bindings, generation fencing, durable events and capacity queueing. Rivet actors would duplicate it; defer until controller sharding is a measured need. Native warm pools and immutable company seeds address startup latency now.
 
-## Production preparation and remaining gates
+Workers run as UID10001 with protected Git/repository parents, launcher log, credentials and other-company files. Actual small LFS bodies download and remount with exact hashes. Worker frame arrival order is reserved before handlers fork; replay reads retained frames under the send lock and transport failures retain output for reconnect. Strict validation and persist-before-ack remain. Pi logical ownership lasts until the native prompt promise settles so retries/interruption cannot prematurely close the gateway.
 
-Production remains Synara `98183771a69ab9e0f7d97c505401ba3faca90755` and Glasswing
-`f5645a615abb046772fe469ea5c66b417feaf4f9`, with Railway agent execution.
-The consistent controller copy verified 49 table counts and 80 auxiliary file
-hashes. It boots in the real new container with network disabled, no forwarded
-provider credentials, unchanged chat/project/runtime rows and all 64 provider rows
-still stopped. This proves copied controller startup, not private conversation
-resume. Production Gitea uses its separate `Postgres-mIAq` service and **local LFS**;
-its full database restores with all 116 table counts and 364,333 rows matching.
-Original source backups and native recovery resources remain intact.
+## Data and release boundaries
 
-The production inventory has64 persisted Railway runtimes:43 matching checkpoint
-pointers and 10 portable archives. Eleven older archived conversations have no
-pointer in the current controller home and no matching hashed checkpoint in the
-native inventory. Their saved chat records remain backed up. Classify/recover their
-private state rather than silently starting empty sessions. One running native
-worker maps to a stopped provider row; native writer fencing remains necessary.
+Production stays at `/data/userdata/glasswingos-current`; dev uses the derived copy `/data/userdata/glasswingos-dev-import-20261001`. The playground refresh retained dev authentication and source recovery copies, rebinding company projects to dev Gitea and replacing old production runtime coordinates with fenced dev bindings. Original production rows were retained; final comparison passed after rollout.
 
-The separate **Glasswing Production** Daytona organization currently has Tier 1,
-no payment method and no wallet funding. The requested Tier 3 capacity requires
-a one-time $500 wallet top-up; spending approval is pending and automatic top-ups
-are disabled. No production key or runtime switch has been made. Keep this separate
-from the dev organization's shared quota and recovery inventory.
+Gitea native LFS uses production bucket `organized-crate-5eyu-d1-7r0`, prefix `gitea-lfs/`; original local bodies remain. Production `GLASSWING_S3_WORKSPACES` remains off. The full source promotion was reviewed and produced native merge commits with exactly tested dev trees and both histories retained, followed by successful canonical controller, embed and Glasswing CI.
 
-Dev browser acceptance, the five-model prepared trial, the25-conversation repeat,
-and original-history forward/reverse restoration have passed. Finish isolated
-production resources and capacity checks, final writer-drained copies, canonical
-CI promotion and the live production browser check. The dev business refresh completed through canonical Actions36800889286 and
-verified all28 business tables, Git refs, S3 manifests and19 full artifact/archive
-bodies. All43 native exports registered in dev with independent full GET/SHA
-verification. The copied controller home activated through canonical CI and
-retains all70 chat rows,235 message rows,69 session rows and53 private pointers,
-while keeping dev authentication/signing identity and rebinding81 projects to dev
-Gitea. Two original production-native conversations now resume in dev with the same
-native session IDs, every original history byte unchanged, all prior UI messages
-and a private Outbox PDF retained, plus new private markers. Reverse migration
-and the latest25-conversation/cancellation repeat passed. Conditional rollout authorization
-persists. All app shipping must use canonical branches and GitHub Actions.
+The global provider selector is not a per-company canary. To roll back, stop admission, drain/fence writers, verify newest private archives and use the rehearsed compatible bridge with Railway selected and matching PRIVATE networking. Never use the old binary against newer native bindings or restore an older DB over current work. See [migration and recovery plan](daytona-production-migration-plan.md) and [structured receipts](model-workspace-evidence.json). Keep original checkpoints, volumes and dumps.
 
-The authenticated provider catalogs and official documentation currently identify
-`anthropic/claude-fable-5-1`, `anthropic/claude-opus-5-5`,
-`anthropic/claude-sonnet-5-5`, `openai/gpt-6.1-sol` and `openai/gpt-6-astra`.
-Pin Pi's three runtime packages to 0.99.2 and its existing MCP/web extensions to
-compatible versions. Reuse the embedded host's existing model allowlist.
+## Verification limits
 
-Rivet is absent from these repositories. Its actor ownership and durable state
-would duplicate Synara's persisted per-conversation bindings, lifecycle epochs,
-durable event delivery and capacity queue. Retain the existing coordinator;
-adding another control plane would not shorten company checkout. Revisit actors
-when controller sharding becomes a measured requirement.
-
-Prepare the company checkout and connected worker for the draft conversation's
-ID, without starting a model turn or publishing an empty chat. The controller
-derives repository coordinates from the authorized project. The same per-thread
-lifecycle lock serializes preparation, first send and expiry. First send adopts
-the prepared generation and routes to that exact worker. Recheck company source
-revision before every turn. Prepared workers remain exclusive to one project
-and conversation, expire after five minutes and have a bounded speculative
-admission limit. Persist preparation metadata for restart cleanup; never erase
-an uncertain disk or recovery pointer. Speculation must yield when real work is
-queued.
-
-Real acceptance: all five models read actual company material, use tools and
-resume private state; actual UI picker and workspace navigation; cold versus
-prepared first-send timing; simultaneous conversations within/across companies;
-abandoned preparations, source updates, queue/cancel, worker/controller loss,
-backup failure and US/EU recovery. Cap trial output and spend; do not repeat the
-earlier shared Anthropic usage incident.
-
-Production preparation includes consistent controller/private-writer exports,
-verified copied stores, a bridge capable of decoding both runtimes, original
-Railway history migration and a reverse migration containing the newest Daytona
-state. Rehearse against isolated copies, preserve source inventories, then ship
-only the reviewed successful dev revision through production Actions. Keep old
-resources throughout the rollback window. Current evidence and open gates remain
-in `daytona-readiness-validation.md` and the Glasswing side-panel desk.
-
-Sources: [Claude models](https://platform.claude.com/docs/en/models/overview),
-[Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
-[Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
-[Pi release](https://pi.dev/changelog),
-[Rivet architecture](https://rivet.dev/docs/architecture/).
-
-Privileged Git format handling follows [Git's repository-version contract](https://git-scm.com/docs/repository-version): formats0/1 without extensions share a layout. Unknown extensions remain rejected; imported configuration stays inert recovery data before root Git runs.
+The latest workload verified 25 concurrent conversations across four companies; it does not verify 100 chats or a long soak. Production prepared readiness 2.806s is one sample. Archived/legacy recovery and expired preparation are cold paths with separately reported timings. The successful repeat had no actual 429 records; backoff recovery remains a future real trial. Eleven historical archived private-state gaps remain explicit with saved rows/source backups retained. Current release facts are in `latestOperationCheckpoint`; older JSON trial fields preserve their original dates and coverage.
