@@ -8,6 +8,7 @@ import { Effect, Scope } from "effect";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import { ServeError } from "effect/unstable/http/HttpServerError";
 import { WebSocketServer } from "ws";
+import { startStallProfiles } from "./stallProfiles.ts";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_PROVIDER_WORKER_MESSAGE_BYTES = 256 * 1024;
@@ -136,16 +137,26 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   const server = evaluate();
 
   const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  const stallProfiles = startStallProfiles();
   loopDelay.enable();
   let previousCpu = process.cpuUsage();
+  let previousTick = performance.now();
   const loopTimer = setInterval(() => {
+    const now = performance.now();
+    const intervalMs = Math.round(now - previousTick);
+    const timerDelayMs = Math.max(0, intervalMs - 5_000);
+    previousTick = now;
     const cpu = process.cpuUsage(previousCpu);
     previousCpu = process.cpuUsage();
-    if (loopDelay.max > 500_000_000) {
+    if (loopDelay.max > 500_000_000 || timerDelayMs > 500) {
       console.warn("server event loop delayed", {
         maxDelayMs: Math.round(loopDelay.max / 1_000_000),
-        cpuMs: Math.round((cpu.user + cpu.system) / 1_000),
+        // Histogram callbacks can land after this timer. CPU belongs to this
+        // timer interval, not necessarily to the histogram's largest delay.
+        timerDelayMs, intervalMs,
+        intervalCpuMs: Math.round((cpu.user + cpu.system) / 1_000),
       });
+      if (timerDelayMs > 500) stallProfiles.capture(timerDelayMs);
     }
     loopDelay.reset();
   }, 5_000).unref();
@@ -175,6 +186,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   server.on("request", traceSetupRequest);
   yield* Scope.addFinalizer(scope, Effect.sync(() => {
     clearInterval(loopTimer);
+    stallProfiles.stop();
     loopDelay.disable();
     server.off("request", traceSetupRequest);
   }));
