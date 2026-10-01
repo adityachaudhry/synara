@@ -1,10 +1,16 @@
-# Daytona production migration plan
+# Daytona production migration and recovery plan
 
-The user authorizes implementation, dev refresh and production promotion conditional on successful verification. September 30 status and current receipts are maintained in [model-workspace-rollout.md](model-workspace-rollout.md); production remains Synara `98183771a69ab9e0f7d97c505401ba3faca90755` on Railway. The separate production Daytona organization is unfunded and its $500 Tier3 top-up awaits spending approval. No production runtime switch has occurred.
+**Completed production release, October 1, 2026:** Synara `f529b3668`, Glasswing `4327194c` and matching production embed are deployed through canonical CI. Actual browser acceptance, native original-history/PDF preservation and old/new native LFS checks passed. Current receipts and limits are maintained in [model-workspace-rollout.md](model-workspace-rollout.md) and [model-workspace-evidence.json](model-workspace-evidence.json).
 
-The inventory and measurements below are September 24 planning evidence, superseded by the linked current checkpoint. Retain every original disk/checkpoint. Copied database startup is proved; native private-state forward/reverse restoration remains open. Application deployments must use canonical branches and GitHub Actions. No unit tests.
+The user explicitly approved Daytona setup, dev refresh and production rollout, and requires **existing Glasswing accounts only**. Production uses the existing Glasswing Ventures Daytona organization with a dedicated work runtime key and shared dev/prod quota/trust boundary. No new card, separate personal organization, billing setup or funding approval is required. Production admission is25 normal conversations plus two maintenance slots, US preferred/EU fallback, two matching spares per region and exclusive pool cleanup disabled. The capacity follow-up is sent in existing work support issue 19388.
 
-## Current dev boundary
+Final drained backups and44 verified private archives are retained. The live production controller DB/home were not replaced; all original 70 chats, 235 messages, 48 segments, 82 projects, event/receipt and attachment rows passed post-cutover comparison. Original local LFS, Git refs, volumes and native checkpoints remain. The copied-chat forward/reverse rehearsal passed both native IDs, all 177,285 original history bytes, original private PDF and latest markers. Production old-chat continuation passed 85,502 original native bytes and its PDF unchanged.
+
+**Recovery procedure:** stop admission, drain/fence live writers, verify their newest private archives, then use the compatible bridge release with Railway-selected runtime and PRIVATE networking. Retain the live DB and all canonical Git/S3 objects. Reverting to the old production binary is unsafe because it cannot decode native Daytona bindings. The old local LFS copy does not contain objects written after the S3 switch. Confirm the newest private bytes before any rollback; preserve uncertain intent/pointer/disk state. Eleven historical private-state gaps remain explicit and their original saved rows/source resources retained. No destructive retirement is part of this rollout.
+
+The planning text below is **historical September 24 evidence**. Its old inventories, prospective gates and separate-organization recommendation are superseded by the current release and the user's Glasswing-account requirement. It remains a reference for recovery principles, not a request for another approval or billing setup. No unit tests; application shipping is GitHub Actions only.
+
+## Historical September 24 dev boundary
 
 New company workers and the normal execution of migrated threads use Daytona. This is a configured backend choice, not automatic failover to Railway. Legacy checkpoint-only threads can still create a temporary Railway sandbox for a one-time export to the private S3 archive API. Dev retains Railway credentials for that import.
 
