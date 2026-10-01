@@ -445,6 +445,7 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
+  interruptedTurnId?: TurnId;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
   activeToolItems: Map<string, PiTrackedToolCall>;
@@ -1983,11 +1984,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
-      if (context.activeTurnId !== turnId) {
+      if (context.stopped || context.activeTurnId !== turnId) {
         return;
       }
 
-      const message = toMessage(cause, "Pi turn failed.");
+      const message = context.interruptedTurnId === turnId
+        ? "Interrupted by user."
+        : toMessage(cause, "Pi turn failed.");
       const failure = classifyPiTurnFailure(message);
       const completionBase = makeEventBase(context);
       if (failure.state === "failed") {
@@ -1995,6 +1998,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       }
       Effect.runFork(cancelAgentGatewayTurn(context.gatewaySessionLease, turnId));
       context.activeTurnId = undefined;
+      context.interruptedTurnId = undefined;
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
       context.activeToolItems.clear();
@@ -2295,12 +2299,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           } satisfies ProviderRuntimeEvent);
           return;
         }
-        case "agent_end": {
+        case "agent_settled": {
+          // Called after prompt fulfills: Pi retries, compaction and deferred actions are finished.
+          if (!context.activeTurnId) return;
           const stats = context.runtime.session.getSessionStats();
           const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
           context.lastKnownTokenUsage = usage;
           const turnId = context.activeTurnId;
-          const errorMessage = context.runtime.session.agent.state.errorMessage;
+          const errorMessage = context.interruptedTurnId === turnId
+            ? "Interrupted by user."
+            : context.runtime.session.agent.state.errorMessage;
           const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
           const leafId = context.runtime.session.sessionManager.getLeafId();
           const turn = turnId
@@ -2370,6 +2378,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             );
           }
           context.activeTurnId = undefined;
+          context.interruptedTurnId = undefined;
           context.activeAssistantItemId = undefined;
           context.activeReasoningItemId = undefined;
           context.activeToolItems.clear();
@@ -2392,6 +2401,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         default:
           return;
+      }
+    };
+
+    const completePromptFulfillment = (context: PiSessionContext, turnId: TurnId) => {
+      if (!context.stopped && context.activeTurnId === turnId) {
+        handleSessionEvent(context, { type: "agent_settled" });
       }
     };
 
@@ -2630,9 +2645,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
         };
-        context.unsubscribe = runtime.session.subscribe((event) =>
-          handleSessionEvent(context, event),
-        );
+        context.unsubscribe = runtime.session.subscribe((event) => {
+          // The SDK also emits settlement from finally when prompt rejects.
+          if (event.type !== "agent_settled") handleSessionEvent(context, event);
+        });
         sessions.set(input.threadId, context);
         yield* Effect.tryPromise({
           try: () =>
@@ -2871,6 +2887,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           .join("\n\n");
         void context.runtime.session
           .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
+          .then(() => completePromptFulfillment(context, turnId))
           .catch((cause) => {
             completePromptRejection(context, turnId, cause);
           });
@@ -2898,12 +2915,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ]
           .filter(Boolean)
           .join("\n\n");
-        const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
+        const activeTurnId = context.activeTurnId;
+        const turnId = activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [] });
         }
-        if (context.runtime.session.isStreaming) {
+        if (activeTurnId) {
           yield* Effect.tryPromise({
             try: () => context.runtime.session.steer(providerText, payload.images),
             catch: (cause) =>
@@ -2920,6 +2938,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               providerText,
               payload.images.length > 0 ? { images: payload.images } : undefined,
             )
+            .then(() => completePromptFulfillment(context, turnId))
             .catch((cause) => {
               completePromptRejection(context, turnId, cause);
             });
@@ -2943,6 +2962,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         const activeTurnId = turnId ?? context.activeTurnId;
+        context.interruptedTurnId = activeTurnId;
         yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
           activeTurnId,
