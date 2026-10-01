@@ -9,6 +9,7 @@ import type { ProviderAdapterShape } from "../provider/Services/ProviderAdapter"
 import { ProviderWorkerTransportError } from "./Errors";
 import type { ProviderWorkerFence } from "./fence";
 import { dispatchProviderWorkerRequest } from "./workerDispatch";
+import { sanitizeUnmappedProviderData } from "../provider/unmappedProviderEvents";
 
 interface RequestEntry {
   readonly fingerprint: string;
@@ -66,7 +67,7 @@ export function makeProviderWorkerRequestLedger<TError>(input: {
                 ok: true,
                 result: result ?? null,
               }),
-              onFailure: (): ProviderWorkerResponse => ({
+              onFailure: (cause): ProviderWorkerResponse => ({
                 protocolVersion: PROVIDER_WORKER_PROTOCOL_VERSION,
                 ...input.fence,
                 type: "response",
@@ -74,7 +75,7 @@ export function makeProviderWorkerRequestLedger<TError>(input: {
                 ok: false,
                 error: {
                   code: "provider_request_failed",
-                  message: `Provider worker request '${request.method}' failed.`,
+                  message: String(sanitizeUnmappedProviderData(cause instanceof Error ? cause.message : `Provider worker request '${request.method}' failed.`)).slice(0, 2_000),
                   retryable: false,
                 },
               }),

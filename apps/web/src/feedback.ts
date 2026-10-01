@@ -154,6 +154,9 @@ export async function submitFeedback(
   submission: FeedbackSubmission,
   fetchImplementation: typeof fetch = fetch,
 ): Promise<void> {
+  if (import.meta.env.VITE_SYNARA_EMBEDDED === "true") {
+    throw new Error("Feedback is managed by the host application.");
+  }
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), FEEDBACK_REQUEST_TIMEOUT_MS);
   try {

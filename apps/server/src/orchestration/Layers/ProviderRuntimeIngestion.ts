@@ -62,6 +62,7 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
+import { resolveProviderSessionThread } from "../providerSessionThread.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -1788,12 +1789,13 @@ const make = Effect.gen(function* () {
   const getSourceProposedPlanReferenceForAcceptedTurnStart = Effect.fnUntraced(function* (
     threadId: ThreadId,
     eventTurnId: TurnId | undefined,
+    sessionThreadId: ThreadId,
   ) {
     if (eventTurnId === undefined) {
       return null;
     }
 
-    const expectedTurnId = (yield* providerService.listSessions()).find(
+    const expectedTurnId = (yield* providerService.listSessions(sessionThreadId)).find(
       (entry) => entry.threadId === threadId,
     )?.activeTurnId;
     if (!sameId(expectedTurnId, eventTurnId)) {
@@ -2182,7 +2184,11 @@ const make = Effect.gen(function* () {
       }
       const acceptedTurnStartedSourcePlan =
         event.type === "turn.started" && shouldApplyThreadLifecycle
-          ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
+          ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(
+              thread.id,
+              eventTurnId,
+              parentThread.id,
+            )
           : null;
 
       if (event.type === "session.started") {
@@ -2839,7 +2845,12 @@ const make = Effect.gen(function* () {
       if (isNativeSteer) {
         let activeTurnId = thread?.session?.activeTurnId ?? undefined;
         if (!activeTurnId) {
-          const runtimeSession = (yield* providerService.listSessions()).find(
+          const providerThread = yield* resolveProviderSessionThread(
+            projectionSnapshotQuery,
+            event.payload.threadId,
+          );
+          const sessionThreadId = providerThread?.id ?? event.payload.threadId;
+          const runtimeSession = (yield* providerService.listSessions(sessionThreadId)).find(
             (session) => session.threadId === event.payload.threadId,
           );
           activeTurnId = toTurnId(runtimeSession?.activeTurnId);

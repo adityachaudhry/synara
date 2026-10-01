@@ -1,0 +1,327 @@
+{
+  "verifiedAt": "2026-09-30T22:55:51.682Z",
+  "devCommit": "a7f73f3783e3db83774e56c1215ddad72d3c18d4",
+  "devActions": "https://github.com/adityachaudhry/synara/actions/runs/36784508540",
+  "glasswingDevCommit": "86dbdb7cae66cba9be08e853dd0ad81a9d6698ae",
+  "glasswingDevActions": "https://github.com/adityachaudhry/glasswing-ai-2/actions/runs/36780559190",
+  "piVersion": "0.99.2",
+  "mcpAdapterVersion": "4.0.0",
+  "webAccessVersion": "0.34.0",
+  "models": [
+    "anthropic/claude-fable-5-1",
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "openai/gpt-6.1-sol",
+    "openai/gpt-6-astra"
+  ],
+  "runId": "3947c5c0-f9c0-46d6-b325-12a1c781be5f",
+  "companyCount": 4,
+  "conversations": 5,
+  "completedModelTurns": 26,
+  "firstSendUsesExactPreparedWorker": true,
+  "nativeIsolationPasses": 5,
+  "realMcpPasses": 5,
+  "scopedPreviewDenied": true,
+  "detachedWriterRestore": true,
+  "ownedNativeDisksDirectlyDestroyed": 5,
+  "workerFrameRejections": 0,
+  "preparedNewReadiness": {
+    "samples": 5,
+    "medianMs": 3409,
+    "p95NearestRankMs": 3546,
+    "minimumMs": 1811,
+    "maximumMs": 3546
+  },
+  "warmReadiness": {
+    "samples": 15,
+    "medianMs": 2165,
+    "p95NearestRankMs": 5743,
+    "minimumMs": 945,
+    "maximumMs": 5743
+  },
+  "preparedStoppedResumeReadiness": {
+    "samples": 1,
+    "medianMs": 1422,
+    "p95NearestRankMs": 1422,
+    "minimumMs": 1422,
+    "maximumMs": 1422
+  },
+  "uiNavigation": {
+    "verified": true,
+    "fiveModelPicker": true,
+    "defaultModel": "Opus 5.5",
+    "hydratedWithoutMessage": true,
+    "draftThreadId": "ecbdf51b-6428-472b-9fcc-ceb5c20151d1",
+    "ownedSandboxId": "e4a69c04-f881-4454-b32e-cdf56358c8c5",
+    "expiredDiskDirect404": true
+  },
+  "matchingRecipe": "364ebde53a6ac38155da2e9f587cfcc8594f5f99613f71bfb66a9c6166af28b5",
+  "matchingRegionalReadySpares": {
+    "eu": 2,
+    "us": 2
+  },
+  "productionPromoted": false,
+  "devDataRefreshExecuted": false,
+  "privateReceiptsRoot": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration",
+  "limits": [
+    "Five latest-model conversations; no new 50/98 or soak pass",
+    "Readiness is controller requestedAt to startedAt, distinct from model first token and total answer time",
+    "No production parity or actual vendor outage was induced",
+    "Independent model load budgets, production Daytona funding and private migration/reverse proof remain open"
+  ],
+  "latestOperationCheckpoint": {
+    "verifiedAtUtc": "2026-10-01T04:50:42.058282+00:00",
+    "devApplicationCommit": "fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374",
+    "devActions": "https://github.com/adityachaudhry/synara/actions/runs/36810203135",
+    "hardenedFiveModelTrial": {
+      "verifiedAt": "2026-10-01T02:34:04.149811+00:00",
+      "runId": "43d9b176-632b-43ed-b65b-2966ea688fc4",
+      "candidateCommit": "1ba079e924201efc563d23fb9bd4e2a2a0da6fa4",
+      "actionsUrl": "https://github.com/adityachaudhry/synara/actions/runs/36805569029",
+      "passed": true,
+      "modelTurns": 26,
+      "companies": 4,
+      "conversations": 5,
+      "preparedNew": {
+        "samples": 5,
+        "medianMs": 2075,
+        "p95NearestRankMs": 3481,
+        "minimumMs": 1981,
+        "maximumMs": 3481
+      },
+      "warm": {
+        "samples": 15,
+        "medianMs": 1264,
+        "p95NearestRankMs": 5550,
+        "minimumMs": 1082,
+        "maximumMs": 5550
+      },
+      "stoppedResume": {
+        "samples": 1,
+        "medianMs": 3050,
+        "p95NearestRankMs": 3050,
+        "minimumMs": 3050,
+        "maximumMs": 3050
+      },
+      "nativeIsolation": 5,
+      "smallRealLfsBody": {
+        "bytes": 364,
+        "sha256": "ecbb4447ef0d53c9ee414d6f9e1f0e5c73d8475f8fb411364611712c4762914b",
+        "downloadAndRemountPassed": true
+      },
+      "privatePreviews": 5,
+      "crossProject403": true,
+      "detachedWriterStoppedAndRestored": true,
+      "ownedNativeDirect404": 5,
+      "unitTestsRun": false,
+      "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/hardened-five-models-format-corrected/evidence.json"
+    },
+    "originalPrivateStateForward": {
+      "verifiedAt": "2026-10-01T02:35:47.906920+00:00",
+      "source": "two original production checkpoint histories, copied only into DEV",
+      "nativeSessionIdsPreserved": true,
+      "originalNativePrefixesSha256Unchanged": true,
+      "samples": 2,
+      "originalHistoryRecords": 62,
+      "originalSourcePrivateOutboxBodiesVerified": 1,
+      "newPrivateMarkersVerified": 2,
+      "nativeAgentUid": 10001,
+      "latestSolTurnsCompleted": 2,
+      "copiedOriginalChatMessagesPreserved": true,
+      "sourceChatsPreserved": true,
+      "sessionsParked": true,
+      "productionWritePerformed": false,
+      "reverseProven": true,
+      "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/private-history-rehearsal/forward.receipt.json"
+    },
+    "higherLoadTrial": {
+      "commit": "1ba079e924201efc563d23fb9bd4e2a2a0da6fa4",
+      "runId": "3f0510da-36a6-43ca-96d5-3ac94b79bf61",
+      "passed": false,
+      "conversations": 25,
+      "companies": 4,
+      "completedColdTurns": 24,
+      "failedStarts": 1,
+      "failureBoundary": "native sandbox create returned failure after50ms; vendor cause was not serialized in controller log",
+      "warmPhaseExecuted": false,
+      "ownedNativeIdsDirectly404": 24,
+      "uncertainCreateOperationHasNativeDisk": false,
+      "receipt": "output/model-hydration/hardened-concurrent-25/evidence.json"
+    },
+    "nativeAllocationRepeat": {
+      "runId": "e6f6a798-b251-48dc-8d3f-b481b42f9b5a",
+      "passed": true,
+      "created": 25,
+      "ownedNativeIdsDirectly404": 25,
+      "target": "us",
+      "limits": "Empty native allocations only; no company checkout or model turns",
+      "receipt": "output/model-hydration/hardened-concurrent-25/native-allocation-probe.receipt.json"
+    },
+    "devDataRefreshExecuted": true,
+    "productionPromoted": false,
+    "reverseMigration": {
+      "verifiedAt": "2026-10-01T04:50:42.058282+00:00",
+      "passed": true,
+      "actionsUrl": "https://github.com/adityachaudhry/synara/actions/runs/36816066674",
+      "actionsAttempt": 2,
+      "runtime": "railway",
+      "networkIsolation": "PRIVATE",
+      "s3Lfs": false,
+      "samples": 2,
+      "nativeSessionIdsPreserved": true,
+      "originalHistoryPrefixesBytes": 177285,
+      "originalHistoryPrefixesSha256Unchanged": true,
+      "nativeHistoryRecordsAfterReverse": [
+        31,
+        57
+      ],
+      "originalMessagesRetained": true,
+      "newPrivateMarkersVerified": true,
+      "originalPrivateSourceFilesVerified": 1,
+      "nativeAgentUid": 10001,
+      "sessionsParked": true,
+      "productionWritePerformed": false,
+      "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/private-history-rehearsal/reverse.receipt.json",
+      "coverageLimit": "Verifies every original native history byte, all prior UI messages, newest private markers and original PDF bytes; does not separately hash every forward-added native record."
+    },
+    "latestConcurrentTrial": {
+      "runId": "f5f0f9f3-5c28-4258-9fb5-c82d9a84df9b",
+      "candidateCommit": "fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374",
+      "actionsUrl": "https://github.com/adityachaudhry/synara/actions/runs/36810203135",
+      "passed": true,
+      "conversations": 25,
+      "companies": 4,
+      "sameCompanyConversations": 14,
+      "completedModelTurns": 102,
+      "cold": {
+        "samples": 25,
+        "medianMs": 12662,
+        "p95NearestRankMs": 20492,
+        "minimumMs": 6551,
+        "maximumMs": 21012
+      },
+      "warm": {
+        "samples": 75,
+        "medianMs": 2535,
+        "p95NearestRankMs": 7406,
+        "minimumMs": 1394,
+        "maximumMs": 8160
+      },
+      "nativeIsolation": 25,
+      "privatePreviews": 25,
+      "crossProject403": true,
+      "detachedWriterStoppedAndRestored": true,
+      "nativeHistoryProbes": 25,
+      "nativeRateLimitErrorsObserved": 0,
+      "actual429RecoveryExercised": false,
+      "interruptionMs": 1787,
+      "postInterruptTurnPassed": true,
+      "ownedNativeDirect404": 25,
+      "unitTestsRun": false,
+      "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/pi-retry-concurrent-25-confirmed/evidence.json"
+    },
+    "piRetryOwnershipFix": {
+      "deployed": true,
+      "commit": "fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374",
+      "behavior": "Keep the original logical turn and gateway until the actual native Pi prompt promise settles, including retries, compaction, deferred work and interruption.",
+      "independentStaticReview": "no remaining static blockers",
+      "coverageLimit": "The successful repeat contained no native429 records; actual429 retry and Stop during backoff are not proved."
+    },
+    "warmPoolMaintenance": {
+      "supersededOwnedDefinitionsSetToZero": 6,
+      "releasedSpareWorkers": 12,
+      "currentMatchingReadySpares": 4,
+      "totalReadySparesAfterMaintenance": 14,
+      "definitionsRetained": true,
+      "businessDisksPreserved": true,
+      "unknownOlderPoolsPreserved": true,
+      "actualUsDiskQuotaGiB": 300,
+      "productionQuotaVerified": false
+    },
+    "browserAcceptance": {
+      "verifiedAt": "2026-10-01T04:25:49.171127+00:00",
+      "environment": "dev",
+      "controllerCommit": "fbfb692dfc8bf53dab45d8b35c2ba7e14d04f374",
+      "company": "hamiltonic",
+      "threadId": "64c9cb46-e1ed-457e-ac84-07b8e402957d",
+      "checks": {
+        "realEmailCodeSignIn": true,
+        "workspaceNavigationPrepareRpcBeforeMessage": true,
+        "prepareRpcResult": {
+          "started": true
+        },
+        "modelPickerExactlyFive": [
+          "Fable 5.1",
+          "Opus 5.5",
+          "Sonnet 5.5",
+          "GPT-6.1 Sol",
+          "GPT-6 Astra"
+        ],
+        "solMessageResponse": true,
+        "realDeckRead": true,
+        "generatedMarkdownAndPdf": true,
+        "temporaryMarkdownSidePanelMarkerVisible": true,
+        "temporaryPdfSidePanelMarkerVisible": true,
+        "temporaryArtifactsNotSaved": true,
+        "reopenedOriginalBrowserConversation": true,
+        "privateArtifactStillAvailableAfterReopen": true,
+        "latestOpusFollowupReadPassed": true,
+        "sourceDeckVisiblyRendered": true,
+        "actualUiClickPdfDownload": true,
+        "downloadSha256MatchesRegisteredArtifact": true
+      },
+      "marker": "GW-BROWSER-20261001",
+      "screenshots": [
+        "temporary-markdown.png",
+        "temporary-pdf.png"
+      ],
+      "downloadObserver": "The downloadMedia helper navigated without the actual user click and was blocked. The actual browser Download click passed and its full body matches the registered SHA256.",
+      "reopenAndFollowup": "passed",
+      "passed": true,
+      "productionPromoted": false,
+      "download": {
+        "path": "/Users/adityachaudhry/Downloads/browser-acceptance-20261001.pdf",
+        "bytes": 1260,
+        "sha256": "87b341a21802530eeb7ab83e3c9dd82124789d14b9cc88ad1adcecf9d9dfd01b"
+      },
+      "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/browser-acceptance/receipt.json",
+      "hydrationCoverage": "Real browser dispatch and started response before first message; exact prepared-worker consumption separately proved by five-model trial."
+    },
+    "pending": [
+      "Isolated production Daytona key, funding and actual US/EU capacity",
+      "Final writer-drained production backup and canonical CI promotion",
+      "Live production browser verification"
+    ],
+    "originalPrivateStateReverse": {
+      "verifiedAt": "2026-10-01T04:50:42.058282+00:00",
+      "passed": true,
+      "actionsUrl": "https://github.com/adityachaudhry/synara/actions/runs/36816066674",
+      "actionsAttempt": 2,
+      "runtime": "railway",
+      "networkIsolation": "PRIVATE",
+      "s3Lfs": false,
+      "samples": 2,
+      "nativeSessionIdsPreserved": true,
+      "originalHistoryPrefixesBytes": 177285,
+      "originalHistoryPrefixesSha256Unchanged": true,
+      "nativeHistoryRecordsAfterReverse": [
+        31,
+        57
+      ],
+      "originalMessagesRetained": true,
+      "newPrivateMarkersVerified": true,
+      "originalPrivateSourceFilesVerified": 1,
+      "nativeAgentUid": 10001,
+      "sessionsParked": true,
+      "productionWritePerformed": false,
+      "receiptPath": "/Users/adityachaudhry/.codex/worktrees/daytona-production-readiness/synara/output/model-hydration/private-history-rehearsal/reverse.receipt.json",
+      "coverageLimit": "Verifies every original native history byte, all prior UI messages, newest private markers and original PDF bytes; does not separately hash every forward-added native record."
+    },
+    "devRestoration": {
+      "status": "pending canonical CI",
+      "runtime": "daytona",
+      "s3Lfs": true,
+      "networkIsolation": "ISOLATED"
+    }
+  }
+}

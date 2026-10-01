@@ -1885,6 +1885,16 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, hostProjectModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const preparationProjectId = readSynaraRuntimeConfig().project?.projectId;
+  useEffect(() => {
+    // Preparation carries only server-owned project coordinates and the thread ID.
+    // It neither promotes an empty chat nor sends a model prompt.
+    if (!preparationProjectId || !activeThread || activeThread.modelSelection.provider !== "pi") return;
+    void readNativeApi()?.provider.prepareWorkspace?.({
+      projectId: activeThread.projectId,
+      threadId,
+    }).catch((error) => console.warn("Workspace preparation deferred", error));
+  }, [preparationProjectId, activeThread?.projectId, activeThread?.id, activeThread?.modelSelection.provider, threadId]);
   // Local threads reconcile their stored branch to the shared checkout as soon as the
   // branch query resolves. Keep the branch seen when a thread becomes active so a settled
   // thread can explain that change before the user's first resumed message.

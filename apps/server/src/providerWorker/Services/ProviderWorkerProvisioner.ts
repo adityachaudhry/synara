@@ -12,9 +12,12 @@ import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 
 export interface ProviderWorkerProvisionInput {
+  readonly speculative?: boolean;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration: string;
   readonly cwd?: string;
+  /** Exact recognized legacy Pi history that must survive the UID transition. */
+  readonly legacyPiResumeSessionFile?: string;
   readonly repositoryBinding?: ProjectRepositoryBinding;
   readonly agentGatewayConnection?: AgentGatewayMcpConnection;
   readonly onCapacityAdmitted?: () => void;
@@ -28,6 +31,9 @@ export interface ProviderWorkerAttachmentStageInput {
 export interface ProviderWorkerProvisionerShape {
   /** A positive result means the runtime is conclusively gone; connection errors stay recoverable. */
   readonly isWorkspaceUnavailable?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<boolean>;
+  /** Persist uncertain coverage before sending a request that can change native state. */
+  readonly markWorkspaceMutation?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly withWorkspaceMutation?: <A, E, R>(binding: ProviderWorkerRuntimeBinding, mutation: Effect.Effect<A, E, R>) => Effect.Effect<A, E | ProviderWorkerProvisioningError, R>;
   readonly start: (
     input: ProviderWorkerProvisionInput,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
@@ -65,6 +71,7 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     commit: string,
     persistedFiles?: ReadonlyArray<ProviderPersistenceCandidateSelection>,
+    activeTurnId?: string,
   ) => Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError>;
   readonly listPersistenceCandidates: (
     binding: ProviderWorkerRuntimeBinding,
@@ -83,6 +90,9 @@ export interface ProviderWorkerProvisionerShape {
     path: string,
   ) => Effect.Effect<ProviderPersistenceFile, ProviderWorkerProvisioningError>;
   readonly stop: (
+    binding: ProviderWorkerRuntimeBinding,
+  ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  readonly park?: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
 }

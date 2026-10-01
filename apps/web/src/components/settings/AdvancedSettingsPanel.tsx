@@ -240,15 +240,17 @@ export function AdvancedSettingsPanel(props: {
           description="Current application version."
           control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
         />
-        <SettingsRow
-          title="Release history"
-          description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
-          control={
-            <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
-              View release history
-            </Button>
-          }
-        />
+        {import.meta.env.VITE_SYNARA_EMBEDDED !== "true" && (
+          <SettingsRow
+            title="Release history"
+            description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
+            control={
+              <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
+                View release history
+              </Button>
+            }
+          />
+        )}
       </SettingsSection>
     </div>
   );

@@ -1,28 +1,34 @@
 import { makeRepositoryIsolationPlan, makeVerifiedRepositoryRefreshPlan } from "../repositoryIsolation";
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import { sanitizeUnmappedProviderData } from "../../provider/unmappedProviderEvents";
+import { extractLegacyPiResumeSessionFile } from "../../provider/Layers/PiAdapter.ts";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule, Semaphore } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Layer, Schedule, Schema, Semaphore } from "effect";
+import { ProviderSession } from "@synara/contracts";
 
 import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
+import { RailwaySandboxNotFoundError, WorkspaceRuntimeError } from "../../workspaceRuntime/Errors";
 import { ServerConfig } from "../../config.ts";
 import { makeKeyedLock } from "../../provider/keyedLock";
 import { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerFence } from "../fence";
 import {
   ProviderWorkerProvisioner,
+  type ProviderWorkerProvisionInput,
   type ProviderWorkerProvisionerShape,
 } from "../Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBootstrapAuthority } from "../Services/ProviderWorkerBootstrapAuthority";
 import { ProviderWorkerBroker } from "../Services/ProviderWorkerBroker";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 import { isWorkspaceFilePathAllowed, readProviderWorkspaceFile } from "../workspaceFiles.ts";
-import { makeWorkspaceCheckpointStore, workspaceCheckpointRevision, type ProviderWorkspaceCheckpoint } from "../workspaceCheckpointStore.ts";
-import { archiveWorkspaceCheckpoint, restoreWorkspaceArchive } from "../workspaceArchive.ts";
+import { makeWorkspaceCheckpointStore, workspaceArchiveIsCurrent, workspaceCheckpointRevision, type ProviderWorkspaceCheckpoint } from "../workspaceCheckpointStore.ts";
+import { archiveWorkspace, archiveWorkspaceCheckpoint, restoreWorkspaceArchive } from "../workspaceArchive.ts";
+import { importRailwayWorkspace } from "../importRailwayWorkspace.ts";
 import { publishOutboxArtifacts, artifactApiClient } from "../artifactPublisher.ts";
 import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
+import { S3_LFS_AGENT_UID, S3_LFS_MOUNT_ROOT, S3_LFS_PASSWORD_PATH, s3LfsCredentialFile, s3LfsMountCommand, s3LfsMountConfig } from "../s3LfsMount.ts";
 import {
   listProviderPersistenceCandidates,
   readProviderPersistenceCandidate,
@@ -35,6 +41,7 @@ import { PROVIDER_PERSISTENCE_OUTBOX_ROOT, type ProviderWorkspaceFile } from "..
 import { attachmentRelativePath } from "../../attachmentStore";
 import {
   makeRepositoryCredentialConfig,
+  hydrateLfs,
   makeRepositoryCheckoutPlan,
   makeRepositoryReconcilePlan,
   parseRepositoryCheckoutResult,
@@ -45,15 +52,53 @@ import {
 
 const WORKER_ARTIFACT_PATH = "/opt/synara/provider-worker.mjs";
 const WORKER_ARTIFACT_ARCHIVE_PATH = `${WORKER_ARTIFACT_PATH}.gz`;
+const WORKER_PHOTON_WASM_PATH = "/opt/synara/photon_rs_bg.wasm";
 const WORKER_CONFIG_PATH = "/opt/synara/provider-worker.json";
+const WORKER_LOG_PATH = "/opt/synara/worker.log";
 const DEFAULT_CWD = "/workspace";
 const DEFAULT_HOME_DIR = "/workspace/.synara-provider-worker";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
-function workerLaunchCommand(homeDir: string, artifactDigest: string) {
-  const logsDir = `${homeDir}/state/logs`;
-  const workerLogPath = `${logsDir}/worker.log`;
+/** Preserve an existing copy only when it is byte-identical to the authoritative legacy file. */
+export function legacyPiSessionCopyCommand(source?: string): string {
+  if (source && extractLegacyPiResumeSessionFile(source) !== source) throw new Error("Invalid legacy Pi session path.");
+  const target = source ? `/workspace${source.slice("/root".length)}` : undefined;
+  const script = `const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
+const source=${JSON.stringify(source) ?? "undefined"},target=${JSON.stringify(target) ?? "undefined"};
+const sourceRoot='/root/.pi/agent/sessions',targetRoot='/workspace/.pi/agent/sessions';
+function directoryBoundary(dir){
+ let current=path.parse(dir).root;
+ for(const part of dir.slice(current.length).split('/')){
+  current=path.join(current,part);let info;
+  try{info=fs.lstatSync(current);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+  if(!info.isDirectory()||info.isSymbolicLink()||fs.realpathSync(current)!==current)throw Error('Unsafe Pi history directory; original retained');
+ }
+}
+function sessionTree(dir){
+ for(const name of fs.readdirSync(dir)){
+  const file=path.join(dir,name),info=fs.lstatSync(file);
+  if(info.isDirectory())sessionTree(file);
+  else if(!info.isFile()||info.nlink!==1)throw Error('Unsafe Pi history link; original retained');
+ }
+}
+// Check both trees before root creates files or follows a destination directory.
+for(const root of [sourceRoot,targetRoot]){directoryBoundary(root);if(fs.existsSync(root))sessionTree(root);}
+if(source){
+directoryBoundary(path.dirname(target));
+const original=fs.lstatSync(source);
+if(!original.isFile()||original.nlink!==1||!original.size||fs.realpathSync(source)!==source)throw Error('Legacy Pi history is unavailable or unsafe');
+const bytes=fs.readFileSync(source),entries=bytes.toString('utf8').split('\\n').filter(line=>line.trim()).map(line=>JSON.parse(line)),header=entries[0];
+if(!header||header.type!=='session'||typeof header.id!=='string'||!header.id||typeof header.cwd!=='string'||!header.cwd||!Number.isInteger(header.version??1)||(header.version??1)<1||(header.version??1)>3)throw Error('Legacy Pi history has an incompatible header');
+if(!fs.existsSync(target)){fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(source,target,fs.constants.COPYFILE_EXCL);}
+if(!fs.lstatSync(target).isFile()||fs.lstatSync(target).nlink!==1||fs.realpathSync(target)!==target||!bytes.equals(fs.readFileSync(target))||!bytes.equals(fs.readFileSync(source)))throw Error('Legacy Pi history copy conflicts; original retained');
+}
+fs.mkdirSync(targetRoot,{recursive:true});
+if(fs.existsSync(sourceRoot))cp.execFileSync('cp',['-an',sourceRoot+'/.',targetRoot+'/']);`;
+  return `node -e ${shellQuote(script)}`;
+}
+
+function workerLaunchCommand(artifactDigest: string, photonDigest?: string) {
   const extractArtifact = [
     'const fs=require("node:fs")',
     'const zlib=require("node:zlib")',
@@ -62,8 +107,9 @@ function workerLaunchCommand(homeDir: string, artifactDigest: string) {
     "if(fs.existsSync(source))fs.writeFileSync(target,zlib.gunzipSync(fs.readFileSync(source)),{mode:0o500})",
     "fs.rmSync(source,{force:true})",
     `if(require("node:crypto").createHash("sha256").update(fs.readFileSync(target)).digest("hex")!==${JSON.stringify(artifactDigest)})throw Error("Worker artifact digest mismatch")`,
+    ...(photonDigest ? [`if(require("node:crypto").createHash("sha256").update(fs.readFileSync(${JSON.stringify(WORKER_PHOTON_WASM_PATH)})).digest("hex")!==${JSON.stringify(photonDigest)})throw Error("Worker Photon WASM digest mismatch")`] : []),
   ].join(";");
-  return `mkdir -p ${shellQuote(logsDir)} && { node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)}; } >> ${shellQuote(workerLogPath)} 2>&1`;
+  return `{ node -e ${shellQuote(extractArtifact)} && exec node ${shellQuote(WORKER_ARTIFACT_PATH)}; } >> ${shellQuote(WORKER_LOG_PATH)} 2>&1`;
 }
 
 function agentGatewayUrl(controlUrl: string): string {
@@ -75,6 +121,7 @@ function agentGatewayUrl(controlUrl: string): string {
 
 export interface ProviderWorkerProvisionerOptions {
   readonly artifact: Uint8Array;
+  readonly photonWasm?: Uint8Array;
   readonly controlUrl: string;
   readonly checkpointRoot?: string;
   readonly templateCheckpointName?: string;
@@ -100,6 +147,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const broker = yield* ProviderWorkerBroker;
     const authority = yield* ProviderWorkerBootstrapAuthority;
     const lifecycleLock = makeKeyedLock<string>();
+    const importLock = makeKeyedLock<string>();
     const checkpointLock = makeKeyedLock<string>();
     // Immutable checkpoint files are shared by preview, download and conversion.
     // Bound both bytes and entries; live working copies always bypass this cache.
@@ -108,25 +156,72 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     const checkpointStore = options.checkpointRoot
       ? makeOutboxCheckpointStore(options.checkpointRoot)
       : undefined;
-    const workspaceCheckpointStore = options.checkpointRoot && workspaceRuntime.checkpoint
+    const nativeDaytona = process.env.SYNARA_WORKSPACE_RUNTIME === "daytona";
+    const workspaceCheckpointStore = options.checkpointRoot && (workspaceRuntime.checkpoint || nativeDaytona)
       ? makeWorkspaceCheckpointStore(path.join(options.checkpointRoot, "workspaces"))
       : undefined;
     const archiveEnabled = artifactApiClient() !== undefined;
+    if (nativeDaytona && (!workspaceCheckpointStore || !archiveEnabled)) throw new Error("Daytona requires durable workspace pointers and the portable archive API.");
     const maxCachedDisks = Number(process.env.SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS ?? "64");
     if (!Number.isInteger(maxCachedDisks) || maxCachedDisks < 1 || maxCachedDisks > 64) {
       throw new Error("SYNARA_PROVIDER_WORKER_MAX_CHECKPOINTS must be an integer from 1 through 64.");
     }
     const checkpointPool = makeKeyedLock<string>();
-    const captureSlots = yield* Semaphore.make(4);
+    const captureSlots = yield* Semaphore.make(nativeDaytona ? 8 : 4);
     const diskReaders = new Map<string, number>();
     const cachedDisks = new Map<string, ProviderWorkspaceCheckpoint>();
     const activeCaptures = new Set<string>();
     let diskIndexLoaded = false;
     const artifactArchive = gzipSync(options.artifact, { level: 6 });
     const artifactDigest = createHash("sha256").update(options.artifact).digest("hex");
+    const photonDigest = options.photonWasm && createHash("sha256").update(options.photonWasm).digest("hex");
     const activeByThread = new Map<string, ProviderWorkerRuntimeBinding>();
     const retiredGenerations = new Map<string, Set<string>>();
     const companyRefsEnabled = process.env.SYNARA_COMPANY_WORKSPACE_REFS === "true";
+    const s3Lfs = s3LfsMountConfig(process.env);
+    const mountS3Lfs = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"]) {
+      if (!s3Lfs) return;
+      const ready = yield* workspaceRuntime.exec(workspace, {
+        command: `mountpoint -q ${shellQuote(S3_LFS_MOUNT_ROOT)}`, timeoutSeconds: 10,
+      });
+      if (ready.exitCode === 0 && !ready.timedOut) return;
+      yield* workspaceRuntime.writeFile(workspace, {
+        path: S3_LFS_PASSWORD_PATH, data: s3LfsCredentialFile(s3Lfs), mode: 0o600,
+      }).pipe(Effect.mapError((cause) => provisionError("repository.mount.credentials", "Could not prepare the S3 mount credential.", cause, workspace.runtimeId)));
+      const mounted = yield* Effect.exit(workspaceRuntime.exec(workspace, {
+        command: s3LfsMountCommand(s3Lfs), timeoutSeconds: 45,
+      }));
+      const cleanup = yield* workspaceRuntime.exec(workspace, {
+        command: `rm -f ${shellQuote(S3_LFS_PASSWORD_PATH)} && test ! -e ${shellQuote(S3_LFS_PASSWORD_PATH)}`,
+        timeoutSeconds: 10,
+      });
+      if (cleanup.exitCode !== 0 || cleanup.timedOut)
+        return yield* provisionError("repository.mount.cleanup", "S3 mount credential erasure could not be confirmed.", undefined, workspace.runtimeId);
+      if (Exit.isFailure(mounted) || mounted.value.exitCode !== 0 || mounted.value.timedOut)
+        return yield* provisionError("repository.mount", "Company S3 files could not be mounted.", Exit.isFailure(mounted) ? Cause.squash(mounted.cause) : undefined, workspace.runtimeId);
+    });
+    const runRepositoryPlan = Effect.fn(function* (workspace: ProviderWorkerRuntimeBinding["workspace"], command: string,
+      timeoutSeconds: number, shellTimeout?: number) {
+      if (workspace.runtimeKind === "daytona-sandbox") return yield* workspaceRuntime.exec(workspace, {
+        command: shellTimeout ? `timeout --kill-after=5s ${shellTimeout}s sh -c ${shellQuote(command)}` : command,
+        timeoutSeconds,
+      });
+      const script = `/root/.synara-repository-plan-${randomUUID()}.sh`;
+      yield* workspaceRuntime.writeFile(workspace, { path: script, data: command, mode: 0o700 });
+      return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+        const executed = yield* Effect.exit(restore(workspaceRuntime.exec(workspace, {
+          command: shellTimeout ? `timeout --kill-after=5s ${shellTimeout}s sh ${shellQuote(script)}` : `sh ${shellQuote(script)}`,
+          timeoutSeconds,
+        })));
+        const cleanup = yield* workspaceRuntime.exec(workspace, {
+          command: `rm -f ${shellQuote(script)} && test ! -e ${shellQuote(script)}`, timeoutSeconds: 10,
+        });
+        if (cleanup.exitCode !== 0 || cleanup.timedOut)
+          return yield* provisionError("repository.plan.cleanup", "Repository command cleanup could not be confirmed.", undefined, workspace.runtimeId);
+        if (Exit.isFailure(executed)) return yield* Effect.failCause(executed.cause);
+        return executed.value;
+      }));
+    });
     const repositoryOrigin = (binding: { readonly origin: string }) =>
       options.repositoryOriginOverride && binding.origin === options.repositoryOriginOverride.sourceOrigin
         ? options.repositoryOriginOverride.origin : binding.origin;
@@ -168,6 +263,41 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       yield* Effect.tryPromise({ try: () => workspaceCheckpointStore!.write(threadId, saved), catch: (cause) => cause });
       cachedDisks.delete(threadId);
       if (saved.checkpoint || saved.retiredCheckpoints?.length) cachedDisks.set(threadId, saved);
+    });
+    const saveNativeBinding = (binding: ProviderWorkerRuntimeBinding, dirty = false) => Effect.gen(function* () {
+      if (binding.workspace.runtimeKind !== "daytona-sandbox" || !binding.threadId) return;
+      const previous = yield* readWorkspaceCheckpoint(binding.threadId);
+      const sameRepository = JSON.stringify(previous?.binding.repositoryCheckout?.binding ?? previous?.binding.repositoryUnavailable?.binding) ===
+        JSON.stringify(binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding);
+      const archive = sameRepository ? previous?.archive : undefined;
+      const sameDisk = previous?.binding.workspace.runtimeId === binding.workspace.runtimeId;
+      yield* saveDiskPointer(binding.threadId, { binding, nativeRevision: archive?.revision ?? `native-${randomUUID()}`,
+        mutationRevision: !dirty && sameDisk && previous?.mutationRevision ? previous.mutationRevision : randomUUID(),
+        ...(archive && previous?.archiveMutationRevision ? { archiveMutationRevision: previous.archiveMutationRevision } : {}),
+        ...(archive && previous?.archiveWritersStopped ? { archiveWritersStopped: true } : {}),
+        ...(archive ? { archive, archiveBinding: previous!.archiveBinding ?? previous!.binding } : {}) });
+    });
+    const markWorkspaceMutationUnlocked = (binding: ProviderWorkerRuntimeBinding, allowRetired = false) => Effect.gen(function* () {
+      if (binding.workspace.runtimeKind !== "daytona-sandbox" || !binding.threadId) return;
+      const active = activeByThread.get(binding.threadId);
+      if ((active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) ||
+          (!allowRetired && retiredGenerations.get(binding.threadId)?.has(binding.fence.lifecycleGeneration)))
+        return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
+      yield* saveNativeBinding(binding, true);
+    }).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError ? cause
+      : provisionError("workspace.mutation", "Could not persist native workspace recovery coverage.", cause, binding.workspace.runtimeId)));
+    const markWorkspaceMutation: NonNullable<ProviderWorkerProvisionerShape["markWorkspaceMutation"]> = (binding) =>
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, markWorkspaceMutationUnlocked(binding));
+    const withWorkspaceMutation: NonNullable<ProviderWorkerProvisionerShape["withWorkspaceMutation"]> = (binding, mutation) =>
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId,
+        markWorkspaceMutationUnlocked(binding).pipe(Effect.andThen(mutation)));
+    const ensureNativeImport = (saved: ProviderWorkspaceCheckpoint) => Effect.gen(function* () {
+      if (!nativeDaytona || saved.binding.workspace.runtimeKind !== "railway-sandbox" || saved.archive) return saved;
+      const archive = yield* importLock.withLock("railway", importRailwayWorkspace(saved)).pipe(
+        observeProviderOperation("workspace.import", { threadId: saved.binding.threadId }),
+      );
+      yield* Effect.tryPromise({ try: () => workspaceCheckpointStore!.writeImportedArchive(saved.checkpoint!.key, archive), catch: (cause) => cause });
+      return { ...saved, archive };
     });
     const reconcileCaptures = Effect.gen(function* () {
       if (!workspaceCheckpointStore || !workspaceRuntime.listCheckpoints || !workspaceRuntime.deleteCheckpoint) return;
@@ -251,20 +381,49 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           if (count) diskReaders.set(key, count); else diskReaders.delete(key);
         }),
       );
-    const checkpointWorkspaceUnlocked = (binding: ProviderWorkerRuntimeBinding) => captureSlots.withPermits(1)(Effect.gen(function* () {
-      if (!workspaceCheckpointStore || !workspaceRuntime.checkpoint || !binding.threadId) return;
+    const checkpointWorkspaceUnlocked = (binding: ProviderWorkerRuntimeBinding, stopped = false) => captureSlots.withPermits(1)(Effect.gen(function* () {
+      if (!workspaceCheckpointStore || !binding.threadId) return;
       const active = activeByThread.get(binding.threadId);
       if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
         return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
       }
+      if (binding.workspace.runtimeKind === "daytona-sandbox" && !stopped) {
+        const sessions = yield* broker.request(binding.fence, "session.list", {}).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ProviderSession))),
+        );
+        const session = sessions.find((candidate) => candidate.threadId === binding.threadId);
+        if (!session || session.activeTurnId !== undefined || session.status === "running")
+          return yield* provisionError("workspace.checkpoint.active", "Native backup requires a settled provider session.", undefined, binding.workspace.runtimeId);
+      }
+      const captured = binding.workspace.runtimeKind === "daytona-sandbox" ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
       const flush = yield* workspaceRuntime.exec(binding.workspace, {
-        command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && sync`,
+        command: `test ! -e ${shellQuote(WORKER_CONFIG_PATH)} && test ! -e ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)} && test ! -e ${shellQuote(S3_LFS_PASSWORD_PATH)} && sync`,
         timeoutSeconds: 30,
       });
       if (flush.exitCode !== 0 || flush.timedOut) {
         return yield* provisionError("workspace.checkpoint.flush", "Worker disk could not be flushed without transient credentials.", undefined, binding.workspace.runtimeId);
       }
       const captureKey = `synara-thread-${createHash("sha256").update(binding.threadId).digest("hex").slice(0, 16)}-${randomUUID()}`;
+      if (binding.workspace.runtimeKind === "daytona-sandbox") {
+        const archive = yield* archiveWorkspace({ workspaceRuntime, binding, revision: captureKey }).pipe(
+          observeProviderOperation("workspace.backup", { threadId: binding.threadId, sandboxId: binding.workspace.runtimeId }),
+        );
+        const current = yield* readWorkspaceCheckpoint(binding.threadId);
+        if (!captured?.mutationRevision || current?.mutationRevision !== captured.mutationRevision ||
+            current.binding.workspace.runtimeId !== binding.workspace.runtimeId ||
+            current.binding.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration)
+          return yield* provisionError("workspace.checkpoint.stale", "Native workspace changed before backup coverage could be committed.", undefined, binding.workspace.runtimeId);
+        yield* saveDiskPointer(binding.threadId, { binding, nativeRevision: captureKey, archive,
+          mutationRevision: captured.mutationRevision,
+          // Terminal archives remain useful copies, but an idle Pi session can leave
+          // detached children writing. Only the proven UID stop permits recovery.
+          ...(stopped ? { archiveMutationRevision: captured.mutationRevision, archiveWritersStopped: true } : {}) });
+        yield* Effect.logInfo("provider native workspace backed up", {
+          threadId: binding.threadId, sandboxId: binding.workspace.runtimeId, revision: captureKey, bytes: archive.sizeBytes,
+        });
+        return;
+      }
+      if (!workspaceRuntime.checkpoint) return;
       yield* checkpointPool.withLock("pool", Effect.gen(function* () {
         yield* indexDisks;
         yield* reconcileCaptures;
@@ -389,6 +548,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           }),
         { concurrency: 2, discard: true },
       );
+      if (s3Lfs && binding.cwd.startsWith("/workspace/repository/companies/")) {
+        const ownership = yield* workspaceRuntime.exec(binding.workspace, {
+          command: `chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)}`,
+          timeoutSeconds: 30,
+        });
+        if (ownership.exitCode !== 0 || ownership.timedOut)
+          return yield* provisionError("persistence.checkpoint.owner", "Restored Outbox files are not readable to the company worker.", undefined, binding.workspace.runtimeId);
+      }
     });
 
     const markOutboxPromoted: ProviderWorkerProvisionerShape["markOutboxPromoted"] = (
@@ -420,7 +587,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           if (Exit.isFailure(cleanupExit)) {
             return yield* provisionError(
               "workspace.cleanup",
-              "Failed to destroy the Railway provider workspace after provisioning failed.",
+              "Failed to destroy the provider workspace after provisioning failed.",
               Cause.squash(cleanupExit.cause),
               workspace.runtimeId,
             );
@@ -435,6 +602,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly lifecycleGeneration: string;
       readonly cwd: string;
       readonly homeDir: string;
+      readonly legacyPiResumeSessionFile?: string;
       readonly repositoryBinding?: NonNullable<
         Parameters<ProviderWorkerProvisionerShape["start"]>[0]["repositoryBinding"]
       >;
@@ -445,7 +613,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly allowUnavailable?: boolean;
       readonly previousCheckout?: ProviderWorkerRuntimeBinding["repositoryCheckout"];
       readonly repositoryCredential?: string;
+      readonly unprivileged?: boolean;
     }) {
+      const unprivileged = input.unprivileged || input.workspace.runtimeKind === "daytona-sandbox";
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
         workerId: randomUUID(),
@@ -499,10 +669,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   Effect.gen(function* () {
                     const checkoutExit = yield* Effect.exit(
                       restore(
-                        workspaceRuntime.exec(input.workspace, {
-                          command: input.allowUnavailable ? `timeout --kill-after=5s 30s sh -c ${shellQuote(input.checkoutCommand!)}` : input.checkoutCommand!,
-                          timeoutSeconds: input.allowUnavailable ? 45 : 120,
-                        }),
+                        runRepositoryPlan(input.workspace, input.checkoutCommand!, input.allowUnavailable ? 45 : 120,
+                          input.allowUnavailable ? 30 : undefined),
                       ),
                     );
                     const cleanupExit = yield* Effect.exit(cleanupCredential);
@@ -576,12 +744,38 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             mode: 0o400,
           });
         }
+        if (options.photonWasm && photonDigest) {
+          const photonProbe = yield* workspaceRuntime.exec(input.workspace, {
+            command: `test -f ${shellQuote(WORKER_PHOTON_WASM_PATH)} && printf '%s  %s\\n' ${shellQuote(photonDigest)} ${shellQuote(WORKER_PHOTON_WASM_PATH)} | sha256sum --check --status`,
+            timeoutSeconds: 15,
+          });
+          if (photonProbe.exitCode !== 0 || photonProbe.timedOut) {
+            yield* workspaceRuntime.writeFile(input.workspace, {
+              path: WORKER_PHOTON_WASM_PATH,
+              data: options.photonWasm,
+              mode: 0o444,
+            });
+          }
+        }
         yield* Effect.logInfo("provider worker artifact ready", {
           sandboxId: fence.sandboxId,
           sha256: artifactDigest,
           reused: artifactProbe.exitCode === 0 && !artifactProbe.timedOut,
           uploadBytes: artifactProbe.exitCode === 0 && !artifactProbe.timedOut ? 0 : artifactArchive.byteLength,
         });
+        if (unprivileged) {
+          const prepared = yield* workspaceRuntime.exec(input.workspace, {
+            command: `${legacyPiSessionCopyCommand(input.legacyPiResumeSessionFile)} && mkdir -p ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} && chown 0:0 /workspace /workspace/.synara && chmod 755 /workspace /workspace/.synara && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.homeDir)} ${shellQuote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)} /workspace/.pi${input.repositoryBinding ? ` && chown 0:0 /workspace/repository && chmod 755 /workspace/repository && if [ -d /workspace/repository/.git ]; then chown -R 0:0 /workspace/repository/.git && chmod 755 /workspace/repository/.git && chmod -R go-w /workspace/repository/.git; fi${input.unprivileged ? "" : ` && chown -R ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(input.cwd)}`}` : ""}`,
+            timeoutSeconds: 60,
+          });
+          if (prepared.exitCode !== 0 || prepared.timedOut || prepared.truncated)
+            return yield* provisionError("workspace.user", "Could not prepare the unprivileged worker.", undefined, fence.sandboxId);
+          yield* workspaceRuntime.writeFile(input.workspace, {
+            path: "/opt/synara/agent-gitconfig",
+            data: "[safe]\n\tdirectory = /workspace/repository\n[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
+            mode: 0o644,
+          });
+        }
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_CONFIG_PATH,
           data: JSON.stringify({
@@ -592,6 +786,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             lifecycleGeneration: fence.lifecycleGeneration,
             cwd: input.cwd,
             homeDir: input.homeDir,
+            ...(unprivileged ? { runAsUid: String(S3_LFS_AGENT_UID) } : {}),
             ...(input.agentGatewayConnection === undefined
               ? {}
               : {
@@ -605,7 +800,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           sandboxId: fence.sandboxId,
         });
         const durable = yield* workspaceRuntime.startDurableProcess(input.workspace, {
-          command: workerLaunchCommand(input.homeDir, artifactDigest),
+          command: workerLaunchCommand(artifactDigest, photonDigest),
         });
         durableSessionName = durable.sessionName;
         yield* Effect.logInfo("provider worker process started", {
@@ -614,7 +809,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         yield* broker.waitForConnection(fence).pipe(
           Effect.onError(() => workspaceRuntime.exec(input.workspace, {
-            command: `tail -c 12000 ${shellQuote(`${input.homeDir}/state/logs/worker.log`)} 2>/dev/null`,
+            command: `tail -c 12000 ${shellQuote(WORKER_LOG_PATH)} 2>/dev/null`,
             timeoutSeconds: 3,
           }).pipe(
             Effect.timeout(Duration.seconds(5)),
@@ -643,8 +838,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         });
         return {
           schemaVersion: 1,
-          runtimeKind:
-            input.workspace.runtimeKind === "docker-container" ? "docker-pi" : "railway-sandbox-pi",
+          runtimeKind: input.workspace.runtimeKind === "docker-container" ? "docker-pi"
+            : input.workspace.runtimeKind === "daytona-sandbox" ? "daytona-pi" : "railway-sandbox-pi",
           threadId: input.threadId,
           workspace: input.workspace,
           fence,
@@ -670,7 +865,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         Effect.mapError((cause) =>
           provisionError(
             "launch",
-            "Failed to launch and connect the Railway provider worker.",
+            "Failed to launch and connect the provider worker.",
             cause,
             input.workspace.runtimeId,
           ),
@@ -708,14 +903,20 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       yield* Effect.logInfo("legacy provider disk toolchain upgraded", { sandboxId: workspace.runtimeId });
     });
 
-    const createBinding: ProviderWorkerProvisionerShape["start"] = (input) =>
+    const createBinding = (input: ProviderWorkerProvisionInput, restoreSaved?: ProviderWorkspaceCheckpoint): Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError> =>
       withSavedDisk(input.threadId, (stored) => Effect.gen(function* () {
+        stored = restoreSaved ?? stored;
         const previousRepository = stored?.binding.repositoryCheckout?.binding ?? stored?.binding.repositoryUnavailable?.binding;
         const sameRepository = input.repositoryBinding && previousRepository &&
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
-        const saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
+        let saved = stored && (sameRepository || (!input.repositoryBinding && !previousRepository)) ? stored : undefined;
+        if (saved) saved = yield* ensureNativeImport(saved);
+        if (saved?.binding.workspace.runtimeKind === "daytona-sandbox" && (!nativeDaytona || !saved.nativeRevision) && !workspaceArchiveIsCurrent(saved))
+          return yield* provisionError("workspace.restore.coverage", "Native workspace backup does not cover its latest mutations; its original disk is retained.", undefined, saved.binding.workspace.runtimeId);
+        if (nativeDaytona && saved?.nativeRevision) return yield* replaceBinding(saved.binding, input);
         const checkpointName = (saved?.archive ? undefined : saved?.checkpoint?.key) ?? options.templateCheckpointName;
         const companyOnly = (companyRefsEnabled && input.repositoryBinding?.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(input.repositoryBinding?.path ?? "")) || saved?.binding.repositoryCheckout?.checkoutMode === "company";
+        const mountedCompany = !!s3Lfs && companyOnly;
         const migrate = companyOnly && saved && (saved.binding.repositoryUnavailable || saved.binding.repositoryCheckout?.checkoutMode !== "company");
         const checkout = input.repositoryBinding
           ? (migrate ? makeRepositoryIsolationPlan : saved ? makeVerifiedRepositoryRefreshPlan : makeRepositoryCheckoutPlan)({
@@ -724,12 +925,14 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
               verifiedCommit: saved?.binding.repositoryCheckout?.commit,
               binding: input.repositoryBinding,
               repositoryOrigin: repositoryOrigin(input.repositoryBinding),
+              ...(mountedCompany ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
               ...(options.repositoryAuthorization
                 ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH }
                 : {}),
             })
           : undefined;
         const workspace = yield* workspaceRuntime.create({
+          ...(input.speculative ? { speculative: true } : {}),
           threadId: input.threadId,
           lifecycleGeneration: input.lifecycleGeneration,
           ...(checkpointName ? { checkpointName } : {}),
@@ -746,13 +949,17 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         return yield* withWorkspaceCleanup(
           workspace,
           (saved?.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(
-            Effect.andThen(saved ? prepareWorkerToolchain(workspace) : Effect.void), Effect.andThen(provisionConnectedWorker({
+            Effect.andThen(saved ? prepareWorkerToolchain(workspace) : Effect.void),
+            Effect.andThen(mountedCompany ? mountS3Lfs(workspace) : Effect.void),
+            Effect.andThen(provisionConnectedWorker({
             workspace,
             threadId: input.threadId,
             lifecycleGeneration: input.lifecycleGeneration,
             cwd: checkout?.cwd ?? input.cwd?.trim() ?? DEFAULT_CWD,
             homeDir: saved?.binding.homeDir ?? DEFAULT_HOME_DIR,
+            ...(input.legacyPiResumeSessionFile ? { legacyPiResumeSessionFile: input.legacyPiResumeSessionFile } : {}),
             allowUnavailable: companyOnly,
+            unprivileged: mountedCompany,
             ...(saved?.binding.repositoryCheckout ? { previousCheckout: saved.binding.repositoryCheckout } : {}),
             ...(input.repositoryBinding === undefined
               ? {}
@@ -777,26 +984,68 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         Effect.mapError((cause) =>
           cause instanceof ProviderWorkerProvisioningError
             ? cause
-            : provisionError("start", "Failed to create the Railway provider workspace.", cause),
+            : provisionError("start", "Failed to create the provider workspace.", cause),
         ),
       );
 
-    const stopWorkerProcess = (binding: ProviderWorkerRuntimeBinding) => Effect.gen(function* () {
+    const stopWorkerProcess = (binding: ProviderWorkerRuntimeBinding, nativeAgentUidVerified = false) => Effect.gen(function* () {
+      if (binding.workspace.runtimeKind === "daytona-sandbox" && !nativeAgentUidVerified)
+        return yield* provisionError("workspace.stop", "Cannot prove the native worker's detached writers belong to the fenced agent UID; retaining its disk.", undefined, binding.workspace.runtimeId);
       yield* workspaceRuntime.stopDurableProcess(binding.workspace, binding.durableSessionName)
         .pipe(Effect.catch(() => Effect.void));
+      if (binding.workspace.runtimeKind === "daytona-sandbox") {
+        const fenced = yield* workspaceRuntime.exec(binding.workspace, {
+          command: `for i in $(seq 1 100); do pkill -KILL -u ${S3_LFS_AGENT_UID} 2>/dev/null || true; pgrep -u ${S3_LFS_AGENT_UID} >/dev/null; found=$?; if [ "$found" = 1 ]; then exit 0; fi; if [ "$found" != 0 ]; then exit 1; fi; sleep 0.05; done; exit 1`,
+          timeoutSeconds: 10,
+        });
+        if (fenced.exitCode !== 0 || fenced.timedOut || fenced.truncated) return yield* provisionError("workspace.stop", "Previous worker processes could not be fenced.", undefined, binding.workspace.runtimeId);
+      }
       if (!workspaceCheckpointStore) return;
       const stopped = yield* workspaceRuntime.exec(binding.workspace, {
-        command: "for i in $(seq 1 100); do if ! pgrep -f '^node /opt/synara/provider-worker.mjs$' >/dev/null; then exit 0; fi; sleep 0.1; done; exit 1",
+        command: "for i in $(seq 1 100); do pgrep -f '^node /opt/synara/provider-worker.mjs$' >/dev/null; found=$?; if [ \"$found\" = 1 ]; then exit 0; fi; if [ \"$found\" != 0 ]; then exit 1; fi; sleep 0.1; done; exit 1",
         timeoutSeconds: 15,
       });
-      if (stopped.exitCode !== 0 || stopped.timedOut) {
+      if (stopped.exitCode !== 0 || stopped.timedOut || stopped.truncated) {
         return yield* provisionError("workspace.stop", "Worker did not stop before its disk checkpoint.", undefined, binding.workspace.runtimeId);
       }
     });
 
-    const retireWorkspace = (binding: ProviderWorkerRuntimeBinding, reason: string) => Effect.gen(function* () {
-      const connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+    const retireWorkspace = (binding: ProviderWorkerRuntimeBinding, reason: string, mode: "destroy" | "park" | "reuse" = "destroy") => Effect.gen(function* () {
+      let connection = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+      let nativeAgentUidVerified = false;
+      let maintenanceWritersStopped = false;
+      if (Exit.isFailure(connection) && binding.workspace.runtimeKind === "daytona-sandbox") {
+        const unavailable = Cause.squash(connection.cause);
+        if (!(unavailable instanceof WorkspaceRuntimeError) || !unavailable.unavailable) return yield* Effect.failCause(connection.cause);
+        if (mode === "destroy" && unavailable.status === "stopped" && workspaceRuntime.resume) {
+          const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+          if (!workspaceArchiveIsCurrent(saved) || saved?.binding.workspace.runtimeId !== binding.workspace.runtimeId ||
+              saved.binding.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration)
+            return yield* provisionError("workspace.stop", "Stopped native worker has no verified writer fence; retaining its disk and recovery pointer.", undefined, binding.workspace.runtimeId);
+          maintenanceWritersStopped = true;
+          const workspace = yield* workspaceRuntime.resume(binding.workspace, {
+            ...(binding.threadId ? { threadId: binding.threadId } : {}), lifecycleGeneration: binding.fence.lifecycleGeneration, maintenance: true,
+          });
+          binding = { ...binding, workspace };
+          connection = yield* Effect.exit(workspaceRuntime.connect(workspace));
+          if (Exit.isFailure(connection)) return yield* Effect.failCause(connection.cause);
+        }
+      }
+      if (Exit.isSuccess(connection) && binding.workspace.runtimeKind === "daytona-sandbox") {
+        // Check while the worker is still connected: after exit, root-owned
+        // detached children cannot be attributed safely to its generation.
+        const uid = yield* workspaceRuntime.exec(binding.workspace, {
+          command: `worker_processes="$(ps -eo uid=,args=)" || exit 3; printf '%s\\n' "$worker_processes" | awk '$2 == "node" && $3 == "/opt/synara/provider-worker.mjs" { found = 1; if ($1 != ${S3_LFS_AGENT_UID}) bad = 1 } END { exit (bad ? 2 : !found) }'`,
+          timeoutSeconds: 10,
+        });
+        // A provider-confirmed stopped disk with the matching persisted fence
+        // has no prior writers. Maintenance resume need not launch a new worker.
+        if ((uid.exitCode !== 0 && !(maintenanceWritersStopped && uid.exitCode === 1)) || uid.timedOut || uid.truncated)
+          return yield* provisionError("workspace.stop", "Native worker UID could not be verified; retaining its disk and recovery pointer.", undefined, binding.workspace.runtimeId);
+        nativeAgentUidVerified = true;
+      }
       if (Exit.isSuccess(connection) && workspaceCheckpointStore && binding.threadId) {
+        yield* markWorkspaceMutationUnlocked(binding, true);
         // Let Pi dispose its native session and child processes before the process/disk barrier.
         yield* broker.request(binding.fence, "session.stop", { threadId: binding.threadId }).pipe(
           Effect.timeout(Duration.seconds(10)),
@@ -806,18 +1055,19 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
       yield* authority.revoke(binding.fence);
       if (Exit.isSuccess(connection)) {
-        yield* stopWorkerProcess(binding);
+        yield* stopWorkerProcess(binding, nativeAgentUidVerified);
         yield* checkpointOutbox(binding);
-        yield* checkpointWorkspaceUnlocked(binding);
-      } else if (workspaceCheckpointStore) {
+        yield* checkpointWorkspaceUnlocked(binding, true);
+      } else if (workspaceCheckpointStore && mode === "destroy") {
         const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
-        if (!saved) {
+        if (!saved || (!saved.checkpoint && !saved.archive) ||
+            (binding.workspace.runtimeKind === "daytona-sandbox" && !workspaceArchiveIsCurrent(saved))) {
           return yield* provisionError("workspace.restore", "The worker is unavailable and has no completed disk checkpoint; refusing to lose its native session.", Cause.squash(connection.cause), binding.workspace.runtimeId);
         }
         yield* Effect.logWarning("restoring last completed provider disk checkpoint", { threadId: binding.threadId, revision: workspaceCheckpointRevision(saved) });
       }
-      // Destruction is the authoritative generation barrier, including after a lost control connection.
-      yield* workspaceRuntime.destroy(binding.workspace);
+      if (mode === "destroy") yield* workspaceRuntime.destroy(binding.workspace);
+      else if (workspaceRuntime.park && (mode === "park" || Exit.isFailure(connection))) yield* workspaceRuntime.park(binding.workspace);
       checkedToolchains.delete(binding.workspace.runtimeId);
     });
 
@@ -826,11 +1076,115 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         if (binding.threadId && binding.threadId !== input.threadId) {
           return yield* provisionError("workspace.restore", "Cannot restore another thread's writable worker disk.", undefined, binding.workspace.runtimeId);
         }
-        yield* retireWorkspace(binding, "worker generation replaced");
         const repositoryBinding = input.repositoryBinding ?? binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding;
+        const previousRepository = binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding;
+        const native = binding.workspace.runtimeKind === "daytona-sandbox";
+        const inspected = native ? yield* Effect.exit(workspaceRuntime.connect(binding.workspace)) : undefined;
+        const inspectError = inspected && Exit.isFailure(inspected) ? Cause.squash(inspected.cause) : undefined;
+        const missing = inspectError instanceof WorkspaceRuntimeError &&
+          (inspectError.cause instanceof RailwaySandboxNotFoundError || inspectError.status === "destroyed");
+        const stopped = inspectError instanceof WorkspaceRuntimeError && inspectError.status === "stopped";
+        if (native && inspected && Exit.isFailure(inspected) && !missing && !stopped)
+          return yield* Effect.failCause(inspected.cause);
+        const restoreNative = () => Effect.gen(function* () {
+          const saved = binding.threadId ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
+          if (!workspaceArchiveIsCurrent(saved) || !saved?.archive ||
+              saved.binding.workspace.runtimeId !== binding.workspace.runtimeId ||
+              saved.binding.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration)
+            return yield* provisionError("workspace.restore.coverage", "Native workspace has newer or unknown private state; its original disk and recovery pointer are retained.", undefined, binding.workspace.runtimeId);
+          // Fencing revokes controller authority; a stopped or missing disk has no live writer.
+          yield* broker.retire(binding.fence, "native workspace restored in a fresh sandbox").pipe(Effect.catch(() => Effect.void));
+          yield* authority.revoke(binding.fence);
+          // Stage the restore without demoting the original pointer or deleting its disk.
+          return yield* createBinding({ ...input, ...(repositoryBinding ? { repositoryBinding } : {}) }, {
+            binding: saved.archiveBinding ?? saved.binding, archive: saved.archive,
+            mutationRevision: saved.mutationRevision, archiveMutationRevision: saved.archiveMutationRevision,
+            archiveWritersStopped: saved.archiveWritersStopped,
+          });
+        });
+        const reuse = binding.workspace.runtimeKind === "daytona-sandbox" && workspaceRuntime.park && workspaceRuntime.resume &&
+          repositoryBinding && previousRepository &&
+          (["origin", "owner", "repository", "ref", "path"] as const).every((key) => repositoryBinding[key] === previousRepository[key]);
+        if (reuse && repositoryBinding && workspaceRuntime.resume) {
+          if (!missing) {
+            yield* retireWorkspace(binding, "worker generation replaced", "reuse");
+            const resumed = yield* Effect.exit(workspaceRuntime.resume(binding.workspace, {
+              ...(input.speculative ? { speculative: true } : {}),
+              threadId: input.threadId,
+              lifecycleGeneration: input.lifecycleGeneration,
+              ...(options.environment ? { environment: options.environment } : {}),
+              ...(input.onCapacityAdmitted ? { onCapacityAdmitted: input.onCapacityAdmitted } : {}),
+            }));
+            if (Exit.isFailure(resumed)) {
+              const cause = Cause.squash(resumed.cause);
+              if (stopped && cause instanceof WorkspaceRuntimeError && cause.regionUnavailable === true)
+                return yield* restoreNative();
+              return yield* Effect.failCause(resumed.cause);
+            }
+            const workspace = resumed.value;
+            yield* saveNativeBinding(binding, true);
+            const companyOnly = binding.repositoryCheckout?.checkoutMode === "company" ||
+              (companyRefsEnabled && repositoryBinding.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repositoryBinding.path));
+            const mountedCompany = !!s3Lfs && companyOnly;
+            const checkout = (binding.repositoryCheckout ? makeVerifiedRepositoryRefreshPlan : makeRepositoryIsolationPlan)({
+              binding: repositoryBinding,
+              repositoryOrigin: repositoryOrigin(repositoryBinding),
+              verifiedCommit: binding.repositoryCheckout?.commit,
+              allowEmpty: binding.repositoryCheckout === undefined,
+              companyOnly,
+              ...(mountedCompany ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
+              ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
+            });
+            return yield* prepareWorkerToolchain(workspace).pipe(
+              Effect.andThen(mountedCompany ? mountS3Lfs(workspace) : Effect.void),
+              Effect.andThen(provisionConnectedWorker({
+                workspace,
+                threadId: input.threadId,
+                lifecycleGeneration: input.lifecycleGeneration,
+                cwd: checkout.cwd,
+                homeDir: binding.homeDir,
+                ...(input.legacyPiResumeSessionFile ? { legacyPiResumeSessionFile: input.legacyPiResumeSessionFile } : {}),
+                repositoryBinding,
+                checkoutCommand: checkout.command,
+                ...(binding.repositoryCheckout ? { previousCheckout: binding.repositoryCheckout } : {}),
+                allowUnavailable: companyOnly,
+                unprivileged: mountedCompany,
+                ...(input.agentGatewayConnection ? { agentGatewayConnection: input.agentGatewayConnection } : {}),
+                ...(options.repositoryAuthorization ? { repositoryCredential: makeRepositoryCredentialConfig(
+                  repositoryBinding, options.repositoryAuthorization, repositoryOrigin(repositoryBinding),
+                ) } : {}),
+              })),
+              Effect.tap((current) => saveNativeBinding(current)),
+              Effect.onError(() => workspaceRuntime.park!(workspace).pipe(
+                Effect.catch((cause) => Effect.logError("failed to park reused Daytona workspace", {
+                  sandboxId: workspace.runtimeId, cause,
+                })),
+              )),
+            );
+          }
+        }
+        if (native && missing) return yield* restoreNative();
+        yield* retireWorkspace(binding, "worker generation replaced");
         return yield* createBinding({ ...input, ...(repositoryBinding ? { repositoryBinding } : {}) });
       }).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
         ? cause : provisionError("restart", "Failed to restore the provider worker disk.", cause, binding.workspace.runtimeId)));
+
+    const park: NonNullable<ProviderWorkerProvisionerShape["park"]> = (binding) => {
+      if (binding.workspace.runtimeKind !== "daytona-sandbox" || !workspaceRuntime.park) return stop(binding);
+      return lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
+        if (binding.threadId) {
+          const active = activeByThread.get(binding.threadId);
+          if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) return;
+          if (!active && retiredGenerations.get(binding.threadId)?.has(binding.fence.lifecycleGeneration)) return;
+        }
+        yield* retireWorkspace(binding, "provider session parked", "park");
+        if (binding.threadId) {
+          activeByThread.delete(binding.threadId);
+          markRetired(binding.threadId, binding.fence.lifecycleGeneration);
+        }
+      })).pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
+        ? cause : provisionError("park", "Failed to park the provider worker.", cause, binding.workspace.runtimeId)));
+    };
 
     const stopBinding: ProviderWorkerProvisionerShape["stop"] = (binding) =>
       retireWorkspace(binding, "provider session stopped").pipe(Effect.mapError((cause) => cause instanceof ProviderWorkerProvisioningError
@@ -888,7 +1242,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             return;
           }
           if (!active && retiredGenerations.get(threadId)?.has(binding.fence.lifecycleGeneration)) {
-            return;
+            const saved = yield* readWorkspaceCheckpoint(threadId);
+            if (!saved?.nativeRevision || saved.binding.workspace.runtimeId !== binding.workspace.runtimeId ||
+                saved.binding.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) return;
           }
           yield* stopBinding(binding);
           activeByThread.delete(threadId);
@@ -898,24 +1254,26 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     };
 
     const adopt: ProviderWorkerProvisionerShape["adopt"] = (binding) =>
-      workspaceRuntime
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, workspaceRuntime
         .adopt(binding.workspace)
         .pipe(
+          Effect.andThen(saveNativeBinding(binding)),
           Effect.mapError((cause) =>
             provisionError(
               "adopt",
-              "Failed to commit the durable Railway provider workspace binding.",
+              "Failed to commit the durable provider workspace binding.",
               cause,
               binding.workspace.runtimeId,
             ),
           ),
-        );
+        ));
 
     const stageAttachments: NonNullable<ProviderWorkerProvisionerShape["stageAttachments"]> = (
       binding,
       attachments,
     ) =>
-      Effect.forEach(
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId,
+        markWorkspaceMutationUnlocked(binding).pipe(Effect.andThen(Effect.forEach(
         attachments,
         ({ attachment, sourcePath }) =>
           fileSystem.readFile(sourcePath).pipe(
@@ -939,6 +1297,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                 mode: 0o600,
               }),
             ),
+            Effect.flatMap(() => s3Lfs && binding.cwd.startsWith("/workspace/repository/companies/")
+              ? workspaceRuntime.exec(binding.workspace, {
+                  command: `chown ${S3_LFS_AGENT_UID}:${S3_LFS_AGENT_UID} ${shellQuote(path.posix.join(binding.homeDir, "state", "attachments", attachmentRelativePath(attachment)))}`,
+                  timeoutSeconds: 10,
+                }).pipe(Effect.flatMap((result) => result.exitCode === 0 && !result.timedOut
+                  ? Effect.void : Effect.fail(provisionError("attachment.owner", "Could not make the attachment readable to the company worker.", undefined, binding.workspace.runtimeId))))
+              : Effect.void),
             Effect.mapError((cause) =>
               cause instanceof ProviderWorkerProvisioningError
                 ? cause
@@ -951,7 +1316,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ),
           ),
         { concurrency: 1, discard: true },
-      );
+      ))));
 
     const refreshRepository: NonNullable<ProviderWorkerProvisionerShape["refreshRepository"]> = (binding) =>
       lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
@@ -961,8 +1326,10 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         if (active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) {
           return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
         }
+        yield* markWorkspaceMutationUnlocked(binding);
         yield* prepareWorkerToolchain(binding.workspace);
         const companyOnly = (companyRefsEnabled && repository.ref === "main" && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repository.path)) || binding.repositoryCheckout?.checkoutMode === "company";
+        if (s3Lfs && companyOnly) yield* mountS3Lfs(binding.workspace);
         const plan = (companyOnly && (binding.repositoryUnavailable || binding.repositoryCheckout?.checkoutMode !== "company")
           ? makeRepositoryIsolationPlan : makeVerifiedRepositoryRefreshPlan)({
           companyOnly,
@@ -970,6 +1337,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           verifiedCommit: binding.repositoryCheckout?.commit,
           binding: repository,
           repositoryOrigin: repositoryOrigin(repository),
+          ...(s3Lfs && companyOnly ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
           ...(options.repositoryAuthorization ? { credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH } : {}),
         });
         if (options.repositoryAuthorization) {
@@ -980,7 +1348,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           }).pipe(Effect.mapError((cause) => provisionError("repository.refresh.credentials", "Repository credentials could not be prepared safely.", cause, binding.workspace.runtimeId)));
         }
         const result = yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
-          const refreshed = yield* Effect.exit(restore(workspaceRuntime.exec(binding.workspace, { command: companyOnly ? `timeout --kill-after=5s 30s sh -c ${shellQuote(plan.command)}` : plan.command, timeoutSeconds: companyOnly ? 45 : 300 })));
+          const refreshed = yield* Effect.exit(restore(runRepositoryPlan(binding.workspace, plan.command,
+            companyOnly ? 45 : 300, companyOnly ? 30 : undefined)));
           const cleanup = yield* workspaceRuntime.exec(binding.workspace, { command: `rm -f ${shellQuote(REPOSITORY_CREDENTIAL_CONFIG_PATH)}`, timeoutSeconds: 10 }).pipe(
             Effect.mapError((cause) => provisionError("repository.refresh.cleanup", "Repository credential erasure could not be confirmed.", cause, binding.workspace.runtimeId)),
           );
@@ -1006,8 +1375,21 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       binding,
       commit,
       persistedFiles = [],
+      activeTurnId,
     ) =>
-      Effect.gen(function* () {
+      lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
+        const active = binding.threadId ? activeByThread.get(binding.threadId) : undefined;
+        if ((active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) ||
+          (binding.threadId && retiredGenerations.get(binding.threadId)?.has(binding.fence.lifecycleGeneration)))
+          return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
+        const sessions = yield* broker.request(binding.fence, "session.list", {}).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ProviderSession))),
+        );
+        const session = sessions.find((candidate) => candidate.threadId === binding.threadId);
+        if (activeTurnId === undefined
+          ? session?.activeTurnId !== undefined || session?.status === "running"
+          : session?.activeTurnId !== activeTurnId)
+          return yield* provisionError("repository.reconcile", "The requesting turn changed while waiting to reconcile company files.", undefined, binding.workspace.runtimeId);
         const repositoryBinding = binding.repositoryCheckout?.binding;
         if (!repositoryBinding || !options.repositoryAuthorization) {
           return yield* provisionError(
@@ -1017,11 +1399,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             binding.workspace.runtimeId,
           );
         }
+        yield* markWorkspaceMutationUnlocked(binding);
         yield* Effect.forEach(
           persistedFiles,
           (selection) => readProviderPersistenceCandidate({ workspaceRuntime, binding, selection }),
           { concurrency: 1, discard: true },
         );
+        if (s3Lfs && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repositoryBinding.path)) yield* mountS3Lfs(binding.workspace);
         const plan = yield* Effect.try({
           try: () =>
             makeRepositoryReconcilePlan({
@@ -1030,6 +1414,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
               commit,
               persistedFiles,
               credentialConfigPath: REPOSITORY_CREDENTIAL_CONFIG_PATH,
+              ...(s3Lfs && /^companies\/[a-z0-9][a-z0-9-]*$/.test(repositoryBinding.path) ? { mountRoot: S3_LFS_MOUNT_ROOT } : {}),
             }),
           catch: (cause) =>
             provisionError(
@@ -1067,10 +1452,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           Effect.gen(function* () {
             const reconcileExit = yield* Effect.exit(
               restore(
-                workspaceRuntime.exec(binding.workspace, {
-                  command: plan.command,
-                  timeoutSeconds: 120,
-                }),
+                runRepositoryPlan(binding.workspace, plan.command, 120),
               ),
             );
             const cleanupExit = yield* Effect.exit(cleanupCredential);
@@ -1106,7 +1488,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         };
         if (binding.threadId) activeByThread.set(binding.threadId, updated);
         return updated;
-      }).pipe(
+      })).pipe(
         Effect.tapError((cause) =>
           Effect.logWarning("provider worker repository reconciliation deferred", {
             sandboxId: binding.workspace.runtimeId,
@@ -1157,6 +1539,25 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         ),
       );
 
+    const prepareReadWorkspace = (binding: ProviderWorkerRuntimeBinding, filePath: string) => Effect.gen(function* () {
+      if (!s3Lfs || binding.repositoryCheckout?.checkoutMode !== "company" ||
+          !filePath.startsWith(`/workspace/repository/${binding.repositoryCheckout.binding.path}/`)) return;
+      const probe = yield* workspaceRuntime.exec(binding.workspace, {
+        command: `python3 -c ${shellQuote('import os,sys,stat; p=sys.argv[1]; s=os.lstat(p) if os.path.lexists(p) else None; print("pointer" if s is None or (stat.S_ISREG(s.st_mode) and s.st_size<=1024 and open(p,"rb").read(128).startswith(b"version https://git-lfs.github.com/spec/v1\\n")) else "data")')} ${shellQuote(filePath)}`,
+        timeoutSeconds: 10,
+      });
+      if (probe.exitCode !== 0 || probe.timedOut) return yield* provisionError("workspace.file.read", "Could not inspect the saved workspace file.", undefined, binding.workspace.runtimeId);
+      if (probe.stdout.trim() !== "pointer") return;
+      yield* mountS3Lfs(binding.workspace);
+      const repository = binding.repositoryCheckout.binding;
+      const mounted = yield* runRepositoryPlan(binding.workspace, hydrateLfs(
+        "/workspace/repository", repository.path,
+        `${repositoryOrigin(repository)}/${repository.owner}/${repository.repository}.git`, repository.origin,
+        undefined, S3_LFS_MOUNT_ROOT, filePath.slice("/workspace/repository/".length),
+      ), 60);
+      if (mounted.exitCode !== 0 || mounted.timedOut) return yield* provisionError("workspace.file.mount", "Saved company files could not be mounted.", undefined, binding.workspace.runtimeId);
+    });
+
     const readWorkspaceFile: NonNullable<ProviderWorkerProvisionerShape["readWorkspaceFile"]> = (binding, filePath) =>
       lifecycleLock.withLock(binding.threadId ?? binding.workspace.runtimeId, Effect.gen(function* () {
         if (!isWorkspaceFilePathAllowed(binding, filePath)) return yield* provisionError("workspace.file.read", "This path is outside the permitted thread workspace.", undefined);
@@ -1165,7 +1566,29 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           return { ...file, workspaceSource: "live" as const };
         }
         if (!binding.threadId) return yield* provisionError("workspace.file.read", "No thread workspace is available.", undefined);
+        if (binding.workspace.runtimeKind === "daytona-sandbox" && workspaceRuntime.resume && workspaceRuntime.park) {
+          const inspected = yield* Effect.exit(workspaceRuntime.connect(binding.workspace));
+          const cause = Exit.isFailure(inspected) ? Cause.squash(inspected.cause) : undefined;
+          if (cause instanceof WorkspaceRuntimeError && cause.status === "stopped") {
+            return yield* Effect.acquireUseRelease(
+              workspaceRuntime.resume(binding.workspace, { threadId: binding.threadId, lifecycleGeneration: randomUUID(), maintenance: true }),
+              (workspace) => markWorkspaceMutationUnlocked(binding, true).pipe(
+                Effect.andThen(prepareReadWorkspace({ ...binding, workspace }, filePath)),
+                Effect.andThen(readProviderWorkspaceFile({ workspaceRuntime, binding: { ...binding, workspace }, filePath })),
+                Effect.map((file) => ({ ...file, workspaceSource: "live" as const })),
+              ),
+              (workspace) => workspaceRuntime.park!(workspace).pipe(Effect.catch((cause) => Effect.logError("native preview parking failed", { sandboxId: workspace.runtimeId, cause }))),
+            );
+          }
+          if (Exit.isFailure(inspected) && !(cause instanceof WorkspaceRuntimeError &&
+              (cause.cause instanceof RailwaySandboxNotFoundError || cause.status === "destroyed")))
+            return yield* Effect.failCause(inspected.cause);
+        }
         return yield* withSavedDisk(binding.threadId, (saved) => Effect.gen(function* () {
+        if (saved) saved = yield* ensureNativeImport(saved);
+        if (binding.workspace.runtimeKind === "daytona-sandbox" && !workspaceArchiveIsCurrent(saved))
+          return yield* provisionError("workspace.file.read", "The native workspace has newer or unknown private state than its backup.", undefined, binding.workspace.runtimeId);
+        const archivedBinding = saved?.archiveBinding ?? saved?.binding;
         const currentRepository = binding.repositoryCheckout?.binding;
         const savedRepository = saved?.binding.repositoryCheckout?.binding;
         if (!saved || !currentRepository || !savedRepository ||
@@ -1184,7 +1607,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         const file = yield* Effect.acquireUseRelease(
           workspaceRuntime.create({ maintenance: true, threadId: binding.threadId!, lifecycleGeneration: randomUUID(),
             ...((saved.archive ? options.templateCheckpointName : saved.checkpoint?.key) ? { checkpointName: saved.archive ? options.templateCheckpointName! : saved.checkpoint!.key } : {}), environment: {}, networkIsolation: "ISOLATED" }),
-          (workspace) => (saved.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: saved.binding, archive: saved.archive }) : Effect.void).pipe(Effect.andThen(readProviderWorkspaceFile({ workspaceRuntime, binding: { ...saved.binding, workspace }, filePath })))
+          (workspace) => (saved.archive ? restoreWorkspaceArchive({ workspaceRuntime, workspace, binding: archivedBinding!, archive: saved.archive }) : Effect.void).pipe(Effect.andThen(prepareReadWorkspace({ ...archivedBinding!, workspace }, filePath)), Effect.andThen(readProviderWorkspaceFile({ workspaceRuntime, binding: { ...archivedBinding!, workspace }, filePath })))
             .pipe(Effect.map((file) => ({ ...file, workspaceSource: "checkpoint" as const }))),
           (workspace) => workspaceRuntime.destroy(workspace).pipe(Effect.catch((cause) =>
             Effect.logError("workspace preview sandbox cleanup failed", { sandboxId: workspace.runtimeId, cause }))),
@@ -1247,6 +1670,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
 
     return {
       isWorkspaceUnavailable,
+      markWorkspaceMutation,
+      withWorkspaceMutation,
       start,
       restart,
       adopt,
@@ -1261,6 +1686,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readOutboxCheckpoint,
       readWorkspaceFile,
       stop,
+      park,
     } satisfies ProviderWorkerProvisionerShape;
   });
 
@@ -1305,8 +1731,13 @@ export function makeProviderWorkerProvisionerFromArtifactLive(
             provisionError("artifact.read", "Failed to read the provider worker artifact.", cause),
           ),
         );
+      const photonWasm = yield* fileSystem
+        .readFile(path.join(path.dirname(artifactPath), "photon_rs_bg.wasm"))
+        .pipe(Effect.mapError((cause) =>
+          provisionError("artifact.read", "Provider worker Photon WASM is missing; run the server build before enabling Railway distributed Pi.", cause)));
       return yield* makeProviderWorkerProvisioner({
         artifact,
+        photonWasm,
         controlUrl: options.controlUrl,
         ...(options.templateCheckpointName ? { templateCheckpointName: options.templateCheckpointName } : {}),
         ...(options.repositoryOriginOverride ? { repositoryOriginOverride: options.repositoryOriginOverride } : {}),

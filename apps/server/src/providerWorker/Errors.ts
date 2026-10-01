@@ -5,7 +5,9 @@ export class ProviderWorkerBrokerError extends Data.TaggedError("ProviderWorkerB
   readonly detail: string;
   readonly sandboxId?: string;
   readonly cause?: unknown;
-}> {}
+}> {
+  override get message() { return `Provider worker ${this.operation}: ${this.detail}`; }
+}
 
 export class ProviderWorkerAuthError extends Data.TaggedError("ProviderWorkerAuthError")<{
   readonly operation: "authorize";

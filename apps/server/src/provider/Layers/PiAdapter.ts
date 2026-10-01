@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import {
   spawn as spawnChildProcess,
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 
 import type {
   BashOperations,
@@ -444,6 +445,7 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
+  interruptedTurnId?: TurnId;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
   activeToolItems: Map<string, PiTrackedToolCall>;
@@ -974,7 +976,7 @@ function findModelInRegistry(
     .find((model) => model.id === parsed.id || `${model.provider}/${model.id}` === parsed.id);
 }
 
-function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
+export function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
   if (typeof resumeCursor === "string" && resumeCursor.trim().length > 0) {
     return resumeCursor;
   }
@@ -989,6 +991,56 @@ function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+export function extractLegacyPiResumeSessionFile(resumeCursor: unknown): string | undefined {
+  const file = extractResumeSessionFile(resumeCursor);
+  const prefix = "/root/.pi/agent/sessions/";
+  return file?.startsWith(prefix) && file.endsWith(".jsonl") &&
+    !/[\\\\\u0000]/u.test(file) && file.slice(prefix.length).split("/").every((part) => part && part !== "." && part !== "..")
+    ? file : undefined;
+}
+
+/** Validate before SDK.open: the SDK treats a missing file as a new empty session. */
+export async function validatePiResumeSessionFile(file: string, currentVersion: number): Promise<string> {
+  const info = await lstat(file);
+  if (!info.isFile() || info.nlink !== 1 || info.size === 0 || await realpath(file) !== file) {
+    throw new Error("Pi resume history must be a nonempty independent regular file without symlink ancestors.");
+  }
+  const handle = await open(file, "r");
+  const stream = handle.createReadStream({ encoding: "utf8", autoClose: false });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  let identity: string | undefined;
+  let readError: unknown;
+  stream.on("error", (cause) => { readError = cause; lines.close(); });
+  try {
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof entry.type !== "string") {
+        throw new Error("Pi resume history contains an invalid entry.");
+      }
+      if (!identity) {
+        const version = entry.version ?? 1;
+        if (entry.type !== "session" || typeof entry.id !== "string" ||
+            !/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(entry.id) ||
+            !Number.isInteger(version) || Number(version) < 1 || Number(version) > currentVersion ||
+            typeof entry.cwd !== "string" || !entry.cwd) {
+          throw new Error("Pi resume history has an incompatible session header.");
+        }
+        identity = entry.id;
+      } else if (entry.type === "session") {
+        throw new Error("Pi resume history contains multiple session headers.");
+      }
+    }
+    if (readError) throw readError;
+    if (!identity) throw new Error("Pi resume history has no session header.");
+    return identity;
+  } finally {
+    lines.close();
+    stream.destroy();
+    await handle.close();
+  }
 }
 
 function getSessionFile(session: PiAgentSession): string | undefined {
@@ -1183,6 +1235,20 @@ function textFromToolResult(result: unknown): string | undefined {
       : [];
   });
   return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function toolResultForDisplay(result: unknown): unknown {
+  const record = toolRecord(result);
+  if (!record || !Array.isArray(record.content)) return result;
+  const content = record.content.map((block) => {
+    const image = toolRecord(block);
+    return image?.type === "image" && typeof image.data === "string"
+      ? { type: "text", text: "[Image provided to the agent; preview omitted from activity.]" }
+      : block;
+  });
+  return content.some((block, index) => block !== record.content[index])
+    ? { ...record, content }
+    : result;
 }
 
 function toolExitCode(result: unknown): number | null | undefined {
@@ -1439,7 +1505,7 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
       pendingTools.delete(message.toolCallId);
       const toolName = pending?.toolName ?? message.toolName;
       const args = pending?.args;
-      const result = { content: message.content };
+      const result = toolResultForDisplay({ content: message.content });
       items.push({
         type: "tool_call",
         status: message.isError ? "failed" : "completed",
@@ -1447,7 +1513,7 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
         toolName,
         itemType: toolItemType(toolName),
         title: toolTitle(toolName, args),
-        output: textFromContent(message.content),
+        output: textFromToolResult(result),
         isError: message.isError,
         data: toolLifecycleData({
           toolCallId: message.toolCallId,
@@ -1918,11 +1984,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
-      if (context.activeTurnId !== turnId) {
+      if (context.stopped || context.activeTurnId !== turnId) {
         return;
       }
 
-      const message = toMessage(cause, "Pi turn failed.");
+      const message = context.interruptedTurnId === turnId
+        ? "Interrupted by user."
+        : toMessage(cause, "Pi turn failed.");
       const failure = classifyPiTurnFailure(message);
       const completionBase = makeEventBase(context);
       if (failure.state === "failed") {
@@ -1930,6 +1998,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       }
       Effect.runFork(cancelAgentGatewayTurn(context.gatewaySessionLease, turnId));
       context.activeTurnId = undefined;
+      context.interruptedTurnId = undefined;
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
       context.activeToolItems.clear();
@@ -2130,7 +2199,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         case "tool_execution_update": {
           const tracked = context.activeToolItems.get(event.toolCallId);
           if (!tracked) return;
-          const detail = textFromToolResult(event.partialResult);
+          const partialResult = toolResultForDisplay(event.partialResult);
+          const detail = textFromToolResult(partialResult);
           recordItem(context, {
             type: "tool_call",
             status: "updated",
@@ -2151,10 +2221,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
                 args: tracked.args,
-                partialResult: event.partialResult,
+                partialResult,
               }),
             },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: { ...event, partialResult } },
           } satisfies ProviderRuntimeEvent);
           return;
         }
@@ -2167,13 +2237,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             itemType: toolItemType(event.toolName),
           };
           context.activeToolItems.delete(event.toolCallId);
-          const detail = textFromToolResult(event.result);
+          const result = toolResultForDisplay(event.result);
+          const detail = textFromToolResult(result);
           recordItem(context, {
             type: "tool_call",
             status: event.isError ? "failed" : "completed",
             toolName: event.toolName,
             output: detail,
-            result: event.result,
+            result,
           });
           offerRuntimeEvent({
             ...makeEventBase(context),
@@ -2189,11 +2260,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
                 args: tracked.args,
-                result: event.result,
+                result,
                 isError: event.isError,
               }),
             },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: { ...event, result } },
           } satisfies ProviderRuntimeEvent);
           return;
         }
@@ -2228,12 +2299,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           } satisfies ProviderRuntimeEvent);
           return;
         }
-        case "agent_end": {
+        case "agent_settled": {
+          // Called after prompt fulfills: Pi retries, compaction and deferred actions are finished.
+          if (!context.activeTurnId) return;
           const stats = context.runtime.session.getSessionStats();
           const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
           context.lastKnownTokenUsage = usage;
           const turnId = context.activeTurnId;
-          const errorMessage = context.runtime.session.agent.state.errorMessage;
+          const errorMessage = context.interruptedTurnId === turnId
+            ? "Interrupted by user."
+            : context.runtime.session.agent.state.errorMessage;
           const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
           const leafId = context.runtime.session.sessionManager.getLeafId();
           const turn = turnId
@@ -2303,6 +2378,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             );
           }
           context.activeTurnId = undefined;
+          context.interruptedTurnId = undefined;
           context.activeAssistantItemId = undefined;
           context.activeReasoningItemId = undefined;
           context.activeToolItems.clear();
@@ -2325,6 +2401,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         default:
           return;
+      }
+    };
+
+    const completePromptFulfillment = (context: PiSessionContext, turnId: TurnId) => {
+      if (!context.stopped && context.activeTurnId === turnId) {
+        handleSessionEvent(context, { type: "agent_settled" });
       }
     };
 
@@ -2413,10 +2495,27 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             : {}),
         });
         const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
-        const sessionFile = extractResumeSessionFile(input.resumeCursor);
+        const unprivilegedWorker = process.getuid?.() === 10001 && process.env.HOME === "/workspace";
+        const legacySessionFile = unprivilegedWorker ? extractLegacyPiResumeSessionFile(input.resumeCursor) : undefined;
+        const sessionFile = legacySessionFile
+          ? `/workspace${legacySessionFile.slice("/root".length)}`
+          : extractResumeSessionFile(input.resumeCursor);
+        const managedResumeFile = unprivilegedWorker && sessionFile?.startsWith("/workspace/.pi/agent/sessions/") &&
+          extractLegacyPiResumeSessionFile(`/root${sessionFile.slice("/workspace".length)}`);
+        const resumeIdentity = managedResumeFile ? yield* Effect.tryPromise({
+          try: () => validatePiResumeSessionFile(sessionFile!, piSdk.CURRENT_SESSION_VERSION),
+          catch: (cause) => new ProviderAdapterRequestError({
+            provider: PROVIDER, method: "session/start", detail: "Pi history could not be safely resumed; its original is retained.", cause,
+          }),
+        }) : undefined;
         const sessionManager = sessionFile
           ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
           : piSdk.SessionManager.create(cwd);
+        if (resumeIdentity && sessionManager.getSessionId() !== resumeIdentity) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER, method: "session/start", detail: "Pi session identity changed during resume.",
+          });
+        }
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =
@@ -2546,9 +2645,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
         };
-        context.unsubscribe = runtime.session.subscribe((event) =>
-          handleSessionEvent(context, event),
-        );
+        context.unsubscribe = runtime.session.subscribe((event) => {
+          // The SDK also emits settlement from finally when prompt rejects.
+          if (event.type !== "agent_settled") handleSessionEvent(context, event);
+        });
         sessions.set(input.threadId, context);
         yield* Effect.tryPromise({
           try: () =>
@@ -2787,6 +2887,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           .join("\n\n");
         void context.runtime.session
           .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
+          .then(() => completePromptFulfillment(context, turnId))
           .catch((cause) => {
             completePromptRejection(context, turnId, cause);
           });
@@ -2814,12 +2915,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ]
           .filter(Boolean)
           .join("\n\n");
-        const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
+        const activeTurnId = context.activeTurnId;
+        const turnId = activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [] });
         }
-        if (context.runtime.session.isStreaming) {
+        if (activeTurnId) {
           yield* Effect.tryPromise({
             try: () => context.runtime.session.steer(providerText, payload.images),
             catch: (cause) =>
@@ -2836,6 +2938,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               providerText,
               payload.images.length > 0 ? { images: payload.images } : undefined,
             )
+            .then(() => completePromptFulfillment(context, turnId))
             .catch((cause) => {
               completePromptRejection(context, turnId, cause);
             });
@@ -2859,6 +2962,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           return;
         }
         const activeTurnId = turnId ?? context.activeTurnId;
+        context.interruptedTurnId = activeTurnId;
         yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
           activeTurnId,

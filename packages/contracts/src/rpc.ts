@@ -146,6 +146,8 @@ import {
   ProviderListCommandsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
+  ProviderPrepareWorkspaceInput,
+  ProviderPrepareWorkspaceResult,
   ProviderListPluginsInput,
   ProviderListPluginsResult,
   ProviderListSkillsInput,
@@ -1160,6 +1162,12 @@ export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   error: WsRpcError,
 });
 
+export const WsProviderPrepareWorkspaceRpc = Rpc.make(WS_METHODS.providerPrepareWorkspace, {
+  payload: ProviderPrepareWorkspaceInput,
+  success: ProviderPrepareWorkspaceResult,
+  error: WsRpcError,
+});
+
 export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   payload: AutomationListInput,
   success: AutomationListResult,
@@ -1340,6 +1348,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderListPluginsRpc,
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
+  WsProviderPrepareWorkspaceRpc,
   WsProviderListAgentsRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,

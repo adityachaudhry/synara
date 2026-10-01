@@ -92,10 +92,12 @@ function ProfileContent({
     <div className="flex min-w-0 flex-col gap-7">
       {/* Action row */}
       <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
-          <CentralIcon name="share-os" />
-          Share
-        </Button>
+        {import.meta.env.VITE_SYNARA_EMBEDDED !== "true" && (
+          <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
+            <CentralIcon name="share-os" />
+            Share
+          </Button>
+        )}
         <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
           <CentralIcon name="pencil" />
           Edit
@@ -115,10 +117,14 @@ function ProfileContent({
           <h2 className="text-2xl font-semibold tracking-tight">{name}</h2>
           <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
             <span>{handle}</span>
-            <span aria-hidden>·</span>
-            <span className="rounded-full border px-1.5 py-px text-xs text-muted-foreground">
-              Synara
-            </span>
+            {import.meta.env.VITE_SYNARA_EMBEDDED !== "true" && (
+              <>
+                <span aria-hidden>·</span>
+                <span className="rounded-full border px-1.5 py-px text-xs text-muted-foreground">
+                  Synara
+                </span>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -247,16 +253,18 @@ function ProfileContent({
         )}
       </section>
 
-      <ShareDialog
-        stats={stats}
-        tokenStats={tokenStats}
-        displayName={name}
-        handle={handle}
-        avatarColor={avatarColor}
-        avatarImage={avatarImage}
-        open={shareOpen}
-        onOpenChange={setShareOpen}
-      />
+      {import.meta.env.VITE_SYNARA_EMBEDDED !== "true" && (
+        <ShareDialog
+          stats={stats}
+          tokenStats={tokenStats}
+          displayName={name}
+          handle={handle}
+          avatarColor={avatarColor}
+          avatarImage={avatarImage}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
 
       <EditProfileDialog
         open={editOpen}

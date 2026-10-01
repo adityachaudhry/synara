@@ -487,7 +487,10 @@ export function getAvailableComposerSlashCommands(input: {
           "feedback",
           "automation",
         ];
-  return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
+  return availableCommands.filter((command) =>
+    !collidingNativeCommandNames.has(command) &&
+    !(import.meta.env.VITE_SYNARA_EMBEDDED === "true" && command === "feedback"),
+  );
 }
 
 export function hasProviderNativeSlashCommand(

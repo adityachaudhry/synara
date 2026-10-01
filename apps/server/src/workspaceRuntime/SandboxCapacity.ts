@@ -3,6 +3,8 @@ export interface SandboxCapacityRequest {
   readonly threadId: string;
   readonly lifecycleGeneration: string;
   readonly signal?: AbortSignal;
+  /** Speculation never queues or consumes the last interactive progress slot. */
+  readonly speculative?: boolean;
 }
 
 export interface SandboxCapacityReservation {
@@ -62,6 +64,10 @@ export class SandboxCapacity {
     if (input.signal?.aborted) return Promise.reject(abortError());
     const active = this.#active.get(input.key);
     if (active) return Promise.resolve(active);
+    if (input.speculative && (!this.#reconciled || this.#queued.length > 0 ||
+        this.#active.size >= this.#maxActive - this.#maintenanceSlots - 1)) {
+      return Promise.reject(new Error("Speculative workspace capacity is unavailable."));
+    }
     const queued = this.#queuedByKey.get(input.key);
     if (queued) return this.#addCaller(queued, input.signal);
     if (this.#reconciled && this.#canAdmit(input.key) && !this.#queued.some((entry) => this.#canAdmit(entry.key))) {
@@ -104,6 +110,32 @@ export class SandboxCapacity {
 
   release(key: string): void {
     this.#active.get(key)?.release();
+  }
+
+  whenReconciled(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(abortError());
+    if (this.#reconciled) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error?: Error) => {
+        unsubscribe(); signal?.removeEventListener("abort", cancelled);
+        if (error) reject(error); else resolve();
+      };
+      const cancelled = () => finish(abortError());
+      const unsubscribe = this.subscribe((snapshot) => { if (snapshot.reconciled) finish(); });
+      signal?.addEventListener("abort", cancelled, { once: true });
+    });
+  }
+
+  /** Transfer ownership of a still-running sandbox without freeing its physical slot. */
+  reassign(key: string, next: SandboxCapacityReservation): SandboxCapacityLease | undefined {
+    if (key === next.key) return this.#active.get(key);
+    if (!this.#active.has(key)) return undefined;
+    if (this.#active.has(next.key)) throw new Error("Sandbox capacity owner already exists.");
+    this.#active.delete(key);
+    const lease = this.#makeLease(next);
+    this.#active.set(next.key, lease);
+    this.#publish();
+    return lease;
   }
 
   snapshot(): SandboxCapacitySnapshot {

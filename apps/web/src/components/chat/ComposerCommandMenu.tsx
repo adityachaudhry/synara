@@ -78,7 +78,7 @@ function commandMenuTitle(
     case "subagents":
       return "Subagents";
     case "feedback":
-      return "Feedback Synara";
+      return import.meta.env.VITE_SYNARA_EMBEDDED === "true" ? "Feedback" : "Feedback Synara";
     default:
       return humanizeProviderCommandName(item.command);
   }

@@ -17,6 +17,9 @@ interface FeedbackDialogStore {
 export const useFeedbackDialogStore = create<FeedbackDialogStore>((set) => ({
   isOpen: false,
   context: null,
-  openDialog: (context) => set({ isOpen: true, context: context ?? null }),
+  openDialog: (context) => {
+    if (import.meta.env.VITE_SYNARA_EMBEDDED === "true") return;
+    set({ isOpen: true, context: context ?? null });
+  },
   setOpen: (open) => set(open ? { isOpen: true } : { isOpen: false, context: null }),
 }));

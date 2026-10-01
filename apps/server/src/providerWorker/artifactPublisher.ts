@@ -3,7 +3,7 @@ import Mime from "@effect/platform-node/Mime";
 import type { ProviderPersistenceCandidate } from "../providerPersistence.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 import type { ProviderWorkerBrokerShape } from "./Services/ProviderWorkerBroker.ts";
-import { isTrustedPrivateWorkerUrl } from "./privateNetwork.ts";
+import { privateWorkerHosts } from "./privateNetwork.ts";
 
 interface ArtifactRecord {
   artifact_id: string;
@@ -35,7 +35,8 @@ export function artifactApiClient() {
       !(
         url.protocol === "http:" &&
         (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
-          isTrustedPrivateWorkerUrl(url, process.env))
+          // Grants originate in the Railway controller, independently of the worker's network.
+          privateWorkerHosts(process.env).includes(url.hostname.toLowerCase()))
       ))
   ) {
     throw new Error(

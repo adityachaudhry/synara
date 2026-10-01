@@ -301,7 +301,12 @@ const make = Effect.gen(function* () {
       return Option.none();
     }
 
-    const sessions = yield* providerService.listSessions();
+    const providerThread = yield* resolveProviderSessionThread(
+      projectionSnapshotQuery,
+      thread.value.id,
+    );
+    const sessionThreadId = providerThread?.id ?? thread.value.id;
+    const sessions = yield* providerService.listSessions(sessionThreadId);
 
     const findSessionWithCwd = (
       session: (typeof sessions)[number] | undefined,
@@ -312,11 +317,6 @@ const make = Effect.gen(function* () {
       return Option.some({ threadId: session.threadId, cwd: session.cwd });
     };
 
-    const providerThread = yield* resolveProviderSessionThread(
-      projectionSnapshotQuery,
-      thread.value.id,
-    );
-    const sessionThreadId = providerThread?.id ?? thread.value.id;
     const projectedSession = sessions.find((session) => session.threadId === sessionThreadId);
     const fromProjected = findSessionWithCwd(projectedSession);
     if (Option.isSome(fromProjected)) {
@@ -952,7 +952,7 @@ const make = Effect.gen(function* () {
       Effect.forEach(relevantThreadIds, (threadId) =>
         projectionTurnRepository.getPendingTurnStartByThreadId({ threadId }),
       ),
-      providerService.listSessions(),
+      providerService.listSessions(sessionThreadId),
     ]);
     const commandThread = commandReadModel.threads.find(
       (entry) => entry.id === event.payload.threadId,

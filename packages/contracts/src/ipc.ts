@@ -243,6 +243,8 @@ import type {
   ProviderListCommandsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
+  ProviderPrepareWorkspaceInput,
+  ProviderPrepareWorkspaceResult,
   ProviderListPluginsInput,
   ProviderListPluginsResult,
   ProviderListSkillsInput,
@@ -854,6 +856,7 @@ export interface NativeApi {
     listPlugins: (input: ProviderListPluginsInput) => Promise<ProviderListPluginsResult>;
     readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
+    prepareWorkspace?: (input: ProviderPrepareWorkspaceInput) => Promise<ProviderPrepareWorkspaceResult>;
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
   };
   orchestration: {

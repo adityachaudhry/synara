@@ -121,6 +121,9 @@ export interface ProviderAdapterShape<TError> {
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
+  /** Prepare an exclusive worker and its files, without invoking a model. */
+  readonly prepareWorkspace?: (input: ProviderSessionStartInput) => Effect.Effect<boolean, TError>;
+
   /** True only when this start path applies its own post-admission launch deadline. */
   readonly managesStartSessionTimeout?: (input: ProviderSessionStartInput) => boolean;
 
@@ -241,10 +244,14 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /** Stop the active process while retaining a provider-managed workspace for resume. */
+  readonly parkSession?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
   /**
    * List currently active provider sessions for this adapter.
+   * A thread hint lets remote adapters query one worker instead of every worker.
    */
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+  readonly listSessions: (threadId?: ThreadId) => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
    * Check whether this adapter owns an active session id.

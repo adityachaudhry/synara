@@ -56,6 +56,11 @@ export interface ProviderRuntimeEventPumpHealth {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly prepareWorkspace?: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+    owner: { readonly projectId: string; readonly subject: string },
+  ) => Effect.Effect<{ readonly started: boolean }, ProviderServiceError>;
   /**
    * Start a provider session.
    */
@@ -173,9 +178,11 @@ export interface ProviderServiceShape {
   /**
    * List active provider sessions.
    *
-   * Aggregates runtime session lists from all registered adapters.
+   * Aggregates runtime session lists from all registered adapters. An optional
+   * session-owning thread id hints adapter discovery; adapters may return more
+   * sessions. Binding hydration is limited to returned sessions when hinted.
    */
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+  readonly listSessions: (threadId?: ThreadId) => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
    * Read static capabilities for a provider adapter.

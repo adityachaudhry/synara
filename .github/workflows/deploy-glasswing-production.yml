@@ -51,3 +51,10 @@ jobs:
           environment: production
       - if: ${{ !inputs.prepare_only }}
         run: railway up --service synara-gitea-production --project "$RAILWAY_PROJECT_ID" --environment production --ci
+      - name: Retire obsolete unclaimed warm pools
+        if: ${{ !inputs.prepare_only }}
+        run: node .github/actions/prepare-worker/cleanup.mjs
+        env:
+          WORKER_PROJECT: ${{ env.RAILWAY_PROJECT_ID }}
+          WORKER_SERVICE: synara-gitea-production
+          WORKER_ENVIRONMENT: production

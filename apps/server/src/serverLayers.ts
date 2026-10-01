@@ -67,6 +67,7 @@ import {
 } from "./providerWorker/Layers/ProviderWorkerProvisioner";
 import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedRuntimeConfig";
 import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
+import { makeDaytonaSandboxClientLive } from "./workspaceRuntime/Layers/DaytonaSandboxClient.ts";
 import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
 import { makeDockerWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/DockerWorkspaceRuntime";
 import { SandboxCapacity } from "./workspaceRuntime/SandboxCapacity";
@@ -284,13 +285,16 @@ export function makeServerApplicationLayers() {
     ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
   );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
-  if (distributedPiConfig.enabled && distributedPiConfig.railway.enabled &&
-      distributedPiConfig.railway.maxActiveSandboxes < 2 && artifactApiClient() !== undefined) {
-    throw new Error("Workspace archives require SYNARA_RAILWAY_MAX_ACTIVE_SANDBOXES to be at least 2 so a temporary archive reader can run while a worker is retiring.");
+  const sandboxConfig = distributedPiConfig.enabled
+    ? distributedPiConfig.daytona.enabled ? distributedPiConfig.daytona
+      : distributedPiConfig.railway.enabled ? distributedPiConfig.railway : undefined
+    : undefined;
+  if (sandboxConfig && sandboxConfig.maxActiveSandboxes < 2 && artifactApiClient() !== undefined) {
+    throw new Error("Workspace archives require at least two sandbox slots so a temporary archive reader can run while a worker is retiring.");
   }
   const sandboxCapacity =
-    distributedPiConfig.enabled && distributedPiConfig.railway.enabled
-      ? new SandboxCapacity(distributedPiConfig.railway.maxActiveSandboxes, {
+    sandboxConfig
+      ? new SandboxCapacity(sandboxConfig.maxActiveSandboxes, {
           reconcileBeforeAdmission: true,
           reserveForMaintenance: 2,
         })
@@ -316,6 +320,20 @@ export function makeServerApplicationLayers() {
                 Layer.provide(WorkspaceCreationIntentRepositoryLive),
                 Layer.provide(ProviderSessionRuntimeRepositoryLive),
               )
+            : distributedPiConfig.daytona.enabled
+              ? makeWorkspaceRuntimeLive({
+                  enabled: true,
+                  region: distributedPiConfig.daytona.target,
+                  idleTimeoutMinutes: distributedPiConfig.daytona.idleTimeoutMinutes,
+                  maxActiveSandboxes: distributedPiConfig.daytona.maxActiveSandboxes,
+                }, {
+                  runtimeKind: "daytona-sandbox",
+                  ...(sandboxCapacity ? { capacity: sandboxCapacity } : {}),
+                }).pipe(
+                  Layer.provide(makeDaytonaSandboxClientLive(distributedPiConfig.daytona)),
+                  Layer.provide(WorkspaceCreationIntentRepositoryLive),
+                  Layer.provide(ProviderSessionRuntimeRepositoryLive),
+                )
             : distributedPiConfig.railway.enabled
               ? makeWorkspaceRuntimeLive(distributedPiConfig.railway, {
                   ...(sandboxCapacity ? { capacity: sandboxCapacity } : {}),
