@@ -156,9 +156,6 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
               });
               break;
             } catch (cause) {
-              console.warn(JSON.stringify({ event: "daytona.create.failed", operationId: input.operationId, target,
-                ...(cause instanceof DaytonaError ? { error: cause.name, statusCode: cause.statusCode, code: cause.code,
-                  source: cause.source, detail: cause.message.replace(/https?:\/\/\S+/gu, "[url]").slice(0, 1000) } : { error: "unknown" }) }));
               if (config.fallbackTarget || config.warmPoolSize > 0) blockedTargets.add(target);
               // A readiness/transport failure may own a disk: keep its intent, never allocate twice.
               if (!regionDenied(cause)) throw cause;
@@ -178,7 +175,14 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
             throw new RailwaySandboxClientError({ operation: "create", detail: "Daytona sandbox setup failed; its disk was deleted.", createRejected: true, cause });
           }
         },
-        catch: (cause) => failure("create", cause) as RailwaySandboxClientError,
+        catch: (cause) => {
+          const vendor = cause instanceof RailwaySandboxClientError ? cause.cause : cause;
+          console.warn(JSON.stringify({ event: "daytona.create.failed", operationId: input.operationId,
+            ...(cause instanceof RailwaySandboxClientError ? { stage: cause.detail } : {}),
+            ...(vendor instanceof DaytonaError ? { error: vendor.name, statusCode: vendor.statusCode, code: vendor.code,
+              source: vendor.source, detail: vendor.message.replace(/https?:\/\/\S+/gu, "[url]").slice(0, 1000) } : { error: "unknown" }) }));
+          return failure("create", cause) as RailwaySandboxClientError;
+        },
       }),
       connect: (id) => Effect.tryPromise({
         try: async () => {
