@@ -68,6 +68,10 @@ export interface SynaraHostSidebar {
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,
   ) => Promise<SynaraHostPersistenceResult | null>;
+  readonly downloadAnswerPdf?: (request: {
+    readonly threadId: string;
+    readonly messageId: string;
+  }) => Promise<void>;
   readonly header?: ReactNode;
   readonly footer?: ReactNode;
 }
