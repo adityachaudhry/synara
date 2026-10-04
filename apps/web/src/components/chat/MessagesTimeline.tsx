@@ -80,6 +80,7 @@ import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { MessagePdfButton } from "./MessagePdfButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
@@ -2568,6 +2569,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         text={assistantCopyState.text ?? ""}
                         className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                       />
+                    ) : null}
+                    {hostSidebar?.downloadAnswerPdf && threadId && assistantCopyState.visible ? (
+                      <MessagePdfButton className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                        download={() => hostSidebar.downloadAnswerPdf!({ threadId, messageId: row.message.id })} />
                     ) : null}
                     {hostSidebar?.saveChatContent &&
                     hostSidebar.simplifiedComposer !== true &&
