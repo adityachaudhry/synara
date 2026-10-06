@@ -6,13 +6,15 @@ const failureTypes = new Set([
   "ProviderAdapterValidationError", "ProviderAdapterRequestError",
   "ProviderAdapterProcessError", "ProviderAdapterSessionNotFoundError",
   "ProviderAdapterSessionClosedError", "ProviderSessionNotFoundError",
+  "ProviderValidationError", "ProviderUnsupportedError",
   "ProviderSessionDirectoryPersistenceError", "ProviderWorkerProvisioningError",
   "ProviderWorkerBrokerError", "ProviderWorkerTransportError", "ProviderWorkerAuthError",
   "WorkspaceRuntimeError", "RailwaySandboxClientError", "RailwaySandboxNotFoundError",
 ]);
 const failureStages = new Set([
   "start", "restart", "session.start", "session.start.cleanup", "authorize",
-  "request", "request.error", "request.timeout", "register", "connect",
+  "request", "request.error", "request.timeout", "worker.response", "register", "connect",
+  "session/start", "session/restart", "model/set",
   "workspace.create", "workspace.directory", "workspace.user", "workspace.mutation",
   "workspace.restore", "workspace.restore.coverage", "workspace.archive.capacity",
   "workspace.checkpoint.pending", "repository.checkout", "repository.mount",
