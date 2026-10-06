@@ -26,9 +26,10 @@ function providerRuntimeEventBytes(event: ProviderRuntimeEvent): number {
  */
 export function compactProviderRuntimeEventForIngress(
   event: ProviderRuntimeEvent,
+  maximumBytes = PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES,
 ): SizedProviderRuntimeEvent {
   const originalBytes = providerRuntimeEventBytes(event);
-  if (originalBytes <= PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES || event.raw === undefined) {
+  if (originalBytes <= maximumBytes || event.raw === undefined) {
     return { event, bytes: originalBytes };
   }
   const compactedEvent: ProviderRuntimeEvent = {
@@ -39,7 +40,7 @@ export function compactProviderRuntimeEventForIngress(
       ...(event.raw.messageType !== undefined ? { messageType: event.raw.messageType } : {}),
       payload: {
         synaraTruncated: true,
-        reason: "provider runtime event exceeded the callback ingress size limit",
+        reason: "provider runtime event exceeded its delivery size limit",
         originalBytes,
       },
     },

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { ListenOptions, Socket } from "node:net";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
-import { WS_FEATURE_PATH } from "@synara/contracts";
+import { PROVIDER_WORKER_MAX_MESSAGE_BYTES, WS_FEATURE_PATH } from "@synara/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Scope } from "effect";
 import * as HttpServer from "effect/unstable/http/HttpServer";
@@ -12,7 +12,7 @@ import { WebSocketServer } from "ws";
 import { startStallProfiles } from "./stallProfiles.ts";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
-export const MAX_PROVIDER_WORKER_MESSAGE_BYTES = 256 * 1024;
+export const MAX_PROVIDER_WORKER_MESSAGE_BYTES = PROVIDER_WORKER_MAX_MESSAGE_BYTES;
 const PROVIDER_WORKER_UPGRADE_PATH = "/internal/provider-worker";
 
 /**

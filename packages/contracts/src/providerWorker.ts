@@ -20,6 +20,7 @@ import {
 import { ProviderRuntimeEvent } from "./providerRuntime";
 
 export const PROVIDER_WORKER_PROTOCOL_VERSION = 1 as const;
+export const PROVIDER_WORKER_MAX_MESSAGE_BYTES = 256 * 1024;
 
 const ProviderWorkerProtocolVersion = Schema.Literal(PROVIDER_WORKER_PROTOCOL_VERSION);
 const ProviderWorkerUuid = Schema.String.check(Schema.isUUID(undefined));
