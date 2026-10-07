@@ -548,6 +548,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         previous.workspace.runtimeKind === "daytona-sandbox";
       const headless = engine !== undefined && (previous === undefined || previous.headless === true || migrateLegacy);
       const legacySessionFile = migrateLegacy ? extractResumeSessionFile(input.resumeCursor) : undefined;
+      // A durable thread whose sandbox is gone starts from the company revision; nothing lived there.
+      const freshDurable = previous?.headless === true && !prepared && (yield* workspaceUnavailable(previous));
       const launch = () =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -555,7 +557,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
               restore(
                 prepared
                   ? Effect.succeed(previous)
-                  : previous && !migratingToDaytona
+                  : previous && !migratingToDaytona && !freshDurable
                   ? provisioner.restart(previous, {
                       threadId: input.threadId,
                       lifecycleGeneration,
@@ -571,6 +573,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                       threadId: input.threadId,
                       lifecycleGeneration,
                       ...(headless ? { headless: true } : {}),
+                      ...(freshDurable ? { fresh: true } : {}),
                       ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding,
@@ -695,8 +698,10 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
         ...(gateway ? { agentGatewayConnection: gateway } : {}),
       };
-      const binding = yield* (previous?.workspace.runtimeKind === "daytona-sandbox"
-        ? provisioner.restart(previous, provisionInput) : provisioner.start(provisionInput)).pipe(Effect.tapError(() => Effect.sync(() => {
+      const freshDurable = previous?.headless === true && (yield* workspaceUnavailable(previous));
+      const binding = yield* (previous?.workspace.runtimeKind === "daytona-sandbox" && !freshDurable
+        ? provisioner.restart(previous, provisionInput)
+        : provisioner.start(freshDurable ? { ...provisionInput, fresh: true } : provisionInput)).pipe(Effect.tapError(() => Effect.sync(() => {
         if (gateway && agentGatewayCredentials) agentGatewayCredentials.revokeSessionToken(gateway.bearerToken);
       })));
       // Publish ownership before adoption. Recovery never depends on the browser staying open.
