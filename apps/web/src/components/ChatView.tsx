@@ -11039,6 +11039,23 @@ export default function ChatView({
     },
     [isEditorRail, navigate],
   );
+  // Child threads (diligence steps, subagents) open beside their parent in the side panel,
+  // so the run stays in view; any other thread navigates.
+  const activeThreadIdForDock = activeThread?.id ?? null;
+  const onOpenThreadFromThread = useCallback(
+    (nextThreadId: ThreadId) => {
+      const summary = useStore.getState().sidebarThreadSummaryById[nextThreadId];
+      if (activeThreadIdForDock && summary?.parentThreadId) {
+        useRightDockStore.getState().openPane(activeThreadIdForDock, {
+          kind: "sidechat",
+          threadId: nextThreadId,
+        });
+        return;
+      }
+      onNavigateToThread(nextThreadId);
+    },
+    [activeThreadIdForDock, onNavigateToThread],
+  );
   const onOpenAutomation = useCallback(
     (automationId: string) => {
       void navigate({
@@ -11534,7 +11551,7 @@ export default function ChatView({
                   nowMs={workflowNowMs}
                   compact={workflowRunCardCompact}
                   onCompactChange={setWorkflowRunCardCompact}
-                  onOpenThread={onNavigateToThread}
+                  onOpenThread={onOpenThreadFromThread}
                   onStop={onStopWorkflowRun}
                   onPause={onPauseWorkflowRun}
                   onResume={onResumeWorkflowRun}
@@ -11549,7 +11566,7 @@ export default function ChatView({
                   items={composerSubagentStripItems}
                   compact={subagentStripCompact}
                   onCompactChange={setSubagentStripCompact}
-                  onOpenThread={onNavigateToThread}
+                  onOpenThread={onOpenThreadFromThread}
                   onBackgroundItem={onBackgroundSubagentStripItem}
                   onStopItem={onStopSubagentStripItem}
                   onStopAll={onStopAllSubagentStripItems}
@@ -12447,7 +12464,7 @@ export default function ChatView({
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
-                    onOpenThread={onNavigateToThread}
+                    onOpenThread={onOpenThreadFromThread}
                     onOpenAutomation={onOpenAutomation}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
