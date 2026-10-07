@@ -369,8 +369,12 @@ export function WorkflowRunCard({
                 {settledPresentation.label}
               </span>
             ) : null}
-            {countLabel ? <span className="ml-1.5">{countLabel}</span> : null}
-            {elapsedLabel ? <span className="ml-1.5 tabular-nums">{elapsedLabel}</span> : null}
+            {countLabel ? (
+              <span className="ml-1.5 text-[color:var(--workflow-card-meta)]">{countLabel}</span>
+            ) : null}
+            {elapsedLabel ? (
+              <span className="ml-1.5 tabular-nums text-[color:var(--workflow-card-meta)]">{elapsedLabel}</span>
+            ) : null}
           </ComposerStackedPanelRowLabel>
         </ComposerStackedPanelRowMain>
         <div className="flex shrink-0 items-center gap-0.5">
