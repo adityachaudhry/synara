@@ -818,7 +818,11 @@ const make = Effect.gen(function* () {
     readonly responseCommandId?: CommandId;
     readonly settlementStatus?: "retryable" | "uncertain";
   }) =>
-    orchestrationEngine.dispatch({
+    Effect.logWarning("provider command failed", {
+      threadId: input.threadId,
+      kind: input.kind,
+      detail: input.detail,
+    }).pipe(Effect.andThen(orchestrationEngine.dispatch({
       type: "thread.activity.append",
       commandId: serverCommandId("provider-failure-activity"),
       threadId: input.threadId,
@@ -838,7 +842,7 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       },
       createdAt: input.createdAt,
-    });
+    })));
 
   const setThreadSession = (input: {
     readonly threadId: ThreadId;

@@ -2237,6 +2237,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
             const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
             if (!binding) {
+              // A session the adapter started itself (a diligence run thread) has no
+              // persisted binding; its adapter decides what Stop means there.
+              const liveAdapter =
+                input.providerThreadId === undefined ? yield* findLiveSessionAdapter(input.threadId) : null;
+              if (liveAdapter) {
+                return yield* liveAdapter.interruptTurn(
+                  input.threadId,
+                  input.turnId ?? TurnId.makeUnsafe(`${input.threadId}:active`),
+                );
+              }
               return yield* toValidationError(
                 "ProviderService.interruptTurn",
                 `Cannot interrupt thread '${input.threadId}' without a persisted provider binding.`,

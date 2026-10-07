@@ -369,8 +369,9 @@ export class DiligenceRunner {
   /** Stop on the run thread stops the run. */
   async cancelByThread(threadId: string) {
     const runId = await this.#runFor(threadId);
-    if (!runId) return false;
+    if (!runId) { log("run.cancel-by-thread", { threadId, runId: null }); return false; }
     const state = await this.#state(runId);
+    log("run.cancel-by-thread", { threadId, runId, status: state?.status ?? null });
     if (state?.status !== "running") return false;
     await this.cancel(runId);
     return true;

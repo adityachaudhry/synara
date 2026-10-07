@@ -503,6 +503,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     sendTurn,
     steerTurn,
     interruptTurn: (threadId, turnId, providerThreadId) => call("turn.interrupt", async () => {
+      console.log(`[diligence] ${JSON.stringify({ event: "stop.interrupt", threadId, providerThreadId: providerThreadId ?? null, external: engine.hasExternalTurn(threadId) })}`);
       // A diligence step thread stops its step; the run thread stops the run.
       if (providerThreadId) return engine.interruptTurn(`subagent:${threadId}:${providerThreadId}`);
       if (engine.hasExternalTurn(threadId) && (await diligenceRunner()?.cancelByThread(threadId))) return;
@@ -516,6 +517,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       await runner.steer(threadId, providerThreadId, { input: input.input, ...(attachments.length ? { attachments } : {}) });
     }),
     stopTask: (threadId, taskId) => call("task.stop", async () => {
+      console.log(`[diligence] ${JSON.stringify({ event: "stop.task", threadId, taskId })}`);
       if (taskId.startsWith("diligence-") && !taskId.includes(":")) await diligenceRunner()?.cancelByThread(threadId);
       else if (taskId.startsWith("diligence-")) await engine.interruptTurn(`subagent:${threadId}:step:${taskId.slice(taskId.indexOf(":") + 1)}`);
     }),
