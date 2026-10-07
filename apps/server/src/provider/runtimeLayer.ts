@@ -16,8 +16,7 @@ import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
 import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
-import { makePiAdapterLive } from "./Layers/PiAdapter";
-import { makeRoutedPiAdapterLive } from "./Layers/RoutedPiAdapter";
+import { makeDurablePiAdapterLive } from "./Layers/DurablePiAdapter";
 import type { SandboxCapacity } from "../workspaceRuntime/SandboxCapacity";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
@@ -83,11 +82,7 @@ export function makeServerProviderLayer(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const localPiAdapterLayer = makePiAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const piAdapterLayer = makeRoutedPiAdapterLive(options.sandboxCapacity).pipe(
-      Layer.provide(localPiAdapterLayer),
+    const piAdapterLayer = makeDurablePiAdapterLive(options.sandboxCapacity).pipe(
       Layer.provide(providerSessionDirectoryLayer),
       Layer.provide(agentGatewayCredentialsLayer),
     );

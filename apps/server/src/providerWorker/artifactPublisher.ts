@@ -7,7 +7,6 @@ import {
 } from "../providerPersistence.ts";
 import type { WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
-import type { ProviderWorkerBrokerShape } from "./Services/ProviderWorkerBroker.ts";
 import { privateWorkerHosts } from "./privateNetwork.ts";
 
 interface ArtifactRecord {
@@ -64,7 +63,6 @@ export function artifactApiClient() {
 export const publishOutboxArtifacts = Effect.fn(function* (input: {
   readonly binding: ProviderWorkerRuntimeBinding;
   readonly entries: ReadonlyArray<ProviderPersistenceCandidate>;
-  readonly broker: ProviderWorkerBrokerShape;
   readonly workspaceRuntime: WorkspaceRuntimeShape;
   readonly turnId?: string;
 }) {
@@ -101,26 +99,12 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
         }),
       catch: (cause) => cause,
     });
-    if (binding.headless) {
-      yield* uploadFromSandbox(input.workspaceRuntime, binding, {
-        path: file.path,
-        sha256: file.sha256,
-        uploadUrl: grant.upload_url,
-        headers: grant.headers,
-      });
-    } else {
-      yield* input.broker.request(binding.fence, "artifacts.upload", {
-        files: [
-          {
-            path: file.path,
-            sha256: file.sha256,
-            sizeBytes: file.sizeBytes,
-            uploadUrl: grant.upload_url,
-            headers: grant.headers,
-          },
-        ],
-      });
-    }
+    yield* uploadFromSandbox(input.workspaceRuntime, binding, {
+      path: file.path,
+      sha256: file.sha256,
+      uploadUrl: grant.upload_url,
+      headers: grant.headers,
+    });
     yield* Effect.tryPromise({
       try: () =>
         api<ArtifactRecord>(

@@ -50,6 +50,7 @@ import {
   type ChatAttachment,
   type OrchestrationMessageAuthor,
   type ProviderRuntimeEvent,
+  type ProviderListModelsResult,
   type ProviderSession,
   type ThreadTokenUsageSnapshot,
 } from "@synara/contracts";
@@ -63,16 +64,9 @@ import {
 } from "../provider/glasswingAgentProfile.ts";
 import { renderSynaraHarnessPolicy } from "../agentGateway/harnessPolicy.ts";
 import { callAgentGatewayMcpTool, listAgentGatewayMcpTools } from "../agentGateway/mcpInjection.ts";
-import {
-  configurePiWebAccess,
-  parseModelReference,
-  textFromToolResult,
-  toolItemType,
-  toolLifecycleData,
-  toolResultForDisplay,
-  toolTitle,
-} from "../provider/Layers/PiAdapter.ts";
-import { createCrunchbaseTools, createWebAccessTools } from "./extensionTools.ts";
+import { parseModelReference, toPiProviderModelDescriptor } from "../provider/piModelCatalog.ts";
+import { textFromToolResult, toolItemType, toolLifecycleData, toolResultForDisplay, toolTitle } from "../provider/piToolDisplay.ts";
+import { configurePiWebAccess, createCrunchbaseTools, createWebAccessTools } from "./extensionTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
 import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
@@ -331,6 +325,38 @@ export class DurablePiEngine {
     const conversation = await this.#harness.conversation(state.conversationId, ctx);
     if (!conversation) throw new Error(`Durable conversation ${state.conversationId} is missing.`);
     return conversation;
+  }
+
+  #modelList: { at: number; value: ProviderListModelsResult } | undefined;
+
+  /** Models for Synara's picker: Pi's catalog, Anthropic intersected with the live account list. */
+  async listModels(): Promise<ProviderListModelsResult> {
+    if (this.#modelList && Date.now() - this.#modelList.at < 10 * 60_000) return this.#modelList.value;
+    let liveAnthropic: Set<string> | undefined;
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (key) {
+      try {
+        const response = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+          headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (response.ok) liveAnthropic = new Set(((await response.json()) as { data?: Array<{ id: string }> }).data?.map((model) => model.id));
+      } catch {
+        liveAnthropic = undefined;
+      }
+    }
+    const names: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
+    const models = ["anthropic", "openai"]
+      .filter((provider) => this.#models.getProvider(provider))
+      .flatMap((provider) => this.#models.getModels(provider))
+      .filter((model) => model.provider !== "anthropic" || !liveAnthropic?.size || liveAnthropic.has(model.id))
+      .flatMap((model) => {
+        const descriptor = toPiProviderModelDescriptor(model, (provider) => names[provider] ?? provider);
+        return descriptor ? [descriptor] : [];
+      });
+    const value = { models, source: liveAnthropic?.size ? "pi.durable+anthropic.models" : "pi.durable", cached: false } satisfies ProviderListModelsResult;
+    this.#modelList = { at: Date.now(), value };
+    return value;
   }
 
   isDurableThread(threadId: string) {

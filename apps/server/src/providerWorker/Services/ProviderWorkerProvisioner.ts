@@ -105,6 +105,11 @@ export interface ProviderWorkerProvisionerShape {
   readonly stop: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;
+  /** One-time move of a worker-era thread: its Pi session file, Outbox and drafts. */
+  readonly importLegacy?: (
+    previous: ProviderWorkerRuntimeBinding,
+    sessionFile: string | undefined,
+  ) => Effect.Effect<{ readonly sessionJsonl?: string }, ProviderWorkerProvisioningError | unknown>;
   readonly park?: (
     binding: ProviderWorkerRuntimeBinding,
   ) => Effect.Effect<void, ProviderWorkerProvisioningError>;

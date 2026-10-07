@@ -1,5 +1,5 @@
 name: Prepare worker disk
-description: Build and checkpoint the worker in the target Railway environment.
+description: Build the Daytona sandbox image for the target Railway environment.
 inputs:
   project:
     required: true
@@ -23,8 +23,6 @@ runs:
       run: npm install --global @railway/cli
     - shell: bash
       run: bun install --frozen-lockfile --filter @synara/cli
-    - shell: bash
-      run: bun run --cwd apps/server build:provider-worker
     - name: Prepare the worker disk from this commit
       shell: bash
       env:
@@ -36,7 +34,6 @@ runs:
           import { execFileSync } from "node:child_process";
           import { writeFileSync } from "node:fs";
           import { createRequire } from "node:module";
-          import { prepareProviderWorkerTemplate } from "./apps/server/src/providerWorker/prepareTemplate.ts";
           import { prepareDaytonaWorkerTemplate } from "./apps/server/src/providerWorker/prepareDaytonaTemplate.ts";
           import { availableDaytonaContainerTargets } from "./apps/server/src/workspaceRuntime/daytonaRegions.ts";
           const require = createRequire(`${process.cwd()}/apps/server/package.json`);
@@ -57,20 +54,19 @@ runs:
             available = await availableDaytonaContainerTargets({ apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL });
             if (![preferredTarget, fallbackTarget].some(target => target && available.has(target))) throw new Error("No configured Daytona container region is available.");
           }
-          const prepared = daytona
-            ? await prepareDaytonaWorkerTemplate({ artifactPath: "apps/server/dist/provider-worker/workerMain.mjs", apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL, target: preferredTarget })
-            : await prepareProviderWorkerTemplate("apps/server/dist/provider-worker/workerMain.mjs");
-          const updates = [`${daytona ? "SYNARA_DAYTONA_SNAPSHOT" : "SYNARA_PROVIDER_WORKER_TEMPLATE_CHECKPOINT"}=${prepared.key}`];
+          if (!daytona) throw new Error("Durable Pi sandboxes run on Daytona; set SYNARA_WORKSPACE_RUNTIME=daytona.");
+          const prepared = await prepareDaytonaWorkerTemplate({ apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL, target: preferredTarget });
+          const updates = [`SYNARA_DAYTONA_SNAPSHOT=${prepared.key}`];
           const obsoletePools = [];
           if (daytona) {
             let fallback;
             if (fallbackTarget) {
-              fallback = await prepareDaytonaWorkerTemplate({ artifactPath: "apps/server/dist/provider-worker/workerMain.mjs", apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL, target: fallbackTarget });
-              if (fallback.sha256 !== prepared.sha256 || fallback.photonSha256 !== prepared.photonSha256) throw new Error("Regional worker artifacts differ.");
+              fallback = await prepareDaytonaWorkerTemplate({ apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL, target: fallbackTarget });
+              if (fallback.sha256 !== prepared.sha256) throw new Error("Regional sandbox images differ.");
               updates.push(`SYNARA_DAYTONA_FALLBACK_SNAPSHOT=${fallback.key}`);
               console.log(JSON.stringify({ fallbackSnapshot: fallback.key, fallbackTarget }));
             }
-            updates.push(`SYNARA_PROVIDER_WORKER_CONTROL_URL=wss://${publicUrl.host}/internal/provider-worker`, "SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=ISOLATED");
+            updates.push("SYNARA_PROVIDER_WORKER_NETWORK_ISOLATION=ISOLATED");
             const oldSnapshots = [variables.SYNARA_DAYTONA_SNAPSHOT, variables.SYNARA_DAYTONA_FALLBACK_SNAPSHOT].filter(key => key && key !== prepared.key && key !== fallback?.key);
             const client = new Daytona({ apiKey: variables.SYNARA_DAYTONA_API_KEY, apiUrl: variables.SYNARA_DAYTONA_API_URL });
             const size = Number(variables.SYNARA_DAYTONA_WARM_POOL_SIZE || 0);
@@ -103,5 +99,5 @@ runs:
           // Publish the matching regional release together only after every preparation check passes.
           execFileSync("railway", ["variable", "set", ...target, ...updates, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
           writeFileSync(".daytona-obsolete-pools.json", JSON.stringify(obsoletePools));
-          console.log(JSON.stringify({ snapshot: prepared.key, workerSha256: prepared.sha256, reused: prepared.reused }));
+          console.log(JSON.stringify({ snapshot: prepared.key, imageSha256: prepared.sha256, reused: prepared.reused }));
         '

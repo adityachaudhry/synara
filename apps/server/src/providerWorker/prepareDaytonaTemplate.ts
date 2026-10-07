@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Daytona, DaytonaNotFoundError, Image, SnapshotState } from "@daytona/sdk";
 import { WORKER_TOOLCHAIN_INSTALL_COMMAND } from "./workerToolchain.ts";
@@ -16,18 +14,11 @@ export async function verifyDaytonaWorkerRegion(input: { apiKey: string; target:
     throw new Error(`Daytona container access is unavailable in ${input.target}; restore the organization entitlement before deploying. No region fallback was attempted.`);
 }
 
-/** CI builds a native image snapshot; no running builder sandbox or thread credentials. */
-export async function prepareDaytonaWorkerTemplate(input: { artifactPath: string; apiKey: string; apiUrl?: string; target: string }) {
-  // Image preparation is allowed independently of container entitlement. Prepare the
-  // preferred region now so restoration can select the exact release without a rebuild.
-  const artifact = await readFile(input.artifactPath);
-  const photonPath = join(dirname(input.artifactPath), "photon_rs_bg.wasm");
-  const photon = await readFile(photonPath);
-  const sha256 = createHash("sha256").update(artifact).digest("hex");
-  const photonSha256 = createHash("sha256").update(photon).digest("hex");
+/** CI builds the sandbox image snapshot: tools only, no agent code, no credentials. */
+export async function prepareDaytonaWorkerTemplate(input: { apiKey: string; apiUrl?: string; target: string }) {
   const recipe = `${BASE_IMAGE}\n${BASE_SETUP}\n${WORKER_TOOLCHAIN_INSTALL_COMMAND}\n${DAYTONA_MOUNTPOINT_INSTALL}`;
-  const digest = createHash("sha256").update(artifact).update(photon).update(recipe).digest("hex");
-  const name = `synara-native-worker-${input.target}-${digest}`;
+  const digest = createHash("sha256").update(recipe).digest("hex");
+  const name = `synara-sandbox-${input.target}-${digest.slice(0, 32)}`;
   const daytona = new Daytona({ apiKey: input.apiKey, apiUrl: input.apiUrl, target: input.target });
   let reused = true;
   try { await daytona.snapshot.get(name); }
@@ -36,12 +27,7 @@ export async function prepareDaytonaWorkerTemplate(input: { artifactPath: string
     reused = false;
     const image = Image.base(BASE_IMAGE).dockerfileCommands(["USER root"])
       .runCommands(BASE_SETUP, WORKER_TOOLCHAIN_INSTALL_COMMAND, "git lfs install --system", DAYTONA_MOUNTPOINT_INSTALL,
-        "apt-get clean && rm -rf /var/lib/apt/lists/*")
-      .addLocalFile(input.artifactPath, "/opt/synara/provider-worker.mjs")
-      .addLocalFile(photonPath, "/opt/synara/photon_rs_bg.wasm")
-      .runCommands("chmod 500 /opt/synara/provider-worker.mjs && chmod 444 /opt/synara/photon_rs_bg.wasm",
-        `echo '${sha256}  /opt/synara/provider-worker.mjs' | sha256sum -c -`,
-        `echo '${photonSha256}  /opt/synara/photon_rs_bg.wasm' | sha256sum -c -`)
+        "mkdir -p /opt/synara", "apt-get clean && rm -rf /var/lib/apt/lists/*")
       .dockerfileCommands(["USER daytona"]);
     await daytona.snapshot.create({ name, image, regionId: input.target, resources: { cpu: 2, memory: 4, disk: 8 } }, { timeout: 600 });
   }
@@ -49,7 +35,7 @@ export async function prepareDaytonaWorkerTemplate(input: { artifactPath: string
   for (;;) {
     const snapshot = await daytona.snapshot.get(name);
     if (snapshot.state === SnapshotState.ACTIVE && snapshot.regionIds?.includes(input.target))
-      return { key: snapshot.name, id: snapshot.id, sha256, photonSha256, reused };
+      return { key: snapshot.name, id: snapshot.id, sha256: digest, reused };
     if (snapshot.errorReason || Date.now() >= deadline) throw new Error(`Daytona image snapshot is ${snapshot.state}; inspect its build before retrying.`);
     await delay(2000);
   }

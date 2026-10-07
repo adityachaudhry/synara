@@ -59,14 +59,9 @@ import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { artifactApiClient } from "./providerWorker/artifactPublisher.ts";
-import { ProviderWorkerBootstrapAuthorityLive } from "./providerWorker/Layers/ProviderWorkerBootstrapAuthority";
-import { ProviderWorkerBrokerLive } from "./providerWorker/Layers/ProviderWorkerBroker";
-import {
-  makeProviderWorkerProvisionerFromArtifactLive,
-  ProviderWorkerProvisionerDisabled,
-} from "./providerWorker/Layers/ProviderWorkerProvisioner";
+import { makeSandboxProvisionerLive } from "./providerWorker/Layers/SandboxProvisioner";
+import { ProviderWorkerProvisionerDisabled } from "./providerWorker/Layers/ProvisionerDisabled";
 import { resolveDistributedPiRuntimeConfig } from "./providerWorker/distributedRuntimeConfig";
-import { makeRailwaySandboxClientLive } from "./workspaceRuntime/Layers/RailwaySandboxClient";
 import { makeDaytonaSandboxClientLive } from "./workspaceRuntime/Layers/DaytonaSandboxClient.ts";
 import { makeWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/WorkspaceRuntime";
 import { makeDockerWorkspaceRuntimeLive } from "./workspaceRuntime/Layers/DockerWorkspaceRuntime";
@@ -280,18 +275,10 @@ export function makeServerRuntimeServicesLayer(
  */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
-  const providerWorkerTransportLayer = Layer.merge(
-    ProviderWorkerBootstrapAuthorityLive,
-    ProviderWorkerBrokerLive.pipe(Layer.provide(ProviderRuntimeEventRepositoryLive)),
-  );
   const distributedPiConfig = resolveDistributedPiRuntimeConfig({ environment: process.env });
   const sandboxConfig = distributedPiConfig.enabled
-    ? distributedPiConfig.daytona.enabled ? distributedPiConfig.daytona
-      : distributedPiConfig.railway.enabled ? distributedPiConfig.railway : undefined
+    ? distributedPiConfig.daytona.enabled ? distributedPiConfig.daytona : undefined
     : undefined;
-  if (sandboxConfig && sandboxConfig.maxActiveSandboxes < 2 && artifactApiClient() !== undefined) {
-    throw new Error("Workspace archives require at least two sandbox slots so a temporary archive reader can run while a worker is retiring.");
-  }
   const sandboxCapacity =
     sandboxConfig
       ? new SandboxCapacity(sandboxConfig.maxActiveSandboxes, {
@@ -300,8 +287,7 @@ export function makeServerApplicationLayers() {
         })
       : undefined;
   const providerWorkerProvisionerLayer = distributedPiConfig.enabled
-    ? makeProviderWorkerProvisionerFromArtifactLive({
-        controlUrl: distributedPiConfig.controlUrl,
+    ? makeSandboxProvisionerLive({
         ...(distributedPiConfig.templateCheckpointName
           ? { templateCheckpointName: distributedPiConfig.templateCheckpointName }
           : {}),
@@ -309,7 +295,6 @@ export function makeServerApplicationLayers() {
           ? { repositoryOriginOverride: distributedPiConfig.repositoryOriginOverride }
           : {}),
         networkIsolation: distributedPiConfig.networkIsolation,
-        environment: distributedPiConfig.workerEnvironment,
         ...(distributedPiConfig.repositoryAuthorization === undefined
           ? {}
           : { repositoryAuthorization: distributedPiConfig.repositoryAuthorization }),
@@ -334,25 +319,13 @@ export function makeServerApplicationLayers() {
                   Layer.provide(WorkspaceCreationIntentRepositoryLive),
                   Layer.provide(ProviderSessionRuntimeRepositoryLive),
                 )
-            : distributedPiConfig.railway.enabled
-              ? makeWorkspaceRuntimeLive(distributedPiConfig.railway, {
-                  ...(sandboxCapacity ? { capacity: sandboxCapacity } : {}),
-                }).pipe(
-                  Layer.provide(makeRailwaySandboxClientLive(distributedPiConfig.railway)),
-                  Layer.provide(WorkspaceCreationIntentRepositoryLive),
-                  Layer.provide(ProviderSessionRuntimeRepositoryLive),
-                )
-              : (() => {
+            : (() => {
                   throw new Error("Distributed runtime has no backend");
                 })(),
         ),
-        Layer.provide(providerWorkerTransportLayer),
       )
     : ProviderWorkerProvisionerDisabled;
-  const providerWorkerInfrastructureLayer = Layer.merge(
-    providerWorkerTransportLayer,
-    providerWorkerProvisionerLayer,
-  );
+  const providerWorkerInfrastructureLayer = providerWorkerProvisionerLayer;
   return {
     providerWorkerInfrastructureLayer,
     runtimeServicesLayer: makeServerRuntimeServicesLayer({

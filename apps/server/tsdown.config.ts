@@ -26,9 +26,7 @@ export default defineConfig(
       noExternal: (id) =>
         id.startsWith("@synara/") ||
         id === "pi-web-access" ||
-        id.startsWith("pi-web-access/") ||
-        id === "pi-mcp-adapter" ||
-        id.startsWith("pi-mcp-adapter/"),
+        id.startsWith("pi-web-access/"),
       inlineOnly: false,
       // Keep TS-only Pi extensions and their shared Markdown classes in initialization order.
       outputOptions: { codeSplitting: false },

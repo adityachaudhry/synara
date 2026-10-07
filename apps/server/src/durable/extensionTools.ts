@@ -10,7 +10,46 @@ import type { JsonValue } from "@earendil-works/chord";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { TSchema } from "typebox";
 
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+
 import { lazyModule } from "../lazyModule.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Routes pi-web-access searches to Perplexity, as configured for the old worker. */
+export async function configurePiWebAccess(agentDir: string) {
+  const configDir = process.env.PI_CODING_AGENT_DIR?.trim() || agentDir;
+  process.env.PI_CODING_AGENT_DIR = configDir;
+  const configPath = path.join(configDir, "web-search.json");
+  let existing: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await readFile(configPath, "utf8"));
+    if (!isRecord(parsed)) throw new Error(`${configPath} must contain a JSON object.`);
+    existing = parsed;
+  } catch (cause) {
+    if (!isRecord(cause) || cause.code !== "ENOENT") throw cause;
+  }
+  await mkdir(configDir, { recursive: true });
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        ...existing,
+        workflow: "none",
+        searchRouting: {
+          providers: ["perplexity"],
+          fallbackOn: ["transient", "quota", "network", "invalid-response", "unsupported"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+}
 
 type PiExtensionTool = {
   readonly name: string;
