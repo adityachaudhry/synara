@@ -83,6 +83,11 @@ export function createHostThemeStyle(
   assignString(style, theme.colorAgentStopped, ["--agent-status-stopped"]);
   assignString(style, theme.colorAgentStoppedText, ["--agent-status-stopped-text"]);
   assignString(style, theme.colorAgentQueued, ["--agent-status-queued"]);
+  assignString(style, theme.colorWorkflowText, ["--workflow-card-text"]);
+  assignString(style, theme.colorWorkflowMeta, ["--workflow-card-meta"]);
+  assignString(style, theme.colorWorkflowFaint, ["--workflow-card-faint"]);
+  assignString(style, theme.colorWorkflowPhaseCurrent, ["--workflow-card-phase-current"]);
+  assignString(style, theme.colorWorkflowPhaseCurrentBackground, ["--workflow-card-phase-current-bg"]);
   assignPixels(style, theme.composerBorderWidthPx, ["--app-composer-border-width"]);
   assignPixels(style, theme.controlRadiusPx, ["--radius", "--app-header-control-radius"]);
   assignPixels(style, theme.toolbarHeightPx, ["--app-chat-header-height"]);

@@ -383,7 +383,7 @@ export function subagentStatusTextToneClassName(
     case "failed":
       return "text-[color:var(--agent-status-failed-text)]";
     default:
-      return "text-muted-foreground/55";
+      return "text-[color:var(--workflow-card-meta)]";
   }
 }
 

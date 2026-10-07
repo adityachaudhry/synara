@@ -99,6 +99,12 @@
   --agent-status-stopped: color-mix(in oklab, oklch(87.9% 0.169 91.605) 85%, transparent);
   --agent-status-stopped-text: color-mix(in oklab, oklch(87.9% 0.169 91.605) 80%, transparent);
   --agent-status-queued: color-mix(in oklab, oklch(81.1% 0.111 293.571) 80%, transparent);
+  /* Workflow card text tiers and current-phase highlight (hosts may override). */
+  --workflow-card-text: color-mix(in oklab, var(--foreground) 85%, transparent);
+  --workflow-card-meta: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+  --workflow-card-faint: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  --workflow-card-phase-current: color-mix(in oklab, var(--foreground) 85%, transparent);
+  --workflow-card-phase-current-bg: var(--color-background-button-secondary);
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
        hairlines (chat/dock/diff headers) AND the right-side pane splits
        (diff/browser/dock). All resolve through here so those divider directions read

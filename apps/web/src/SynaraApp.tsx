@@ -38,6 +38,12 @@ export interface SynaraHostTheme {
   readonly colorAgentStopped?: string;
   readonly colorAgentStoppedText?: string;
   readonly colorAgentQueued?: string;
+  /** Workflow card text tiers and the current phase in its phase rail. */
+  readonly colorWorkflowText?: string;
+  readonly colorWorkflowMeta?: string;
+  readonly colorWorkflowFaint?: string;
+  readonly colorWorkflowPhaseCurrent?: string;
+  readonly colorWorkflowPhaseCurrentBackground?: string;
   readonly composerBorderWidthPx?: number;
   readonly controlRadiusPx?: number;
   readonly toolbarHeightPx?: number;
