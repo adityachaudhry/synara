@@ -149,7 +149,7 @@ function WorkflowAgentDetail({
       className="mb-1 ml-[14px] space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--workflow-card-meta)]">
+        <span className="min-w-0 flex-1 truncate text-[length:var(--workflow-card-font-sm)] text-[color:var(--workflow-card-meta)]">
           {identityLine}
         </span>
         {threadId ? (
@@ -157,7 +157,7 @@ function WorkflowAgentDetail({
             type="button"
             variant="ghost"
             size="xs"
-            className="h-5 shrink-0 px-1.5 text-[10px] text-[color:var(--workflow-card-meta)]"
+            className="h-5 shrink-0 px-1.5 text-[length:var(--workflow-card-font-xs)] text-[color:var(--workflow-card-meta)]"
             onClick={() => onOpenThread(threadId)}
           >
             Open thread
@@ -165,7 +165,7 @@ function WorkflowAgentDetail({
         ) : null}
       </div>
       {statsLine ? (
-        <div className="text-[11px] tabular-nums text-[color:var(--workflow-card-meta)]">{statsLine}</div>
+        <div className="text-[length:var(--workflow-card-font-sm)] tabular-nums text-[color:var(--workflow-card-meta)]">{statsLine}</div>
       ) : null}
       {agent.promptPreview ? (
         <div>
@@ -176,25 +176,25 @@ function WorkflowAgentDetail({
             onClick={() => setPromptOpen((open) => !open)}
           >
             <DisclosureChevron open={promptOpen} className="shrink-0" />
-            <span className="text-[10px] font-medium uppercase tracking-wide text-[color:var(--workflow-card-faint)]">
+            <span className="text-[length:var(--workflow-card-font-xs)] font-medium uppercase tracking-wide text-[color:var(--workflow-card-faint)]">
               Prompt
             </span>
           </button>
           {promptOpen ? null : (
-            <div className="line-clamp-2 whitespace-pre-wrap font-mono text-[11px] leading-4 text-[color:var(--workflow-card-meta)]">
+            <div className="line-clamp-2 whitespace-pre-wrap font-mono text-[length:var(--workflow-card-font-sm)] leading-4 text-[color:var(--workflow-card-meta)]">
               {agent.promptPreview}
             </div>
           )}
           <DisclosureRegion open={promptOpen}>
-            <div className="whitespace-pre-wrap font-mono text-[11px] leading-4 text-[color:var(--workflow-card-meta)]">
+            <div className="whitespace-pre-wrap font-mono text-[length:var(--workflow-card-font-sm)] leading-4 text-[color:var(--workflow-card-meta)]">
               {agent.promptPreview}
             </div>
           </DisclosureRegion>
         </div>
       ) : null}
       {agent.recentToolNames.length > 0 ? (
-        <div className="min-w-0 truncate text-[11px] text-[color:var(--workflow-card-meta)]">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-[color:var(--workflow-card-faint)]">
+        <div className="min-w-0 truncate text-[length:var(--workflow-card-font-sm)] text-[color:var(--workflow-card-meta)]">
+          <span className="text-[length:var(--workflow-card-font-xs)] font-medium uppercase tracking-wide text-[color:var(--workflow-card-faint)]">
             Recent
           </span>{" "}
           <span className="font-mono">{agent.recentToolNames.join(" · ")}</span>
@@ -235,29 +235,29 @@ function WorkflowAgentRowView({
             subagentStatusDotClassName(agent.statusKind),
           )}
         />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--workflow-card-text)]">
+        <span className="min-w-0 flex-1 truncate text-[length:var(--workflow-card-font-md)] font-medium text-[color:var(--workflow-card-text)]">
           {agent.description}
           {agent.subagentType ? (
-            <span className="ml-1 text-[11px] font-normal text-[color:var(--workflow-card-meta)]">
+            <span className="ml-1 text-[length:var(--workflow-card-font-sm)] font-normal text-[color:var(--workflow-card-meta)]">
               ({agent.subagentType})
             </span>
           ) : null}
           {agent.modelLabel ? (
-            <span className="ml-1.5 text-[11px] font-normal text-[color:var(--workflow-card-faint)]">
+            <span className="ml-1.5 text-[length:var(--workflow-card-font-sm)] font-normal text-[color:var(--workflow-card-faint)]">
               {agent.modelLabel}
             </span>
           ) : null}
           {agent.effortLabel ? (
-            <span className="ml-1 text-[11px] font-normal text-[color:var(--workflow-card-faint)]">
+            <span className="ml-1 text-[length:var(--workflow-card-font-sm)] font-normal text-[color:var(--workflow-card-faint)]">
               {agent.effortLabel}
             </span>
           ) : null}
         </span>
         {meta ? (
-          <span className="shrink-0 text-[11px] tabular-nums text-[color:var(--workflow-card-meta)]">{meta}</span>
+          <span className="shrink-0 text-[length:var(--workflow-card-font-sm)] tabular-nums text-[color:var(--workflow-card-meta)]">{meta}</span>
         ) : null}
         <span
-          className={cn("shrink-0 text-[11px]", subagentStatusTextToneClassName(agent.statusKind))}
+          className={cn("shrink-0 text-[length:var(--workflow-card-font-sm)]", subagentStatusTextToneClassName(agent.statusKind))}
         >
           {agent.statusLabel}
         </span>
@@ -353,6 +353,8 @@ export function WorkflowRunCard({
     <ComposerStackedPanel
       passthroughSideMargins
       attachedToPrevious={attachedToPrevious}
+      // The shared header label reads --app-font-size-ui-sm; the card's own size token wins here.
+      className="[--app-font-size-ui-sm:var(--workflow-card-font-sm)]"
       data-testid="workflow-run-card"
     >
       <ComposerStackedPanelHeaderRow>
@@ -464,7 +466,7 @@ export function WorkflowRunCard({
                   type="button"
                   data-testid="workflow-phase-rail-item"
                   className={cn(
-                    "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] transition-colors",
+                    "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[length:var(--workflow-card-font-sm)] transition-colors",
                     phase.title === selectedPhaseTitle
                       ? "bg-[color:var(--workflow-card-phase-current-bg)] text-[color:var(--workflow-card-phase-current)]"
                       : "text-[color:var(--workflow-card-meta)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/70",
@@ -493,7 +495,7 @@ export function WorkflowRunCard({
               visibleGroups.length > 0 ? (
                 visibleGroups.map(({ phase, agents }) => (
                   <div key={phase.title}>
-                    <div className="pt-1 text-[10px] font-medium text-[color:var(--workflow-card-faint)]">
+                    <div className="pt-1 text-[length:var(--workflow-card-font-xs)] font-medium text-[color:var(--workflow-card-faint)]">
                       {phase.title}
                     </div>
                     {agents.map((agent) => (
@@ -509,7 +511,7 @@ export function WorkflowRunCard({
                   </div>
                 ))
               ) : (
-                <div className="py-1 text-[11px] text-[color:var(--workflow-card-faint)]">No agents yet</div>
+                <div className="py-1 text-[length:var(--workflow-card-font-sm)] text-[color:var(--workflow-card-faint)]">No agents yet</div>
               )
             ) : workflowRun.agents.length > 0 ? (
               workflowRun.agents.map((agent) => (
@@ -523,7 +525,7 @@ export function WorkflowRunCard({
                 />
               ))
             ) : (
-              <div className="py-1 text-[11px] text-[color:var(--workflow-card-faint)]">No agents yet</div>
+              <div className="py-1 text-[length:var(--workflow-card-font-sm)] text-[color:var(--workflow-card-faint)]">No agents yet</div>
             )}
           </div>
           {savedLine.length > 0 ? (
@@ -531,9 +533,9 @@ export function WorkflowRunCard({
               data-testid="workflow-saved-line"
               className="mt-0.5 flex min-w-0 items-center gap-1.5"
             >
-              <span className="shrink-0 text-[11px] text-[color:var(--workflow-card-faint)]">Saved</span>
+              <span className="shrink-0 text-[length:var(--workflow-card-font-sm)] text-[color:var(--workflow-card-faint)]">Saved</span>
               <span
-                className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--workflow-card-faint)]"
+                className="min-w-0 flex-1 truncate text-[length:var(--workflow-card-font-sm)] text-[color:var(--workflow-card-faint)]"
                 title={savedLine}
               >
                 {workflowRun.runId ?? workflowRun.scriptPath}

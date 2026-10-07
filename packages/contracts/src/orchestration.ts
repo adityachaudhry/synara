@@ -1187,6 +1187,7 @@ export const ThreadHandoffImportedMessage = Schema.Struct({
   messageId: MessageId,
   role: Schema.Literals(["user", "assistant"]),
   text: Schema.String,
+  author: Schema.optional(OrchestrationMessageAuthor),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

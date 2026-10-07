@@ -54,6 +54,8 @@ export interface DiligenceRequest {
   readonly repository: ProjectRepositoryBinding;
   /** Where the published report will appear (Glasswing web). */
   readonly reportUrl?: string;
+  /** Who asked for the run, shown as the author of the run thread's request. */
+  readonly requestedBy?: { readonly subject: string; readonly label?: string };
   readonly plan: {
     readonly recipeVersion: string;
     readonly instructions: string;

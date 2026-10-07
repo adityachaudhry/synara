@@ -2394,6 +2394,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: message.role,
           text: message.text,
           ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+          ...(message.author !== undefined ? { author: message.author } : {}),
           turnId: null,
           streaming: false,
           source: "native" as const,

@@ -36,6 +36,7 @@ const authorized = (header: string | undefined, host: string | undefined) => {
 const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
 const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Quick read", memo: "Investment memo" };
+const RUN_REQUESTS: Record<string, string> = { full: "full diligence", quick: "a quick read", memo: "the investment memo" };
 
 /** The run's top-level thread in the company's project; the run works without it if this fails. */
 const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
@@ -62,6 +63,21 @@ const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
     envMode: "local",
     branch: null,
     worktreePath: null,
+    createdAt: now.toISOString(),
+  } as never);
+  // The run starts with a request in the thread, so the workspace feed lists it like any thread.
+  yield* engine.dispatch({
+    type: "thread.messages.import",
+    commandId: CommandId.makeUnsafe(`diligence-request-${plan.runId}`),
+    threadId,
+    messages: [{
+      messageId: `diligence-request-${plan.runId}`,
+      role: "user",
+      text: `Run ${RUN_REQUESTS[plan.mode] ?? "diligence"} on ${plan.company.name}.`,
+      author: plan.requestedBy ?? { subject: "glasswing:diligence", label: "Glasswing" },
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    }],
     createdAt: now.toISOString(),
   } as never);
   return threadId;

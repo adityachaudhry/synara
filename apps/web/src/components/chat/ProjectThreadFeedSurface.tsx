@@ -35,7 +35,10 @@ import {
 } from "../../rightDockStore.logic";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
 import { useStore } from "../../store";
-import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
+import {
+  createSidebarDisplayThreadsSelector,
+  createSidebarTreeThreadsSelector,
+} from "../../storeSelectors";
 import { useThreadDetailPrewarm } from "../../threadDetailPrewarm";
 import type { SidebarThreadSummary } from "../../types";
 import { formatThreadFeedTimestamp } from "../../timestampFormat";
@@ -102,8 +105,57 @@ function threadActivityAt(thread: SidebarThreadSummary): string {
   );
 }
 
+/** Child threads (diligence steps, subagents) listed under their parent's card. */
+function ThreadFeedChildren({
+  threads,
+  alignStart,
+  onOpen,
+  onIntent,
+}: {
+  threads: readonly SidebarThreadSummary[];
+  alignStart: boolean;
+  onOpen: (threadId: ThreadId) => void;
+  onIntent: (threadId: ThreadId) => void;
+}) {
+  return (
+    <nav
+      aria-label="Threads in this run"
+      className={cn(
+        "mt-1.5 flex max-w-[80%] flex-wrap gap-x-3 gap-y-1 font-system-ui",
+        alignStart ? "justify-start pl-0.5" : "justify-end pr-0.5",
+      )}
+    >
+      {threads.map((child) => {
+        const running = child.session?.status === "running";
+        return (
+          <button
+            key={child.id}
+            type="button"
+            onClick={() => onOpen(child.id)}
+            onMouseEnter={() => onIntent(child.id)}
+            onFocus={() => onIntent(child.id)}
+            className="inline-flex items-center gap-1.5 rounded-md py-0.5 text-[length:var(--app-font-size-ui,13px)] text-[var(--color-text-foreground)] underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                running
+                  ? "bg-[color:var(--agent-status-running)]"
+                  : "bg-[color:var(--agent-status-completed)]",
+              )}
+            />
+            {child.subagentNickname ?? child.title}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 const ThreadFeedCard = memo(function ThreadFeedCard({
   thread,
+  childThreads,
   onOpen,
   onIntent,
   onContextMenu,
@@ -111,6 +163,7 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
   timestampFormat,
 }: {
   thread: SidebarThreadSummary;
+  childThreads?: readonly SidebarThreadSummary[] | undefined;
   onOpen: (threadId: ThreadId) => void;
   onIntent: (threadId: ThreadId) => void;
   onContextMenu?: (thread: SidebarThreadSummary, event: MouseEvent<HTMLElement>) => void;
@@ -223,6 +276,14 @@ const ThreadFeedCard = memo(function ThreadFeedCard({
           ) : null}
         </footer>
       </div>
+      {childThreads && childThreads.length > 0 ? (
+        <ThreadFeedChildren
+          threads={childThreads}
+          alignStart={isOtherAuthor}
+          onOpen={onOpen}
+          onIntent={onIntent}
+        />
+      ) : null}
     </article>
   );
 });
@@ -244,6 +305,24 @@ export function ProjectThreadFeedSurface({
     [],
   );
   const displayThreads = useStore(selectDisplayThreads);
+  const selectTreeThreads = useMemo(
+    () => createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true }),
+    [],
+  );
+  const treeThreads = useStore(selectTreeThreads);
+  const childThreadsByParent = useMemo(() => {
+    const byParent = new Map<ThreadId, SidebarThreadSummary[]>();
+    for (const thread of treeThreads) {
+      if (!thread.parentThreadId) continue;
+      const siblings = byParent.get(thread.parentThreadId) ?? [];
+      siblings.push(thread);
+      byParent.set(thread.parentThreadId, siblings);
+    }
+    for (const siblings of byParent.values()) {
+      siblings.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    }
+    return byParent;
+  }, [treeThreads]);
   const { showThreadContextMenu, renameDialog } =
     useProjectThreadFeedContextMenu(displayThreads);
   const syncServerShellSnapshot = useStore((state) => state.syncServerShellSnapshot);
@@ -446,6 +525,7 @@ export function ProjectThreadFeedSurface({
           <ThreadFeedCard
             key={thread.id}
             thread={thread}
+            childThreads={childThreadsByParent.get(thread.id)}
             onOpen={openThread}
             onIntent={prewarmThreadDetail}
             {...(hostSidebar?.simplifiedComposer ? {} : { onContextMenu: showThreadContextMenu })}

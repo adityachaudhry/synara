@@ -105,6 +105,10 @@
   --workflow-card-faint: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
   --workflow-card-phase-current: color-mix(in oklab, var(--foreground) 85%, transparent);
   --workflow-card-phase-current-bg: var(--color-background-button-secondary);
+  --workflow-card-font-size: 11px;
+  --workflow-card-font-xs: calc(var(--workflow-card-font-size) - 1px);
+  --workflow-card-font-sm: var(--workflow-card-font-size);
+  --workflow-card-font-md: calc(var(--workflow-card-font-size) + 1px);
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
        hairlines (chat/dock/diff headers) AND the right-side pane splits
        (diff/browser/dock). All resolve through here so those divider directions read
