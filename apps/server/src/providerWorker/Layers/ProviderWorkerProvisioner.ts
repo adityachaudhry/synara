@@ -1225,6 +1225,13 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             return yield* staleGeneration(input.threadId, input.lifecycleGeneration);
           }
           const active = activeByThread.get(input.threadId);
+          // A fresh headless start replaces a lost sandbox under the same generation.
+          if (active && input.fresh && input.headless && (yield* isWorkspaceUnavailable(active))) {
+            activeByThread.delete(input.threadId);
+            const created = yield* createBinding(input);
+            activeByThread.set(input.threadId, created);
+            return created;
+          }
           if (active?.fence.lifecycleGeneration === input.lifecycleGeneration) return active;
           if (active) {
             const replacement = yield* replaceBinding(active, input);
