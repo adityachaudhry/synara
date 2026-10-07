@@ -17,6 +17,12 @@ export const DURABLE_BACKUP_NAME = "durable-harness";
 type Grant = { key: string; upload_url: string; headers: Record<string, string> };
 type Latest = { key: string; size_bytes: number; last_modified: string; download_url: string };
 
+/** Error text including undici's network cause, which `fetch failed` hides. */
+export const describe = (cause: unknown): string => {
+  const error = cause as { message?: unknown; cause?: { message?: unknown; code?: unknown } };
+  return [error?.message ?? String(cause), error?.cause?.code, error?.cause?.message].filter(Boolean).join(" | ");
+};
+
 const log = (event: string, detail: Record<string, unknown>) => console.info(JSON.stringify({ event, ...detail }));
 
 /** Uploads one consistent snapshot. Returns the stored key, or undefined without a backup API. */
@@ -38,12 +44,16 @@ export async function backupHarness(storagePath: string): Promise<string | undef
       name: DURABLE_BACKUP_NAME,
       sha256,
       size_bytes: body.byteLength,
+    }).catch((cause: unknown) => {
+      throw new Error(`Backup grant request failed: ${describe(cause)}`);
     });
     const response = await fetch(grant.upload_url, {
       method: "PUT",
-      headers: grant.headers,
+      headers: Object.fromEntries(Object.entries(grant.headers).filter(([key]) => key.toLowerCase() !== "content-length")),
       body,
       signal: AbortSignal.timeout(120_000),
+    }).catch((cause: unknown) => {
+      throw new Error(`Backup upload to ${new URL(grant.upload_url).host} failed: ${describe(cause)}`);
     });
     if (!response.ok) throw new Error(`Backup upload failed with HTTP ${response.status}.`);
     log("durable.backup.uploaded", { key: grant.key, bytes: body.byteLength, durationMs: Date.now() - started });

@@ -74,7 +74,7 @@ import {
 } from "../provider/Layers/PiAdapter.ts";
 import { createCrunchbaseTools, createWebAccessTools } from "./extensionTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
-import { backupHarness, restoreHarnessIfNeeded } from "./backup.ts";
+import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 
 const PROVIDER = "pi" as const;
@@ -275,10 +275,12 @@ export class DurablePiEngine {
       }
     }
     this.#harness.resume();
-    this.#backupTimer = setInterval(() => {
+    const backup = () => {
       backupHarness(this.#options.storagePath).catch((cause) =>
-        console.warn(JSON.stringify({ event: "durable.backup.failed", message: String(cause) })));
-    }, 10 * 60_000);
+        console.warn(JSON.stringify({ event: "durable.backup.failed", message: describe(cause) })));
+    };
+    setTimeout(backup, 2 * 60_000).unref();
+    this.#backupTimer = setInterval(backup, 10 * 60_000);
     this.#backupTimer.unref();
     console.info(JSON.stringify({
       event: "durable.engine.ready",
@@ -501,7 +503,7 @@ export class DurablePiEngine {
     if (this.#backupTimer) clearInterval(this.#backupTimer);
     await this.#harness.close(ctx);
     await backupHarness(this.#options.storagePath).catch((cause) =>
-      console.warn(JSON.stringify({ event: "durable.backup.failed", message: String(cause) })));
+      console.warn(JSON.stringify({ event: "durable.backup.failed", message: describe(cause) })));
   }
 
   /** Takes one backup now; used by the restore drill. */
