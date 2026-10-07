@@ -331,7 +331,7 @@ export class DiligenceRunner {
     const skipped = steps.filter((step) => state.steps[step.id]?.status === "skipped");
     const report = request.reportUrl ? ` [Open the report](${request.reportUrl}).` : "";
     const text = state.status === "succeeded"
-      ? `Diligence finished: all ${steps.length} steps completed. Glasswing is publishing the report now.${report} Each step thread keeps its agent's research, so you can ask any of them a follow-up.`
+      ? `Diligence finished: ${steps.length === 1 ? "the step completed" : `all ${steps.length} steps completed`}. Glasswing is publishing the report now.${report} ${steps.length === 1 ? "The step thread keeps its agent's research, so you can ask it a follow-up." : "Each step thread keeps its agent's research, so you can ask any of them a follow-up."}`
       : state.status === "canceled"
         ? "Diligence was stopped. Steps that finished keep their threads and research."
         : `Diligence finished with problems. ${failed.map((step) => `${stepLabel(step)} failed: ${(state.steps[step.id]?.error ?? "unknown error").slice(0, 200)}`).join(" ")}` +
@@ -546,7 +546,7 @@ export class DiligenceRunner {
       if (missing.length) {
         // A replaced sandbox can lose files written since the last capture; the conversation still has the work.
         log("step.recovering", { runId, step: step.id, missing });
-        await submit(`These required files are missing from the workspace: ${missing.map((file) => `\`${file}\``).join(", ")}. The workspace may have been replaced. Recreate each file now from your work in this conversation, then reply only: recovered.`,
+        await submit(`These required files are missing from the workspace: ${missing.map((file) => `\`${file}\``).join(", ")}. The workspace may have been replaced. Recreate each file now from your work in this conversation, then reply with one short sentence naming the files you recreated.`,
           `diligence:${runId}:${step.id}:recover`);
         missing = await this.#missingOutputs(runId, request, step.outputs);
       }

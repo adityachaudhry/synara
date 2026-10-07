@@ -1410,8 +1410,12 @@ export default function ChatView({
     useMemo(() => createComposerThreadMentionSourcesSelector(), []),
   );
   const composerThreadProjects = useStore((state) => state.projects);
+  // A provider-native child (a subagent or diligence step) names its parent as source, but its
+  // messages are typed by the user in that thread, not sent from another thread.
   const crossTaskSourceThreadId =
-    serverThread?.creationSource && serverThread.sourceThreadId
+    serverThread?.creationSource &&
+    serverThread.creationSource !== "provider_native" &&
+    serverThread.sourceThreadId
       ? serverThread.sourceThreadId
       : null;
   const crossTaskSourceThread = useStore(
