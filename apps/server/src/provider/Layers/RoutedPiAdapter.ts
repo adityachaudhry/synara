@@ -88,10 +88,12 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   );
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
   const remoteGatewayTokenByThread = new Map<string, string>();
-  const workspaceRuntime = yield* WorkspaceRuntime;
-  const serverConfig = yield* ServerConfig;
+  const workspaceRuntimeService = Option.getOrUndefined(yield* Effect.serviceOption(WorkspaceRuntime));
+  const serverConfig = Option.getOrUndefined(yield* Effect.serviceOption(ServerConfig));
   // Durable threads run the Pi agent loop in this process; their sandboxes only run tools.
-  const durableEnabled = ["1", "true"].includes(process.env.SYNARA_PI_DURABLE?.trim().toLowerCase() ?? "");
+  const durableEnabled = workspaceRuntimeService !== undefined && serverConfig !== undefined &&
+    ["1", "true"].includes(process.env.SYNARA_PI_DURABLE?.trim().toLowerCase() ?? "");
+  const workspaceRuntime = workspaceRuntimeService!;
   const durableEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sandboxRunner = (binding: ProviderWorkerRuntimeBinding): SandboxRunner => ({
     run: (command, options) =>
@@ -374,8 +376,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     ? yield* Effect.acquireRelease(
         Effect.promise(() =>
           DurablePiEngine.open({
-            storagePath: path.join(serverConfig.stateDir, "durable", "harness.sqlite"),
-            agentDir: path.join(serverConfig.stateDir, "durable", "agent"),
+            storagePath: path.join(serverConfig!.stateDir, "durable", "harness.sqlite"),
+            agentDir: path.join(serverConfig!.stateDir, "durable", "agent"),
             target: durableTarget,
             readAttachment: async (attachment) => {
               const source = providerAttachmentStoragePath(attachment);
