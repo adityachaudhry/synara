@@ -30,6 +30,7 @@ import { shellQuote } from "./sandboxEnv.ts";
 const ctx = BACKGROUND_CONTEXT;
 const RUN_ROOT = "/workspace/run";
 const AGENT_UID = 10001;
+const CAPTURE_INTERVAL_MS = 60_000;
 
 export interface DiligenceStep {
   readonly id: string;
@@ -117,6 +118,7 @@ export class DiligenceRunner {
   readonly #loops = new Map<string, Promise<void>>();
   readonly #wakers = new Map<string, () => void>();
   readonly #targets = new Map<string, Promise<DurableThreadTarget>>();
+  readonly #captured = new Map<string, Map<string, string>>();
   readonly #pendingEvents = new Map<string, Array<{ kind: string; data: Record<string, unknown> }>>();
   #flushTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -190,8 +192,15 @@ export class DiligenceRunner {
 
   #start(runId: string) {
     if (this.#loops.has(runId)) return;
-    const loop = this.#run(runId).catch((cause) => log("run.loop-failed", { runId, message: String(cause) }))
-      .finally(() => this.#loops.delete(runId));
+    const loop = this.#run(runId).catch(async (cause) => {
+      // Steps keep running; the scheduler restarts after a pause.
+      log("run.loop-failed", { runId, message: String(cause) });
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      return "retry" as const;
+    }).then((outcome) => {
+      this.#loops.delete(runId);
+      if (outcome === "retry") this.#start(runId);
+    });
     this.#loops.set(runId, loop);
   }
 
@@ -201,7 +210,16 @@ export class DiligenceRunner {
     const steps = new Map(request.plan.steps.map((step) => [step.id, step]));
     const limit = Math.max(1, request.plan.maxConcurrency ?? 6);
     const inFlight = new Map<string, Promise<void>>();
+    let lastCapture = Date.now();
     for (;;) {
+      try {
+        if (Date.now() - lastCapture > CAPTURE_INTERVAL_MS && inFlight.size > 0) {
+          lastCapture = Date.now();
+          await this.#captureOutbox(request);
+        }
+      } catch (cause) {
+        log("run.capture-failed", { runId, message: String(cause).slice(0, 300) });
+      }
       const state = await this.#state(runId);
       if (!state) return;
       if (state.status !== "running") break;
@@ -230,7 +248,8 @@ export class DiligenceRunner {
         for (const dep of step.after) {
           if (state.steps[dep]?.status === "done") continue;
           const releases = (step.release ?? []).filter((release) => release.step === dep);
-          if (state.steps[dep]?.status === "running" && releases.length > 0 && (await this.#filesExist(runId, request, releases.map((release) => release.file)))) {
+          if (state.steps[dep]?.status === "running" && releases.length > 0 &&
+            (await this.#filesExist(runId, request, releases.map((release) => release.file)).catch(() => false))) {
             continue;
           }
           satisfied = false;
@@ -271,7 +290,14 @@ export class DiligenceRunner {
     try {
       const conversation = await this.#conversationFor(request, step);
       await this.#submit(conversation, step.prompt, `diligence:${runId}:${step.id}`, step.id, runId);
-      const missing = await this.#missingOutputs(runId, request, step.outputs);
+      let missing = await this.#missingOutputs(runId, request, step.outputs);
+      if (missing.length) {
+        // A replaced sandbox can lose files written since the last capture; the conversation still has the work.
+        log("step.recovering", { runId, step: step.id, missing });
+        await this.#submit(conversation, `These required files are missing from the workspace: ${missing.map((file) => `\`${file}\``).join(", ")}. The workspace may have been replaced. Recreate each file now from your work in this conversation, then reply only: recovered.`,
+          `diligence:${runId}:${step.id}:recover`, step.id, runId);
+        missing = await this.#missingOutputs(runId, request, step.outputs);
+      }
       if (missing.length) throw new Error(`Step finished without its outputs: ${missing.join(", ")}`);
       let gate: { findings: string[]; generative: string[] } | undefined;
       if (step.gate) {
@@ -465,6 +491,21 @@ export class DiligenceRunner {
       if (result.exitCode !== 0) missing.push(file);
     }
     return missing;
+  }
+
+  /** Saves changed outbox files into the run state, so a replacement sandbox starts close to the lost one. */
+  async #captureOutbox(request: DiligenceRequest) {
+    const target = await this.#target(request);
+    const listed = await target.runner.run(`cd ${RUN_ROOT} && find outbox -type f -size -4M -printf '%T@ %p\\n'`, { timeoutSeconds: 30 });
+    if (listed.exitCode !== 0) return;
+    const seen = this.#captured.get(request.runId) ?? new Map<string, string>();
+    this.#captured.set(request.runId, seen);
+    const changed = listed.output.split("\n").map((line) => line.trim()).map((line) => [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)]).filter(([mtime, file]) =>
+      mtime && file?.startsWith("outbox/") && seen.get(file) !== mtime);
+    if (!changed.length) return;
+    const files = await this.#readFiles(request.runId, request, changed.map(([, file]) => file!));
+    await this.#update(request.runId, (draft) => { Object.assign(draft.outputs, files); });
+    for (const [mtime, file] of changed) if (file && file in files) seen.set(file, mtime!);
   }
 
   async #outboxFiles(request: DiligenceRequest) {

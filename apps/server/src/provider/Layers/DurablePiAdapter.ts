@@ -284,9 +284,10 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
   if (execInWorkspace && writeWorkspaceFile) {
     // Durable diligence runs share this Harness and the sandbox provisioner.
     const diligence = new DiligenceRunner(engine, {
+      // Adopted like a chat sandbox, so startup recovery does not destroy it as a leaked creation.
       claim: (key, generation, repository) => Effect.runPromise(provisioner.start({
         threadId: ThreadId.makeUnsafe(key), lifecycleGeneration: generation, headless: true, fresh: true, repositoryBinding: repository,
-      })),
+      }).pipe(Effect.tap((binding) => provisioner.adopt(binding)))),
       unavailable: (binding) => Effect.runPromise(unavailable(binding)),
       runner: sandboxRunner,
       release: (binding) => Effect.runPromise(provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
