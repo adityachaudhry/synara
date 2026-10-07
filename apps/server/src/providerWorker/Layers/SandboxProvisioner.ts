@@ -229,7 +229,7 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
           ...(repository && checkout ? { repositoryCheckout: { binding: repository, ...checkout } } : {}),
         };
         yield* restoreFiles(binding);
-        console.info(JSON.stringify({
+        yield* Effect.logInfo(JSON.stringify({
           event: "provider.operation.finished", operation: "sandbox.claimed",
           threadId: input.threadId, lifecycleGeneration: input.lifecycleGeneration, sandboxId: workspace.runtimeId,
           checkoutCommit: checkout?.commit,
