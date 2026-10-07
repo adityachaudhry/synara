@@ -39,7 +39,7 @@ const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Qui
 /** The run thread's opening request, as the analyst would put it; the feed shows it. */
 const runRequestText = (plan: DiligenceRequest) => {
   const company = plan.company.name;
-  if (plan.mode === "quick") return `Quick read on ${company}: one pass for the first meeting.`;
+  if (plan.mode === "quick") return `Quick read on ${company}: does it earn a full diligence?`;
   if (plan.mode === "memo") return `Investment memo for ${company}, written from its latest diligence.`;
   const steps = plan.plan.steps.map((step) => stepLabel(step).toLowerCase());
   return `Full diligence on ${company}: ${steps.join(", ")}.`;
