@@ -116,7 +116,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       return provisioner.checkpointOutbox(binding, next.turnId).pipe(
         Effect.asVoid,
         Effect.catchCause((cause) => Cause.hasInterruptsOnly(cause) ? Effect.interrupt
-          : Effect.logWarning("thread file capture deferred", { threadId, sandboxId: binding.workspace.runtimeId, cause })),
+          : Effect.logWarning("thread file capture deferred", { threadId, sandboxId: binding.workspace.runtimeId, cause: Cause.pretty(cause) })),
         Effect.andThen(finishTerminal),
         Effect.andThen(drain()),
       );
@@ -308,12 +308,14 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       : adapterError("workspace.prepare", "Could not prepare the company workspace.", cause)),
   );
 
-  /** The thread's live sandbox; a released one fails as session-not-found so ProviderService restarts it. */
+  /** The thread's live sandbox; a released or lost one is replaced from the company revision and captured files. */
   const liveSandbox = (threadId: string) => Effect.gen(function* () {
     const binding = yield* currentBinding(threadId);
-    if (!binding) return undefined;
-    if (yield* unavailable(binding)) return yield* new ProviderAdapterSessionNotFoundError({ provider: "pi", threadId: ThreadId.makeUnsafe(threadId) });
-    return binding;
+    if (!binding || !(yield* unavailable(binding))) return binding;
+    yield* Effect.logInfo("thread sandbox released; claiming a replacement", { threadId, sandboxId: binding.workspace.runtimeId });
+    return yield* claimSandbox(threadId, binding.fence.lifecycleGeneration, binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding).pipe(
+      Effect.mapError((cause) => adapterError("turn.send", "Failed to prepare a replacement sandbox.", cause, { retryable: cause instanceof ProviderWorkerProvisioningError })),
+    );
   });
 
   const stageAttachments = (binding: ProviderWorkerRuntimeBinding | undefined, attachments: Parameters<PiAdapterShape["sendTurn"]>[0]["attachments"], operation: string) =>
