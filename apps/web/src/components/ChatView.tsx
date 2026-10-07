@@ -12295,7 +12295,9 @@ export default function ChatView({
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      {/* overflow-clip, not hidden: a hidden overflow can still be scrolled by focus or
+          scrollIntoView, which shifted the whole chat sideways when the dock was open. */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-clip">
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
