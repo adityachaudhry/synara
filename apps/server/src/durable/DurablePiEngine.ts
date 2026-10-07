@@ -28,12 +28,15 @@ import {
   type Harness as HarnessType,
   type SubmissionId,
   type ToolRegistration,
+  AssistantEntry,
   createRegistry,
   defineDoc,
   defineExtension,
   defineTool,
   Harness,
   section,
+  ToolResultEntry,
+  UserEntry,
   watchEvents,
 } from "@earendil-works/pi-durable";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
@@ -349,6 +352,40 @@ export class DurablePiEngine {
     this.#emit(state, { type: "session.started", payload: { message: "Durable Pi session ready", resume: session.resumeCursor } });
     this.#emit(state, { type: "thread.started", payload: { providerThreadId: `durable-${state.conversationId}` } });
     return session;
+  }
+
+  /**
+   * Moves a worker-era thread onto the durable runtime: rebuilds the exact model context of its Pi
+   * session file (compaction, branches and context edits applied) as durable entries. The original
+   * file is not changed.
+   */
+  async importLegacySession(input: DurableStartInput & { readonly sessionJsonl: string }): Promise<{ readonly messages: number }> {
+    if (this.#threads.has(input.threadId)) return { messages: 0 };
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    const fileEntries = sdk.parseSessionEntries(input.sessionJsonl);
+    sdk.migrateSessionEntries(fileEntries);
+    const entries = fileEntries.filter((entry): entry is Exclude<typeof entry, { type: "session" }> => entry.type !== "session");
+    const context = sdk.buildSessionContext(entries as never);
+    const messages = sdk.convertToLlm(context.messages).filter((message) =>
+      message.role === "user" || message.role === "assistant" || message.role === "toolResult");
+    const model = context.model ? { provider: context.model.provider, modelId: context.model.modelId } : DEFAULT_MODEL;
+    const conversation = await this.#harness.createConversation(
+      { ownership: { kind: "ownerless" }, agent: { model, thinkingLevel: (context.thinkingLevel || "medium") as never, cwd: input.cwd } },
+      ctx,
+    );
+    await this.#harness.commit(async (tx) => {
+      for (const message of messages) {
+        if (message.role === "user") await tx.appendEntry(UserEntry, conversation.id, { model: [message] });
+        else if (message.role === "assistant") await tx.appendEntry(AssistantEntry, conversation.id, { model: [message] });
+        else await tx.appendEntry(ToolResultEntry, conversation.id, { model: [message], data: { diagnostics: [] } });
+      }
+      const index = await tx.doc(ThreadIndex);
+      index.threads[input.threadId] = { conversationId: conversation.id as number, generation: input.lifecycleGeneration, cwd: input.cwd };
+    }, ctx);
+    const state = this.#state(input.threadId, conversation.id, input.lifecycleGeneration, input.cwd);
+    state.model = `${model.provider}/${model.modelId}`;
+    console.info(JSON.stringify({ event: "durable.legacy.imported", threadId: input.threadId, messages: messages.length, sessionEntries: entries.length }));
+    return { messages: messages.length };
   }
 
   async #applyModel(state: ThreadState, conversation: Conversation, selection: DurableStartInput["modelSelection"]) {

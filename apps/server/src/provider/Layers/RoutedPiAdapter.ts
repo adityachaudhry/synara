@@ -30,7 +30,7 @@ import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { makeKeyedLock } from "../keyedLock";
-import { extractLegacyPiResumeSessionFile } from "./PiAdapter.ts";
+import { extractLegacyPiResumeSessionFile, extractResumeSessionFile } from "./PiAdapter.ts";
 import { ServerConfig } from "../../config.ts";
 import { DurablePiEngine, type DurableThreadTarget } from "../../durable/DurablePiEngine.ts";
 import type { SandboxRunner } from "../../durable/sandboxEnv.ts";
@@ -537,8 +537,12 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ? { url: agentGatewayCredentials.mcpEndpointUrl, bearerToken: preparedToken }
         : agentGatewayCredentials?.repositoryConnectionForThread(input.threadId, "pi");
       const previousGatewayToken = remoteGatewayTokenByThread.get(input.threadId);
-      // New threads, and threads already durable, use the in-controller agent loop.
-      const headless = engine !== undefined && (previous === undefined || previous.headless === true);
+      // New threads, threads already durable, and worker-era Daytona threads (imported once)
+      // use the in-controller agent loop.
+      const migrateLegacy = engine !== undefined && previous !== undefined && previous.headless !== true &&
+        previous.workspace.runtimeKind === "daytona-sandbox";
+      const headless = engine !== undefined && (previous === undefined || previous.headless === true || migrateLegacy);
+      const legacySessionFile = migrateLegacy ? extractResumeSessionFile(input.resumeCursor) : undefined;
       const launch = () =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -580,6 +584,24 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
               restore(
                 Effect.gen(function* () {
                   yield* provisioner.markWorkspaceMutation?.(binding) ?? Effect.void;
+                  if (migrateLegacy && engine && legacySessionFile && execInWorkspace) {
+                    const file = legacySessionFile.startsWith("/root/") ? `/workspace${legacySessionFile.slice("/root".length)}` : legacySessionFile;
+                    const read = yield* execInWorkspace(binding, { command: `cat '${file.replaceAll("'", `'"'"'`)}'`, timeoutSeconds: 60 }).pipe(
+                      Effect.mapError((cause) => adapterError("session.import", "Could not read the worker-era Pi history.", cause)),
+                    );
+                    if (read.exitCode !== 0 || read.timedOut) {
+                      return yield* adapterError("session.import", "The worker-era Pi history is not readable; the thread keeps its original disk.");
+                    }
+                    yield* Effect.tryPromise({
+                      try: () => engine.importLegacySession({
+                        threadId: input.threadId,
+                        lifecycleGeneration,
+                        cwd: binding.cwd,
+                        sessionJsonl: read.stdout,
+                      }),
+                      catch: (cause) => adapterError("session.import", "Importing the worker-era Pi history failed.", cause),
+                    });
+                  }
                   const session = yield* requestDecoded(
                     binding,
                     "session.start",
