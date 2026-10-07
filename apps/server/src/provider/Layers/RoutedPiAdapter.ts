@@ -104,12 +104,15 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     run: (command, options) =>
       Effect.runPromise(
         execInWorkspace!(binding, { command, ...(options.timeoutSeconds ? { timeoutSeconds: options.timeoutSeconds } : {}) })
-          .pipe(Effect.map((result) => ({
+          .pipe(
+            Effect.mapError((cause) => new Error(`Sandbox command failed: ${String((cause as { detail?: unknown; message?: unknown })?.detail ?? (cause as { message?: unknown })?.message ?? cause)}`)),
+            Effect.map((result) => ({
             exitCode: result.exitCode,
             output: result.stdout + result.stderr,
             timedOut: result.timedOut,
             truncated: result.truncated,
-          }))),
+          })),
+          ),
       ),
     upload: (filePath, data) =>
       Effect.runPromise(writeWorkspaceFile!(binding, { path: filePath, data, mode: 0o644 })),
@@ -378,8 +381,10 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         threadId: ThreadId.makeUnsafe(threadId),
         lifecycleGeneration: lost.fence.lifecycleGeneration,
         headless: true,
+        fresh: true,
         ...(repositoryBinding ? { repositoryBinding } : {}),
-      });
+      }).pipe(Effect.tapError((cause) => Effect.logError("durable Pi sandbox replacement failed", { threadId, cause })));
+      yield* Effect.logInfo("durable Pi sandbox replaced", { threadId, sandboxId: binding.workspace.runtimeId });
       yield* persistRemoteBinding({ threadId: ThreadId.makeUnsafe(threadId), lifecycleGeneration: binding.fence.lifecycleGeneration, binding });
       yield* provisioner.adopt(binding);
       remoteByThread.set(threadId, binding);

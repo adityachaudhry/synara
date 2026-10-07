@@ -15,6 +15,8 @@ export interface ProviderWorkerProvisionInput {
   readonly speculative?: boolean;
   /** Prepare the sandbox for controller-side tools only; launch no worker process. */
   readonly headless?: boolean;
+  /** Ignore saved native disks and archives; build from the company revision only. */
+  readonly fresh?: boolean;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration: string;
   readonly cwd?: string;

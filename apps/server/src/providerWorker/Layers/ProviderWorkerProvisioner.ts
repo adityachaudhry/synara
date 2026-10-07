@@ -928,7 +928,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
 
     const createBinding = (input: ProviderWorkerProvisionInput, restoreSaved?: ProviderWorkspaceCheckpoint): Effect.Effect<ProviderWorkerRuntimeBinding, ProviderWorkerProvisioningError> =>
       withSavedDisk(input.threadId, (stored) => Effect.gen(function* () {
-        stored = restoreSaved ?? stored;
+        stored = input.fresh ? undefined : restoreSaved ?? stored;
         const previousRepository = stored?.binding.repositoryCheckout?.binding ?? stored?.binding.repositoryUnavailable?.binding;
         const sameRepository = input.repositoryBinding && previousRepository &&
           (["origin", "owner", "repository", "ref", "path"] as const).every((key) => input.repositoryBinding![key] === previousRepository[key]);
