@@ -86,7 +86,7 @@ type ThreadRoute = {
 };
 
 /** threadId → conversation, kept in the Harness so a restart finds running work. */
-const ThreadIndex = defineDoc<{ threads: Record<string, { conversationId: number; generation: string; cwd: string; route?: ThreadRoute }> }>({
+const ThreadIndex = defineDoc<{ threads: Record<string, { conversationId: number; generation: string; cwd: string; route?: ThreadRoute; unfenced?: boolean }> }>({
   kind: "synara.thread-index",
   version: 1,
   scope: "session",
@@ -136,6 +136,11 @@ interface ThreadState {
   route?: ThreadRoute | undefined;
   /** A turn driven from outside the conversation (a diligence run on its run thread). */
   externalTurnId?: TurnId | undefined;
+  /**
+   * Started by the controller, not by ProviderService (diligence run threads): ProviderService has
+   * no lifecycle generation for it, so its events carry none and are not filtered as stale.
+   */
+  unfenced?: boolean | undefined;
 }
 
 export interface DurableStartInput {
@@ -144,6 +149,7 @@ export interface DurableStartInput {
   readonly cwd: string;
   readonly modelSelection?: { readonly provider: string; readonly model: string; readonly options?: unknown } | undefined;
   readonly runtimeMode?: ProviderSession["runtimeMode"];
+  readonly unfenced?: boolean | undefined;
 }
 
 export interface DurableTurnInput {
@@ -280,6 +286,7 @@ export class DurablePiEngine {
       const conversationId = entry.conversationId as ConversationId;
       const state = this.#state(threadId, conversationId, entry.generation, entry.cwd);
       if (entry.route) state.route = entry.route;
+      if (entry.unfenced) state.unfenced = true;
       const inputs = (await this.#watch(state))?.run?.inputs ?? [];
       if (inputs.length > 0) {
         // Restart during a turn: re-attach to the running work before the scheduler continues it.
@@ -439,9 +446,13 @@ export class DurablePiEngine {
     state.lifecycleGeneration = input.lifecycleGeneration;
     state.cwd = input.cwd;
     state.stopped = false;
+    if (input.unfenced) state.unfenced = true;
     await this.#harness.commit(async (tx) => {
       const index = await tx.doc(ThreadIndex);
-      index.threads[input.threadId] = { conversationId: state.conversationId as number, generation: input.lifecycleGeneration, cwd: input.cwd };
+      index.threads[input.threadId] = {
+        conversationId: state.conversationId as number, generation: input.lifecycleGeneration, cwd: input.cwd,
+        ...(state.unfenced ? { unfenced: true } : {}),
+      };
     }, ctx);
     const conversation = await this.#conversation(state);
     await conversation.configure({ cwd: input.cwd }, ctx);
@@ -760,7 +771,7 @@ export class DurablePiEngine {
       provider: PROVIDER,
       threadId: ThreadId.makeUnsafe(route ? route.parentThreadId : state.threadId),
       createdAt: new Date().toISOString(),
-      lifecycleGeneration: parent?.lifecycleGeneration ?? state.lifecycleGeneration,
+      ...((route ? parent?.unfenced : state.unfenced) ? {} : { lifecycleGeneration: parent?.lifecycleGeneration ?? state.lifecycleGeneration }),
       ...(resolvedTurn ? { turnId: resolvedTurn } : {}),
       ...(itemId ? { itemId } : {}),
       ...(refs ? { providerRefs: refs } : {}),

@@ -300,6 +300,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
           lifecycleGeneration: newGeneration(),
           cwd: `/workspace/repository/${repository.path}`,
           modelSelection: { provider: "pi", model: "anthropic/claude-opus-5-5" },
+          unfenced: true,
         });
       },
     });
