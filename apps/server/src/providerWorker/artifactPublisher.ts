@@ -1,6 +1,11 @@
 import { Effect } from "effect";
 import Mime from "@effect/platform-node/Mime";
-import type { ProviderPersistenceCandidate } from "../providerPersistence.ts";
+import {
+  isProviderPersistencePathSafe,
+  PROVIDER_PERSISTENCE_OUTBOX_ROOT,
+  type ProviderPersistenceCandidate,
+} from "../providerPersistence.ts";
+import type { WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 import type { ProviderWorkerBrokerShape } from "./Services/ProviderWorkerBroker.ts";
 import { privateWorkerHosts } from "./privateNetwork.ts";
@@ -60,6 +65,7 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
   readonly binding: ProviderWorkerRuntimeBinding;
   readonly entries: ReadonlyArray<ProviderPersistenceCandidate>;
   readonly broker: ProviderWorkerBrokerShape;
+  readonly workspaceRuntime: WorkspaceRuntimeShape;
   readonly turnId?: string;
 }) {
   const api = yield* Effect.try({ try: artifactApiClient, catch: (cause) => cause });
@@ -95,17 +101,26 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
         }),
       catch: (cause) => cause,
     });
-    yield* input.broker.request(binding.fence, "artifacts.upload", {
-      files: [
-        {
-          path: file.path,
-          sha256: file.sha256,
-          sizeBytes: file.sizeBytes,
-          uploadUrl: grant.upload_url,
-          headers: grant.headers,
-        },
-      ],
-    });
+    if (binding.headless) {
+      yield* uploadFromSandbox(input.workspaceRuntime, binding, {
+        path: file.path,
+        sha256: file.sha256,
+        uploadUrl: grant.upload_url,
+        headers: grant.headers,
+      });
+    } else {
+      yield* input.broker.request(binding.fence, "artifacts.upload", {
+        files: [
+          {
+            path: file.path,
+            sha256: file.sha256,
+            sizeBytes: file.sizeBytes,
+            uploadUrl: grant.upload_url,
+            headers: grant.headers,
+          },
+        ],
+      });
+    }
     yield* Effect.tryPromise({
       try: () =>
         api<ArtifactRecord>(
@@ -129,4 +144,30 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
           saved.path === entry.path && saved.sha256 === entry.sha256 && saved.published_commit_sha,
       ),
   );
+});
+
+const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+/** Headless sandboxes have no worker; the sandbox uploads the verified file with curl. */
+const uploadFromSandbox = Effect.fn(function* (
+  workspaceRuntime: WorkspaceRuntimeShape,
+  binding: ProviderWorkerRuntimeBinding,
+  file: { readonly path: string; readonly sha256: string; readonly uploadUrl: string; readonly headers: Readonly<Record<string, string>> },
+) {
+  if (!isProviderPersistencePathSafe(file.path) || !/^[a-f0-9]{64}$/u.test(file.sha256)) {
+    return yield* Effect.fail(new Error("Invalid artifact selection."));
+  }
+  const url = new URL(file.uploadUrl);
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) {
+    return yield* Effect.fail(new Error("Artifact upload requires a signed HTTPS URL."));
+  }
+  const target = `${PROVIDER_PERSISTENCE_OUTBOX_ROOT}/${file.path}`;
+  const headers = Object.entries(file.headers).map(([key, value]) => `-H ${quote(`${key}: ${value}`)}`).join(" ");
+  const result = yield* workspaceRuntime.exec(binding.workspace, {
+    command: `set -e; f=$(realpath -e ${quote(target)}); case "$f" in ${quote(PROVIDER_PERSISTENCE_OUTBOX_ROOT)}/*) ;; *) exit 3;; esac; test -f "$f"; echo ${quote(`${file.sha256}  `)}"$f" | sha256sum --check --status; curl -fsS --max-time 90 -X PUT ${headers} --data-binary @"$f" ${quote(file.uploadUrl)} >/dev/null`,
+    timeoutSeconds: 120,
+  });
+  if (result.exitCode !== 0 || result.timedOut) {
+    return yield* Effect.fail(new Error(`Artifact upload from the sandbox failed (exit ${String(result.exitCode)}).`));
+  }
 });

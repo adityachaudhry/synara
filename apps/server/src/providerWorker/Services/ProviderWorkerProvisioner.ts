@@ -13,6 +13,8 @@ import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 
 export interface ProviderWorkerProvisionInput {
   readonly speculative?: boolean;
+  /** Prepare the sandbox for controller-side tools only; launch no worker process. */
+  readonly headless?: boolean;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration: string;
   readonly cwd?: string;

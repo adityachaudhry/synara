@@ -27,6 +27,8 @@ export const ProviderWorkerRuntimeBinding = Schema.Struct({
     lifecycleGeneration: Schema.String,
   }),
   durableSessionName: Schema.String,
+  /** The agent loop runs in the controller; no worker process runs in the sandbox. */
+  headless: Schema.optional(Schema.Boolean),
   processSupervision: Schema.optional(Schema.Literals(["durable", "attached"])),
   cwd: Schema.String,
   homeDir: Schema.String,

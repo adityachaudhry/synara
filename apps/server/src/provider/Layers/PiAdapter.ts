@@ -365,7 +365,7 @@ const loadPiWebAccessModule: () => Promise<PiWebAccessModule> = lazyModule(
   () => import("pi-web-access/index.ts"),
 );
 
-async function configurePiWebAccess(agentDir: string) {
+export async function configurePiWebAccess(agentDir: string) {
   const configDir = process.env.PI_CODING_AGENT_DIR?.trim() || agentDir;
   process.env.PI_CODING_AGENT_DIR = configDir;
   const configPath = path.join(configDir, "web-search.json");
@@ -613,7 +613,7 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
   );
 }
 
-function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
+export function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
   return isPiThinkingLevel(value) ? value : undefined;
 }
 
@@ -887,7 +887,7 @@ function isPiAnthropicEnsuredModelId(modelId: string): modelId is PiAnthropicEns
   return (PI_ANTHROPIC_ENSURED_MODEL_IDS as ReadonlyArray<string>).includes(modelId);
 }
 
-function parseModelReference(
+export function parseModelReference(
   modelId: string | null | undefined,
 ): { readonly provider?: string; readonly id: string } | undefined {
   const trimmed = trimToUndefined(modelId);
@@ -1207,7 +1207,7 @@ function firstStringValue(
   return undefined;
 }
 
-function textFromToolResult(result: unknown): string | undefined {
+export function textFromToolResult(result: unknown): string | undefined {
   if (typeof result === "string") {
     return result;
   }
@@ -1237,7 +1237,7 @@ function textFromToolResult(result: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
-function toolResultForDisplay(result: unknown): unknown {
+export function toolResultForDisplay(result: unknown): unknown {
   const record = toolRecord(result);
   if (!record || !Array.isArray(record.content)) return result;
   const content = record.content.map((block) => {
@@ -1321,7 +1321,7 @@ function toolEditEntries(args: unknown): ReadonlyArray<Record<string, unknown>> 
   return undefined;
 }
 
-function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
+export function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
   switch (toolName) {
     case "bash":
       return "command_execution";
@@ -1336,7 +1336,7 @@ function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
   }
 }
 
-function toolTitle(toolName: string, args: unknown): string {
+export function toolTitle(toolName: string, args: unknown): string {
   const command = toolName === "bash" ? toolCommand(args) : undefined;
   if (command) return command;
   const filePath = toolPath(args);
@@ -1353,7 +1353,7 @@ function toolTitle(toolName: string, args: unknown): string {
   return toolName;
 }
 
-function toolLifecycleData(input: {
+export function toolLifecycleData(input: {
   toolCallId: string;
   toolName: string;
   args: unknown;

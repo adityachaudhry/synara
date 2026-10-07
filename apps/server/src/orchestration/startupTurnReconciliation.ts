@@ -28,6 +28,7 @@
  *
  * @module startupTurnReconciliation
  */
+import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import type {
   OrchestrationCommand,
   OrchestrationThreadActivity,
@@ -283,10 +284,11 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   const now = new Date().toISOString();
   const threadsNeedingRestartCleanup = readModel.threads.filter(
     (thread) =>
-      needsRestartReconciliation(thread) ||
+      // A durable Pi turn continues after restart from its last checkpoint.
+      !resumingDurableThreads.has(thread.id) && (needsRestartReconciliation(thread) ||
       threadHasCheckpointRevertInProgress(thread) ||
       thread.hasPendingApprovals ||
-      thread.hasPendingUserInput,
+      thread.hasPendingUserInput),
   );
   if (threadsNeedingRestartCleanup.length === 0) {
     return;

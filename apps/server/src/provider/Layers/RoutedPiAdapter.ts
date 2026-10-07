@@ -8,7 +8,9 @@ import {
   type ProviderRuntimeEvent,
   type ProviderWorkerMethod,
 } from "@synara/contracts";
-import { Cause, Deferred, Effect, Exit, Layer, Option, PubSub, Schema, Scope, Stream } from "effect";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { Cause, Deferred, Effect, Exit, Layer, Option, PubSub, Queue, Schema, Scope, Stream } from "effect";
 
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { ProviderWorkerBroker } from "../../providerWorker/Services/ProviderWorkerBroker";
@@ -29,6 +31,11 @@ import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { makeKeyedLock } from "../keyedLock";
 import { extractLegacyPiResumeSessionFile } from "./PiAdapter.ts";
+import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRuntime";
+import { ServerConfig } from "../../config.ts";
+import { DurablePiEngine, type DurableThreadTarget } from "../../durable/DurablePiEngine.ts";
+import type { SandboxRunner } from "../../durable/sandboxEnv.ts";
+import { setHeadlessSessionSource } from "../../providerWorker/headlessSessions.ts";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -81,6 +88,26 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   );
   const remoteByThread = new Map<string, ProviderWorkerRuntimeBinding>();
   const remoteGatewayTokenByThread = new Map<string, string>();
+  const workspaceRuntime = yield* WorkspaceRuntime;
+  const serverConfig = yield* ServerConfig;
+  // Durable threads run the Pi agent loop in this process; their sandboxes only run tools.
+  const durableEnabled = ["1", "true"].includes(process.env.SYNARA_PI_DURABLE?.trim().toLowerCase() ?? "");
+  const durableEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+  const sandboxRunner = (binding: ProviderWorkerRuntimeBinding): SandboxRunner => ({
+    run: (command, options) =>
+      Effect.runPromise(
+        workspaceRuntime
+          .exec(binding.workspace, { command, ...(options.timeoutSeconds ? { timeoutSeconds: options.timeoutSeconds } : {}) })
+          .pipe(Effect.map((result) => ({
+            exitCode: result.exitCode,
+            output: result.stdout + result.stderr,
+            timedOut: result.timedOut,
+            truncated: result.truncated,
+          }))),
+      ),
+    upload: (filePath, data) =>
+      Effect.runPromise(workspaceRuntime.writeFile(binding.workspace, { path: filePath, data, mode: 0o644 })),
+  });
   const mutationLock = makeKeyedLock<string>();
   type CheckpointRequest = {
     readonly binding: ProviderWorkerRuntimeBinding;
@@ -243,7 +270,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     method: ProviderWorkerMethod,
     params: unknown,
   ) => {
-    const request = broker.request(binding.fence, method, params);
+    const request = binding.headless ? durableRequest(binding, method, params) : broker.request(binding.fence, method, params);
     const mutates = ["session.start", "turn.send", "turn.steer", "turn.interrupt", "request.respond",
       "userInput.respond", "thread.rollback", "thread.compact"].includes(method);
     return (mutates && provisioner.withWorkspaceMutation ? provisioner.withWorkspaceMutation(binding, request) : request).pipe(
@@ -275,12 +302,21 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     mutates = false,
   ) => {
     const routed = Effect.suspend(() => {
-      const binding = remoteByThread.get(threadId);
-      return binding ? (mutates && provisioner.markWorkspaceMutation
+      const cached = remoteByThread.get(threadId);
+      // After a restart a durable thread may still be running; find its sandbox binding.
+      const resolved: Effect.Effect<ProviderWorkerRuntimeBinding | undefined> = cached || !engine?.isDurableThread(threadId)
+        ? Effect.succeed(cached)
+        : loadPersistedRemote(ThreadId.makeUnsafe(threadId)).pipe(
+            Effect.tap((binding) => Effect.sync(() => {
+              if (binding?.headless) remoteByThread.set(threadId, binding);
+            })),
+            Effect.orElseSucceed(() => undefined),
+          );
+      return resolved.pipe(Effect.flatMap((binding) => binding ? (mutates && provisioner.markWorkspaceMutation
         ? provisioner.markWorkspaceMutation(binding).pipe(
             Effect.mapError((cause) => adapterError("workspace.mutation", "Could not preserve native workspace recovery coverage.", cause)),
             Effect.andThen(remote(binding)),
-          ) : remote(binding)) : localEffect;
+          ) : remote(binding)) : localEffect));
     });
     return mutates ? withCheckpointBarrier(threadId, routed) : routed;
   };
@@ -320,6 +356,85 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           adapterError("session.start", "Failed to persist the remote Pi runtime binding.", cause),
         ),
       );
+
+  const durableTarget = (threadId: string): Promise<DurableThreadTarget | undefined> =>
+    Effect.runPromise(Effect.gen(function* () {
+      const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(ThreadId.makeUnsafe(threadId)));
+      if (!binding?.headless) return undefined;
+      return {
+        threadId,
+        lifecycleGeneration: binding.fence.lifecycleGeneration,
+        cwd: binding.cwd,
+        homeDir: binding.homeDir,
+        runner: sandboxRunner(binding),
+        envId: binding.workspace.runtimeId,
+      };
+    }));
+  const engine = durableEnabled
+    ? yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          DurablePiEngine.open({
+            storagePath: path.join(serverConfig.stateDir, "durable", "harness.sqlite"),
+            agentDir: path.join(serverConfig.stateDir, "durable", "agent"),
+            target: durableTarget,
+            readAttachment: async (attachment) => {
+              const source = providerAttachmentStoragePath(attachment);
+              return source ? new Uint8Array(await readFile(source)) : undefined;
+            },
+            gatewayUrl: agentGatewayCredentials?.mcpEndpointUrl,
+            publish: (event) => {
+              Queue.offerUnsafe(durableEvents, event);
+            },
+          }),
+        ),
+        (opened) => Effect.promise(() => opened.close()),
+      )
+    : undefined;
+  if (engine) {
+    setHeadlessSessionSource((threadId) =>
+      engine.listSessions().filter((session) => threadId === undefined || session.threadId === threadId),
+    );
+  }
+  const durableRequest = (binding: ProviderWorkerRuntimeBinding, method: ProviderWorkerMethod, params: unknown) =>
+    Effect.tryPromise({
+      try: async (): Promise<unknown> => {
+        if (!engine) throw new Error("The durable Pi runtime is not enabled on this controller.");
+        const input = params as Record<string, unknown> & { threadId: ThreadId };
+        const attachmentsDir = path.posix.join(binding.homeDir, "state", "attachments");
+        switch (method) {
+          case "session.start":
+            return engine.startSession({
+              threadId: input.threadId,
+              lifecycleGeneration: binding.fence.lifecycleGeneration,
+              cwd: binding.cwd,
+              modelSelection: input.modelSelection as never,
+              runtimeMode: input.runtimeMode as never,
+            });
+          case "turn.send":
+            return engine.sendTurn({ ...(input as object), attachmentsDir } as Parameters<DurablePiEngine["sendTurn"]>[0]);
+          case "turn.steer":
+            return engine.steerTurn({ ...(input as object), attachmentsDir } as Parameters<DurablePiEngine["steerTurn"]>[0]);
+          case "turn.interrupt":
+            return engine.interruptTurn(input.threadId, input.turnId as string | undefined);
+          case "session.stop":
+            return engine.stopSession(input.threadId);
+          case "session.list":
+            return engine.listSessions();
+          case "session.has":
+            return engine.hasSession(input.threadId);
+          case "thread.read":
+            return engine.readThread(input.threadId);
+          case "thread.compact":
+            return engine.compactThread(input.threadId);
+          case "userInput.respond":
+          case "runtime.stopAll":
+            return undefined;
+          default:
+            throw new Error(`The durable Pi runtime does not support '${method}'.`);
+        }
+      },
+      catch: (cause) => cause,
+    });
 
   const stageRemoteAttachments = (
     binding: ProviderWorkerRuntimeBinding,
@@ -388,6 +503,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ? { url: agentGatewayCredentials.mcpEndpointUrl, bearerToken: preparedToken }
         : agentGatewayCredentials?.repositoryConnectionForThread(input.threadId, "pi");
       const previousGatewayToken = remoteGatewayTokenByThread.get(input.threadId);
+      // New threads, and threads already durable, use the in-controller agent loop.
+      const headless = engine !== undefined && (previous === undefined || previous.headless === true);
       const launch = () =>
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -399,6 +516,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                   ? provisioner.restart(previous, {
                       threadId: input.threadId,
                       lifecycleGeneration,
+                      ...(headless ? { headless: true } : {}),
                       ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding,
@@ -409,6 +527,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
                   : provisioner.start({
                       threadId: input.threadId,
                       lifecycleGeneration,
+                      ...(headless ? { headless: true } : {}),
                       ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
                       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                       repositoryBinding,
@@ -511,6 +630,7 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       const provisionInput = {
         threadId: input.threadId, lifecycleGeneration: input.lifecycleGeneration,
         repositoryBinding: input.repositoryBinding, speculative: true,
+        ...(engine !== undefined && (previous === undefined || previous.headless === true) ? { headless: true } : {}),
         ...(legacyPiResumeSessionFile ? { legacyPiResumeSessionFile } : {}),
         ...(gateway ? { agentGatewayConnection: gateway } : {}),
       };
@@ -863,8 +983,8 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
   const listSessions: PiAdapterShape["listSessions"] = (threadId) =>
     Effect.suspend(() => Effect.all([
       local.listSessions(threadId),
-      Effect.forEach(threadId === undefined ? Array.from(remoteByThread.values())
-        : [remoteByThread.get(threadId)].flatMap((binding) => binding ? [binding] : []), (binding) =>
+      Effect.forEach((threadId === undefined ? Array.from(remoteByThread.values())
+        : [remoteByThread.get(threadId)].flatMap((binding) => binding ? [binding] : [])).filter((binding) => !binding.headless), (binding) =>
         workspaceUnavailable(binding).pipe(
           Effect.flatMap((unavailable) => unavailable
             ? Effect.succeed([] as const)
@@ -877,7 +997,11 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
           ),
         ),
       ).pipe(Effect.map((groups) => groups.flat())),
-    ]).pipe(Effect.map(([localSessions, remoteSessions]) => [...localSessions, ...remoteSessions])));
+    ]).pipe(Effect.map(([localSessions, remoteSessions]) => [
+      ...localSessions,
+      ...remoteSessions,
+      ...(engine?.listSessions().filter((session) => threadId === undefined || session.threadId === threadId) ?? []),
+    ])));
 
   const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
     route(
@@ -960,6 +1084,33 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
       ),
     );
 
+  const checkpointOnTerminal = (event: ProviderRuntimeEvent) => Effect.suspend(() => {
+    const completedFileChange =
+      event.type === "item.completed" &&
+      event.payload.itemType === "file_change" &&
+      event.payload.status === "completed";
+    if (
+      !completedFileChange &&
+      event.type !== "turn.completed" &&
+      event.type !== "turn.aborted"
+    ) {
+      return Effect.void;
+    }
+    const binding = remoteByThread.get(event.threadId);
+    if (!binding || event.lifecycleGeneration !== binding.fence.lifecycleGeneration) return Effect.void;
+    if (!completedFileChange && event.turnId) {
+      const token = remoteGatewayTokenByThread.get(event.threadId);
+      if (token) {
+        // Each completed turn retires write authority; ProviderService rotates it on recovery.
+        void agentGatewayCredentials?.retireSessionTurn(token, event.turnId);
+      }
+    }
+    return scheduleCheckpoint(event.threadId, {
+      binding, eventId: event.eventId, terminal: !completedFileChange,
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+    });
+  });
+
   return {
     provider: "pi",
     capabilities: local.capabilities,
@@ -990,34 +1141,10 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
     listCommands: local.listCommands,
     getComposerCapabilities: local.getComposerCapabilities,
     get streamEvents() {
-      const remoteEvents = broker.streamEvents.pipe(
-        Stream.tap((event) => Effect.suspend(() => {
-          const completedFileChange =
-            event.type === "item.completed" &&
-            event.payload.itemType === "file_change" &&
-            event.payload.status === "completed";
-          if (
-            !completedFileChange &&
-            event.type !== "turn.completed" &&
-            event.type !== "turn.aborted"
-          ) {
-            return Effect.void;
-          }
-          const binding = remoteByThread.get(event.threadId);
-          if (!binding || event.lifecycleGeneration !== binding.fence.lifecycleGeneration) return Effect.void;
-          if (!completedFileChange && event.turnId) {
-            const token = remoteGatewayTokenByThread.get(event.threadId);
-            if (token) {
-              // Each completed turn retires write authority; ProviderService rotates it on recovery.
-              void agentGatewayCredentials?.retireSessionTurn(token, event.turnId);
-            }
-          }
-          return scheduleCheckpoint(event.threadId, {
-            binding, eventId: event.eventId, terminal: !completedFileChange,
-            ...(event.turnId ? { turnId: event.turnId } : {}),
-          });
-        })),
-      );
+      const remoteEvents = Stream.merge(
+        broker.streamEvents,
+        Stream.fromQueue(durableEvents),
+      ).pipe(Stream.tap(checkpointOnTerminal));
       const providerEvents = Stream.merge(local.streamEvents, remoteEvents);
       return capacityEvents === undefined
         ? providerEvents

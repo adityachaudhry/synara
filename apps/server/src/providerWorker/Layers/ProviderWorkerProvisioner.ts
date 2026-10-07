@@ -27,6 +27,7 @@ import { makeWorkspaceCheckpointStore, workspaceArchiveIsCurrent, workspaceCheck
 import { archiveWorkspace, archiveWorkspaceCheckpoint, restoreWorkspaceArchive } from "../workspaceArchive.ts";
 import { importRailwayWorkspace } from "../importRailwayWorkspace.ts";
 import { publishOutboxArtifacts, artifactApiClient } from "../artifactPublisher.ts";
+import { headlessSessions } from "../headlessSessions.ts";
 import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
 import { S3_LFS_AGENT_UID, S3_LFS_MOUNT_ROOT, S3_LFS_PASSWORD_PATH, s3LfsCredentialFile, s3LfsMountCommand, s3LfsMountConfig } from "../s3LfsMount.ts";
 import {
@@ -388,11 +389,11 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         return yield* staleGeneration(binding.threadId, binding.fence.lifecycleGeneration);
       }
       if (binding.workspace.runtimeKind === "daytona-sandbox" && !stopped) {
-        const sessions = yield* broker.request(binding.fence, "session.list", {}).pipe(
+        const sessions = binding.headless ? headlessSessions(binding.threadId) : yield* broker.request(binding.fence, "session.list", {}).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ProviderSession))),
         );
         const session = sessions.find((candidate) => candidate.threadId === binding.threadId);
-        if (!session || session.activeTurnId !== undefined || session.status === "running")
+        if ((!session && !binding.headless) || session?.activeTurnId !== undefined || session?.status === "running")
           return yield* provisionError("workspace.checkpoint.active", "Native backup requires a settled provider session.", undefined, binding.workspace.runtimeId);
       }
       const captured = binding.workspace.runtimeKind === "daytona-sandbox" ? yield* readWorkspaceCheckpoint(binding.threadId) : undefined;
@@ -483,7 +484,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         if (stored) return stored;
         return yield* Effect.failCause(liveExit.cause);
       }
-      const published = yield* Effect.exit(publishOutboxArtifacts({ binding, entries: liveExit.value.entries, broker, ...(turnId ? { turnId } : {}) }));
+      const published = yield* Effect.exit(publishOutboxArtifacts({ binding, entries: liveExit.value.entries, broker, workspaceRuntime, ...(turnId ? { turnId } : {}) }));
       if (Exit.isSuccess(published) && published.value !== undefined) {
         return { ...liveExit.value, entries: published.value };
       }
@@ -614,15 +615,17 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       readonly previousCheckout?: ProviderWorkerRuntimeBinding["repositoryCheckout"];
       readonly repositoryCredential?: string;
       readonly unprivileged?: boolean;
+      readonly headless?: boolean;
     }) {
       const unprivileged = input.unprivileged || input.workspace.runtimeKind === "daytona-sandbox";
+      const headless = input.headless === true;
       const fence: ProviderWorkerFence = {
         sandboxId: input.workspace.runtimeId,
         workerId: randomUUID(),
         lifecycleGeneration: input.lifecycleGeneration,
       };
-      const credential = yield* authority.issue(fence);
-      yield* broker.expectWorker(fence);
+      const credential = headless ? "" : yield* authority.issue(fence);
+      if (!headless) yield* broker.expectWorker(fence);
       yield* Effect.logInfo("provider worker reserved", {
         sandboxId: fence.sandboxId,
         workerId: fence.workerId,
@@ -733,7 +736,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                   );
                 }),
               );
-        const artifactProbe = yield* workspaceRuntime.exec(input.workspace, {
+        const artifactProbe = headless ? { exitCode: 0, timedOut: false } : yield* workspaceRuntime.exec(input.workspace, {
           command: `test -f ${shellQuote(WORKER_ARTIFACT_PATH)} && printf '%s  %s\\n' ${shellQuote(artifactDigest)} ${shellQuote(WORKER_ARTIFACT_PATH)} | sha256sum --check --status`,
           timeoutSeconds: 15,
         });
@@ -744,7 +747,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             mode: 0o400,
           });
         }
-        if (options.photonWasm && photonDigest) {
+        if (!headless && options.photonWasm && photonDigest) {
           const photonProbe = yield* workspaceRuntime.exec(input.workspace, {
             command: `test -f ${shellQuote(WORKER_PHOTON_WASM_PATH)} && printf '%s  %s\\n' ${shellQuote(photonDigest)} ${shellQuote(WORKER_PHOTON_WASM_PATH)} | sha256sum --check --status`,
             timeoutSeconds: 15,
@@ -775,6 +778,26 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             data: "[safe]\n\tdirectory = /workspace/repository\n[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
             mode: 0o644,
           });
+        }
+        if (headless) {
+          return {
+            schemaVersion: 1,
+            runtimeKind: input.workspace.runtimeKind === "docker-container" ? "docker-pi"
+              : input.workspace.runtimeKind === "daytona-sandbox" ? "daytona-pi" : "railway-sandbox-pi",
+            threadId: input.threadId,
+            workspace: input.workspace,
+            fence,
+            durableSessionName: "headless",
+            headless: true,
+            cwd: input.cwd,
+            homeDir: input.homeDir,
+            ...(repositoryUnavailable && input.repositoryBinding ? {
+              repositoryUnavailable: { binding: input.repositoryBinding, lastAttemptAt: new Date().toISOString() },
+            } : {}),
+            ...(input.repositoryBinding === undefined || repositoryCheckout === undefined
+              ? {}
+              : { repositoryCheckout: { binding: input.repositoryBinding, ...repositoryCheckout } }),
+          } satisfies ProviderWorkerRuntimeBinding;
         }
         yield* workspaceRuntime.writeFile(input.workspace, {
           path: WORKER_CONFIG_PATH,
@@ -870,7 +893,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             input.workspace.runtimeId,
           ),
         ),
-        Effect.onError(() =>
+        Effect.onError(() => headless ? Effect.void :
           broker.retire(fence, "worker startup failed").pipe(
             Effect.catch(() => Effect.void),
             Effect.andThen(
@@ -960,6 +983,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
             ...(input.legacyPiResumeSessionFile ? { legacyPiResumeSessionFile: input.legacyPiResumeSessionFile } : {}),
             allowUnavailable: companyOnly,
             unprivileged: mountedCompany,
+            ...(input.headless ? { headless: true } : {}),
             ...(saved?.binding.repositoryCheckout ? { previousCheckout: saved.binding.repositoryCheckout } : {}),
             ...(input.repositoryBinding === undefined
               ? {}
@@ -1047,13 +1071,15 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
       if (Exit.isSuccess(connection) && workspaceCheckpointStore && binding.threadId) {
         yield* markWorkspaceMutationUnlocked(binding, true);
         // Let Pi dispose its native session and child processes before the process/disk barrier.
-        yield* broker.request(binding.fence, "session.stop", { threadId: binding.threadId }).pipe(
+        if (!binding.headless) yield* broker.request(binding.fence, "session.stop", { threadId: binding.threadId }).pipe(
           Effect.timeout(Duration.seconds(10)),
           Effect.catch(() => Effect.void),
         );
       }
-      yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
-      yield* authority.revoke(binding.fence);
+      if (!binding.headless) {
+        yield* broker.retire(binding.fence, reason).pipe(Effect.catch(() => Effect.void));
+        yield* authority.revoke(binding.fence);
+      }
       if (Exit.isSuccess(connection)) {
         yield* stopWorkerProcess(binding, nativeAgentUidVerified);
         yield* checkpointOutbox(binding);
@@ -1149,6 +1175,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
                 ...(binding.repositoryCheckout ? { previousCheckout: binding.repositoryCheckout } : {}),
                 allowUnavailable: companyOnly,
                 unprivileged: mountedCompany,
+                ...(input.headless ? { headless: true } : {}),
                 ...(input.agentGatewayConnection ? { agentGatewayConnection: input.agentGatewayConnection } : {}),
                 ...(options.repositoryAuthorization ? { repositoryCredential: makeRepositoryCredentialConfig(
                   repositoryBinding, options.repositoryAuthorization, repositoryOrigin(repositoryBinding),
@@ -1382,7 +1409,7 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
         if ((active && active.fence.lifecycleGeneration !== binding.fence.lifecycleGeneration) ||
           (binding.threadId && retiredGenerations.get(binding.threadId)?.has(binding.fence.lifecycleGeneration)))
           return yield* staleGeneration(binding.threadId!, binding.fence.lifecycleGeneration);
-        const sessions = yield* broker.request(binding.fence, "session.list", {}).pipe(
+        const sessions = binding.headless ? headlessSessions(binding.threadId) : yield* broker.request(binding.fence, "session.list", {}).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(ProviderSession))),
         );
         const session = sessions.find((candidate) => candidate.threadId === binding.threadId);
