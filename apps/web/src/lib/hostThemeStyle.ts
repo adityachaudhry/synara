@@ -88,6 +88,8 @@ export function createHostThemeStyle(
   assignString(style, theme.colorWorkflowFaint, ["--workflow-card-faint"]);
   assignString(style, theme.colorWorkflowPhaseCurrent, ["--workflow-card-phase-current"]);
   assignString(style, theme.colorWorkflowPhaseCurrentBackground, ["--workflow-card-phase-current-bg"]);
+  assignString(style, theme.colorWorkflowTitle, ["--workflow-card-title"]);
+  assignString(style, theme.colorWorkflowLink, ["--workflow-card-link"]);
   assignPixels(style, theme.composerBorderWidthPx, ["--app-composer-border-width"]);
   assignPixels(style, theme.workflowCardFontSizePx, ["--workflow-card-font-size"]);
   assignPixels(style, theme.controlRadiusPx, ["--radius", "--app-header-control-radius"]);

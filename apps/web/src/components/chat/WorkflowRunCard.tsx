@@ -218,6 +218,9 @@ function WorkflowAgentRowView({
   onOpenThread: (threadId: ThreadId) => void;
 }) {
   const meta = agentRowMeta(agent, nowMs);
+  // An agent with its own thread opens it directly; the thread holds everything the detail
+  // panel would show. Agents without one keep the expandable detail.
+  const linkedThreadId = agent.threadId;
 
   return (
     <div>
@@ -226,8 +229,8 @@ function WorkflowAgentRowView({
         data-testid="workflow-agent-row"
         className="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
         title={agent.description}
-        aria-expanded={expanded}
-        onClick={onToggle}
+        {...(linkedThreadId ? {} : { "aria-expanded": expanded })}
+        onClick={linkedThreadId ? () => onOpenThread(linkedThreadId) : onToggle}
       >
         <span
           className={cn(
@@ -261,17 +264,25 @@ function WorkflowAgentRowView({
         >
           {agent.statusLabel}
         </span>
-        <DisclosureChevron
-          open={expanded}
-          className={cn(
-            "shrink-0 text-[color:var(--workflow-card-faint)] transition-opacity",
-            !expanded && "opacity-0 group-focus-visible:opacity-100 group-hover:opacity-100",
-          )}
-        />
+        {linkedThreadId ? (
+          <span className="shrink-0 text-[length:var(--workflow-card-font-sm)] font-medium text-[color:var(--workflow-card-link)] underline-offset-2 group-hover:underline group-focus-visible:underline">
+            Open thread
+          </span>
+        ) : (
+          <DisclosureChevron
+            open={expanded}
+            className={cn(
+              "shrink-0 text-[color:var(--workflow-card-faint)] transition-opacity",
+              !expanded && "opacity-0 group-focus-visible:opacity-100 group-hover:opacity-100",
+            )}
+          />
+        )}
       </button>
-      <DisclosureRegion open={expanded}>
-        <WorkflowAgentDetail agent={agent} nowMs={nowMs} onOpenThread={onOpenThread} />
-      </DisclosureRegion>
+      {linkedThreadId ? null : (
+        <DisclosureRegion open={expanded}>
+          <WorkflowAgentDetail agent={agent} nowMs={nowMs} onOpenThread={onOpenThread} />
+        </DisclosureRegion>
+      )}
     </div>
   );
 }
@@ -365,7 +376,7 @@ export function WorkflowRunCard({
             <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
           <ComposerStackedPanelRowLabel tone="meta">
-            <span className="font-medium text-[color:var(--workflow-card-text)]">{workflowRun.name}</span>
+            <span className="font-medium text-[color:var(--workflow-card-title)]">{workflowRun.name}</span>
             {settledPresentation ? (
               <span className={cn("ml-1.5", settledPresentation.toneClassName)}>
                 {settledPresentation.label}
@@ -395,6 +406,7 @@ export function WorkflowRunCard({
                   <PlayIcon className="size-3" />
                 </Button>
               ) : null}
+              {workflowRun.durable ? null : (
               <Button
                 type="button"
                 variant="ghost"
@@ -406,6 +418,7 @@ export function WorkflowRunCard({
               >
                 <XIcon className="size-3" />
               </Button>
+              )}
             </>
           ) : (
             <>

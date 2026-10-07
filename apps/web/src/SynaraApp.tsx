@@ -44,6 +44,8 @@ export interface SynaraHostTheme {
   readonly colorWorkflowFaint?: string;
   readonly colorWorkflowPhaseCurrent?: string;
   readonly colorWorkflowPhaseCurrentBackground?: string;
+  readonly colorWorkflowTitle?: string;
+  readonly colorWorkflowLink?: string;
   /** Base font size of the workflow card (default 11). */
   readonly workflowCardFontSizePx?: number;
   readonly composerBorderWidthPx?: number;
