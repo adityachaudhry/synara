@@ -554,6 +554,11 @@ export class DiligenceRunner {
         break;
       } catch (cause) {
         log("run.delivery-failed", { runId, attempt, message: String(cause) });
+        if (String(cause).includes("HTTP 404")) {
+          // Glasswing does not know this run; retrying (now or after a restart) cannot help.
+          await this.#harness.commit(async (tx) => { delete (await tx.doc(ActiveRuns)).runs[runId]; }, ctx);
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 5000 * (attempt + 1)));
       }
     }
