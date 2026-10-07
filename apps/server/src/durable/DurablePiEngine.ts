@@ -74,6 +74,7 @@ import {
 } from "../provider/Layers/PiAdapter.ts";
 import { createCrunchbaseTools, createWebAccessTools } from "./extensionTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
+import { backupHarness, restoreHarnessIfNeeded } from "./backup.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 
 const PROVIDER = "pi" as const;
@@ -190,6 +191,7 @@ export class DurablePiEngine {
   readonly #gatewayTools = new Map<string, ToolRegistration>();
   #gatewayExtensionInstalled = false;
   readonly #registry = createRegistry();
+  #backupTimer: ReturnType<typeof setInterval> | undefined;
   readonly #models = createModels();
 
   private constructor(options: DurablePiEngineOptions) {
@@ -235,6 +237,8 @@ export class DurablePiEngine {
       this.#registry.install(defineExtension({ name: "synara-research", tools: [...web, ...crunchbase] }) as unknown as Extension);
     }
 
+    // A lost volume (or a forced drill) restores the newest off-volume snapshot before opening.
+    await restoreHarnessIfNeeded(this.#options.storagePath, process.env.SYNARA_DURABLE_RESTORE === "1");
     this.#harness = await Harness.open(
       await openNodeSqliteStorage(this.#options.storagePath),
       {
@@ -271,6 +275,11 @@ export class DurablePiEngine {
       }
     }
     this.#harness.resume();
+    this.#backupTimer = setInterval(() => {
+      backupHarness(this.#options.storagePath).catch((cause) =>
+        console.warn(JSON.stringify({ event: "durable.backup.failed", message: String(cause) })));
+    }, 10 * 60_000);
+    this.#backupTimer.unref();
     console.info(JSON.stringify({
       event: "durable.engine.ready",
       threads: this.#threads.size,
@@ -489,7 +498,15 @@ export class DurablePiEngine {
   }
 
   async close() {
+    if (this.#backupTimer) clearInterval(this.#backupTimer);
     await this.#harness.close(ctx);
+    await backupHarness(this.#options.storagePath).catch((cause) =>
+      console.warn(JSON.stringify({ event: "durable.backup.failed", message: String(cause) })));
+  }
+
+  /** Takes one backup now; used by the restore drill. */
+  backupNow() {
+    return backupHarness(this.#options.storagePath);
   }
 
   // ------------------------------------------------------------------ helpers
