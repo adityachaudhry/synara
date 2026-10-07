@@ -504,7 +504,7 @@ export class DurablePiEngine {
       lifecycleGeneration: state.lifecycleGeneration,
       ...(resolvedTurn ? { turnId: resolvedTurn } : {}),
       ...rest,
-      raw: { source: "pi.durable.event", payload: null },
+      raw: { source: "pi.sdk.event", messageType: "pi.durable", payload: null },
     } as unknown as ProviderRuntimeEvent);
   }
 
