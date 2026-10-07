@@ -26,6 +26,7 @@ import { useRecentViewsStore } from "../recentViewsStore";
 import { collectLeaves } from "../splitView.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
+import { readSynaraRuntimeConfig } from "../synaraRuntimeConfig";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import {
@@ -72,6 +73,13 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const openChatThreadPage = useTerminalStateStore((state) => state.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  // An embedded host scopes the session to one project, while recent views,
+  // drafts and the thread store are shared by every project the tab visited.
+  const scopedProjectId = readSynaraRuntimeConfig().project?.projectId ?? null;
+  const scopedProjectHydrated = useStore(
+    (state) =>
+      scopedProjectId === null || state.projects.some((project) => project.id === scopedProjectId),
+  );
   const routeSplitViewId =
     typeof routeSearch.splitViewId === "string" ? routeSearch.splitViewId : undefined;
   const settingsSection = typeof routeSearch.section === "string" ? routeSearch.section : undefined;
@@ -169,14 +177,22 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     const activeContextThreadId = activeContextThreadIdRef.current;
     const activeDraftThread = activeDraftThreadRef.current;
 
+    // Threads outside the embed's project are rejected by the server, so they
+    // must neither be prewarmed nor survive pruning.
+    const inScope = (projectId: string | undefined) =>
+      scopedProjectId === null || projectId === scopedProjectId;
     const availableThreadIds = new Set<ThreadId>();
-    for (const threadId of Object.keys(sidebarThreadSummaryById)) {
-      availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+    for (const [threadId, summary] of Object.entries(sidebarThreadSummaryById)) {
+      if (summary && inScope(summary.projectId)) {
+        availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+      }
     }
-    for (const threadId of Object.keys(draftThreadsByThreadId)) {
-      availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+    for (const [threadId, draftThread] of Object.entries(draftThreadsByThreadId)) {
+      if (inScope(draftThread.projectId)) {
+        availableThreadIds.add(ThreadId.makeUnsafe(threadId));
+      }
     }
-    if (activeDraftThread && activeContextThreadId) {
+    if (activeDraftThread && activeContextThreadId && inScope(activeDraftThread.projectId)) {
       availableThreadIds.add(activeContextThreadId);
     }
 
@@ -208,14 +224,17 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   }, [currentRecentView, currentRecentViewKey, recordRecentView]);
 
   useEffect(() => {
-    prewarmThreadDetails(recentThreadIds);
-  }, [prewarmThreadDetails, recentThreadIds]);
+    const { availableThreadIds } = buildRecentViewAvailability();
+    prewarmThreadDetails(recentThreadIds.filter((threadId) => availableThreadIds.has(threadId)));
+  }, [buildRecentViewAvailability, prewarmThreadDetails, recentThreadIds]);
 
   useEffect(() => {
-    if (!threadsHydrated || didHydrationPruneRef.current) return;
+    // After a host switches projects in the same tab, the store still holds the
+    // previous project until the new shell snapshot lands; prune only then.
+    if (!threadsHydrated || !scopedProjectHydrated || didHydrationPruneRef.current) return;
     didHydrationPruneRef.current = true;
     pruneRecentViewsStore(buildRecentViewAvailability());
-  }, [buildRecentViewAvailability, pruneRecentViewsStore, threadsHydrated]);
+  }, [buildRecentViewAvailability, pruneRecentViewsStore, scopedProjectHydrated, threadsHydrated]);
 
   const activateRecentView = (view: RecentView) => {
     switch (view.kind) {
