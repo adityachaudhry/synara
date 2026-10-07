@@ -203,6 +203,34 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       Effect.tap((binding) => Effect.sync(() => sandboxes.set(threadId, binding))),
     );
 
+  /**
+   * Sandbox claims run in the background: a turn starts at once and only tool calls wait.
+   * One claim per thread at a time; it is re-stamped to the session's generation.
+   */
+  const pendingClaims = new Map<string, Promise<ProviderWorkerRuntimeBinding>>();
+  const backgroundClaim = (
+    threadId: string,
+    lifecycleGeneration: string,
+    repositoryBinding: NonNullable<ProviderWorkerRuntimeBinding["repositoryCheckout"]>["binding"] | undefined,
+    speculative = false,
+  ): Promise<ProviderWorkerRuntimeBinding> => {
+    const existing = pendingClaims.get(threadId);
+    const claim = (existing ?? Effect.runPromise(claimSandbox(threadId, lifecycleGeneration, repositoryBinding, speculative)))
+      .then(async (binding) => {
+        if (binding.fence.lifecycleGeneration === lifecycleGeneration) return binding;
+        const restamped = { ...binding, fence: { ...binding.fence, lifecycleGeneration } };
+        await Effect.runPromise(saveBinding(restamped));
+        sandboxes.set(threadId, restamped);
+        return restamped;
+      });
+    const tracked = claim.finally(() => {
+      if (pendingClaims.get(threadId) === tracked) pendingClaims.delete(threadId);
+    });
+    tracked.catch((cause) => Effect.runFork(Effect.logWarning("background sandbox claim failed", { threadId, cause: String(cause) })));
+    pendingClaims.set(threadId, tracked);
+    return tracked;
+  };
+
   // ---------------------------------------------------------------- engine
   const sandboxRunner = (binding: ProviderWorkerRuntimeBinding): SandboxRunner => ({
     run: (command, options) => Effect.runPromise(execInWorkspace!(binding, {
@@ -217,6 +245,8 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
   const replacing = new Map<string, Promise<ProviderWorkerRuntimeBinding>>();
   const target = async (threadId: string): Promise<DurableThreadTarget | undefined> => {
     if (!execInWorkspace || !writeWorkspaceFile) return undefined;
+    const pending = pendingClaims.get(threadId);
+    if (pending) await pending.catch(() => undefined);
     let binding = await Effect.runPromise(currentBinding(threadId));
     if (!binding) return undefined;
     if (replacing.has(threadId)) binding = await replacing.get(threadId)!;
@@ -284,16 +314,20 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
         }));
       }
     }
-    let binding: ProviderWorkerRuntimeBinding | undefined;
+    let cwd = previous?.cwd ?? "/workspace";
     if (repositoryBinding) {
-      const prepared = previous?.headless === true && previous.fence.lifecycleGeneration === lifecycleGeneration && !(yield* unavailable(previous));
-      binding = prepared ? previous : yield* claimSandbox(input.threadId, lifecycleGeneration, repositoryBinding).pipe(
-        Effect.mapError((cause) => cause instanceof ProviderAdapterRequestError ? cause
-          : adapterError("session.start", "Failed to prepare the company sandbox.", cause, { retryable: cause instanceof ProviderWorkerProvisioningError })),
-      );
-      if (prepared && binding) {
-        sandboxes.set(input.threadId, binding);
-        yield* provisioner.adopt(binding).pipe(Effect.mapError((cause) => adapterError("session.start", "Failed to adopt the prepared sandbox.", cause)));
+      cwd = `/workspace/repository/${repositoryBinding.path}`;
+      const live = previous?.headless === true && !pendingClaims.has(input.threadId) && !(yield* unavailable(previous));
+      if (live && previous) {
+        // A prepared or still-running sandbox is reused under the session's generation.
+        const adopted = previous.fence.lifecycleGeneration === lifecycleGeneration ? previous
+          : { ...previous, fence: { ...previous.fence, lifecycleGeneration } };
+        sandboxes.set(input.threadId, adopted);
+        yield* saveBinding(adopted);
+        yield* provisioner.adopt(adopted).pipe(Effect.mapError((cause) => adapterError("session.start", "Failed to adopt the prepared sandbox.", cause)));
+        cwd = adopted.cwd;
+      } else {
+        void backgroundClaim(input.threadId, lifecycleGeneration, repositoryBinding);
       }
     }
     const connection = credentials?.repositoryConnectionForThread(input.threadId, "pi");
@@ -304,7 +338,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     return yield* call("session.start", () => engine.startSession({
       threadId: input.threadId,
       lifecycleGeneration,
-      cwd: binding?.cwd ?? "/workspace",
+      cwd,
       modelSelection: input.modelSelection as never,
       ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     }));
@@ -314,7 +348,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     if (process.env.SYNARA_WORKSPACE_RUNTIME !== "daytona" || !input.repositoryBinding || !input.lifecycleGeneration || capacity?.snapshot().queued.length) return false;
     const previous = yield* currentBinding(input.threadId);
     if (previous?.headless && previous.fence.lifecycleGeneration === input.lifecycleGeneration && !(yield* unavailable(previous))) return true;
-    yield* claimSandbox(input.threadId, input.lifecycleGeneration, input.repositoryBinding, true);
+    yield* Effect.promise(() => backgroundClaim(input.threadId, input.lifecycleGeneration!, input.repositoryBinding, true).catch(() => undefined));
     return true;
   })).pipe(
     observeProviderOperation("workspace.prepare", { threadId: input.threadId }),
@@ -324,12 +358,12 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
 
   /** The thread's live sandbox; a released or lost one is replaced from the company revision and captured files. */
   const liveSandbox = (threadId: string) => Effect.gen(function* () {
+    if (pendingClaims.has(threadId)) return undefined;
     const binding = yield* currentBinding(threadId);
     if (!binding || !(yield* unavailable(binding))) return binding;
-    yield* Effect.logInfo("thread sandbox released; claiming a replacement", { threadId, sandboxId: binding.workspace.runtimeId });
-    return yield* claimSandbox(threadId, binding.fence.lifecycleGeneration, binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding).pipe(
-      Effect.mapError((cause) => adapterError("turn.send", "Failed to prepare a replacement sandbox.", cause, { retryable: cause instanceof ProviderWorkerProvisioningError })),
-    );
+    yield* Effect.logInfo("thread sandbox released; claiming a replacement in the background", { threadId, sandboxId: binding.workspace.runtimeId });
+    void backgroundClaim(threadId, binding.fence.lifecycleGeneration, binding.repositoryCheckout?.binding ?? binding.repositoryUnavailable?.binding);
+    return undefined;
   });
 
   const stageAttachments = (binding: ProviderWorkerRuntimeBinding | undefined, attachments: Parameters<PiAdapterShape["sendTurn"]>[0]["attachments"], operation: string) =>
@@ -368,7 +402,13 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
         });
       }
     }
-    yield* stageAttachments(binding, input.attachments, "turn.send");
+    const claiming = pendingClaims.get(input.threadId);
+    if (claiming && (input.attachments ?? []).some((attachment) => attachment.type !== "assistant-selection")) {
+      const staged = claiming.then((ready) => Effect.runPromise(stageAttachments(ready, input.attachments, "turn.send")).then(() => ready));
+      pendingClaims.set(input.threadId, staged);
+    } else {
+      yield* stageAttachments(binding, input.attachments, "turn.send");
+    }
     const connection = credentials?.repositoryConnectionForThread(input.threadId, "pi");
     if (connection) {
       revokeToken(input.threadId);
