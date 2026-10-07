@@ -132,6 +132,12 @@ const stepLabel = (step: DiligenceStep) =>
 const stepPhase = (step: DiligenceStep) =>
   step.phase ?? (["diligence-intake", "company-snapshot"].includes(step.id) ? PHASES[0]
     : ["executive-investment-read", "memo-compose", "quick-tearsheet", "feedback-review"].includes(step.id) ? PHASES[2] : PHASES[1]);
+/** "anthropic/claude-opus-5-5" → "Opus 5.5", for the workflow card. */
+const modelLabel = (model: string) => {
+  const id = (model.split("/").pop() ?? model).replace(/^claude-/u, "");
+  const match = id.match(/^([a-z]+)-(\d+)-(\d+)$/u);
+  return match ? `${match[1]!.charAt(0).toUpperCase()}${match[1]!.slice(1)} ${match[2]}.${match[3]}` : id;
+};
 const MODE_TITLES: Record<string, string> = { full: "full diligence", quick: "a quick read", memo: "the investment memo" };
 /** The run thread's ID for a run; the child thread of a step is `subagent:<this>:step:<stepId>`. */
 export const diligenceThreadId = (runId: string) => `diligence-run-${runId}`;
@@ -252,7 +258,7 @@ export class DiligenceRunner {
         ? "Each step works in its own thread below. Open one to watch it work, or message it to steer: point it at a source, ask it to check something, or question a claim. "
         : "Open the step below to watch it work, or message it to steer. ") +
       "The report updates when the run finishes.");
-    const plans = Object.fromEntries(request.plan.steps.map((step) => [stepLabel(step), { phase: stepPhase(step), model: step.model.split("/").pop() }]));
+    const plans = Object.fromEntries(request.plan.steps.map((step) => [stepLabel(step), { phase: stepPhase(step), model: modelLabel(step.model) }]));
     this.#engine.emitExternal(threadId, {
       type: "task.started",
       payload: {
@@ -285,7 +291,7 @@ export class DiligenceRunner {
           itemType: "collab_agent_tool_call",
           status: "inProgress",
           title: label,
-          data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: label, model: step.model.split("/").pop() } },
+          data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: label, model: modelLabel(step.model) } },
         },
       });
       this.#engine.emitExternal(threadId, {
