@@ -265,7 +265,12 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
       const manifest = yield* Effect.tryPromise({
         try: async () => {
           const saved = await outboxStore.checkpoint({ threadId: binding.threadId!, lifecycleGeneration: binding.fence.lifecycleGeneration, files: outbox });
-          await draftStore.checkpoint({ threadId: binding.threadId!, lifecycleGeneration: binding.fence.lifecycleGeneration, files: drafts });
+          // The draft store is a separate directory; it reuses the Outbox store format.
+          await draftStore.checkpoint({
+            threadId: binding.threadId!,
+            lifecycleGeneration: binding.fence.lifecycleGeneration,
+            files: drafts.map((file) => ({ ...file, source: "outbox" as const })),
+          });
           return saved;
         },
         catch: (cause) => provisionError("persistence.checkpoint.write", "Failed to capture thread files on the controller.", cause, binding.workspace.runtimeId),
