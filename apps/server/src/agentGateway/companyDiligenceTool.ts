@@ -115,7 +115,7 @@ export function makeCompanyDiligenceTools(input: {
       const result = yield* Effect.tryPromise({
         try: () => api<{ run_id: string; status: string; commit_sha?: string | null; workspace_commit_sha?: string | null; saved_paths: string[] }>(`/internal/companies/${companyId}/diligence`, {
           company_slug: companySlug, thread_id: threadId, turn_id: context.callerTurnId,
-          requested_by: author.label ?? author.subject, mode, files,
+          requested_by: author.label ?? author.subject, requested_by_subject: author.subject, mode, files,
         }),
         catch: (cause) => cause,
       });

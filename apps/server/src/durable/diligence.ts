@@ -129,7 +129,7 @@ const STEP_LABELS: Record<string, string> = {
   "feedback-review": "Team feedback check",
 };
 const PHASES = ["Getting oriented", "Working the diligence questions", "Writing the investment read"] as const;
-const stepLabel = (step: DiligenceStep) =>
+export const stepLabel = (step: DiligenceStep) =>
   step.label ?? STEP_LABELS[step.id] ?? step.id.replace(/-/gu, " ").replace(/^./u, (c) => c.toUpperCase());
 const stepPhase = (step: DiligenceStep) =>
   step.phase ?? (["diligence-intake", "company-snapshot"].includes(step.id) ? PHASES[0]

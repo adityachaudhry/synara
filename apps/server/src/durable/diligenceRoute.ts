@@ -13,7 +13,7 @@ import { extractBearerToken } from "../agentGateway/bearerToken.ts";
 import { ExternalProjectResolver } from "../externalProjectResolver.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { diligenceRunner, diligenceThreadId, type DiligenceRequest } from "./diligence.ts";
+import { diligenceRunner, diligenceThreadId, stepLabel, type DiligenceRequest } from "./diligence.ts";
 
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
@@ -36,7 +36,14 @@ const authorized = (header: string | undefined, host: string | undefined) => {
 const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
 const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Quick read", memo: "Investment memo" };
-const RUN_REQUESTS: Record<string, string> = { full: "full diligence", quick: "a quick read", memo: "the investment memo" };
+/** The run thread's opening request, as the analyst would put it; the feed shows it. */
+const runRequestText = (plan: DiligenceRequest) => {
+  const company = plan.company.name;
+  if (plan.mode === "quick") return `Quick read on ${company}: one pass for the first meeting.`;
+  if (plan.mode === "memo") return `Investment memo for ${company}, written from its latest diligence.`;
+  const steps = plan.plan.steps.map((step) => stepLabel(step).toLowerCase());
+  return `Full diligence on ${company}: ${steps.join(", ")}.`;
+};
 
 /** The run's top-level thread in the company's project; the run works without it if this fails. */
 const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
@@ -73,7 +80,7 @@ const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
     messages: [{
       messageId: `diligence-request-${plan.runId}`,
       role: "user",
-      text: `Run ${RUN_REQUESTS[plan.mode] ?? "diligence"} on ${plan.company.name}.`,
+      text: runRequestText(plan),
       author: plan.requestedBy ?? { subject: "glasswing:diligence", label: "Glasswing" },
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
