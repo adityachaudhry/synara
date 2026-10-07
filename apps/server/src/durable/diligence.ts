@@ -308,9 +308,12 @@ export class DiligenceRunner {
     return key;
   }
 
-  async #stepSettled(runId: string, step: DiligenceStep, status: "completed" | "failed") {
-    const threadId = this.#threadOf(await this.#state(runId));
+  async #stepSettled(runId: string, step: DiligenceStep, status: "completed" | "failed" | "stopped") {
+    const state = await this.#state(runId);
+    const threadId = this.#threadOf(state);
     if (!threadId) return;
+    // A stopped run already showed its running steps as stopped.
+    if (status === "failed" && state?.cancelRequested) return;
     this.#engine.emitExternal(threadId, {
       type: "task.completed",
       payload: { taskId: `diligence-${runId}:${step.id}`, status },
@@ -423,6 +426,16 @@ export class DiligenceRunner {
       // Glasswing stops showing the run as live now; completion follows once the steps wind down.
       this.#event(runId, "status", { state: "canceling" });
       await this.#flushEvents();
+      // The thread answers Stop at once: running steps show as stopped and the run's turn ends.
+      const request = await this.#plan(runId);
+      const stopping = await this.#state(runId);
+      if (request && stopping) {
+        for (const step of request.plan.steps) {
+          if (stopping.steps[step.id]?.status === "running") await this.#stepSettled(runId, step, "stopped").catch(() => undefined);
+        }
+        await this.#closeThread(request, { ...stopping, status: "canceled" }, undefined)
+          .catch((cause) => log("thread.close-failed", { runId, message: String(cause) }));
+      }
     }
     const state = await this.#state(runId);
     for (const step of Object.values(state?.steps ?? {})) {
