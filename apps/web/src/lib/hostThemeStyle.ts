@@ -73,6 +73,16 @@ export function createHostThemeStyle(
   assignString(style, theme.colorCurrentUserMessageText, ["--app-user-message-text"]);
   assignString(style, theme.colorOtherUserMessage, ["--app-other-user-message-background"]);
   assignString(style, theme.colorComposerBorder, ["--app-composer-border"]);
+  assignString(style, theme.colorStackedPanelBorder, ["--composer-stacked-border"]);
+  assignString(style, theme.colorAgentRunning, ["--agent-status-running"]);
+  assignString(style, theme.colorAgentRunningText, ["--agent-status-running-text"]);
+  assignString(style, theme.colorAgentCompleted, ["--agent-status-completed"]);
+  assignString(style, theme.colorAgentCompletedText, ["--agent-status-completed-text"]);
+  assignString(style, theme.colorAgentFailed, ["--agent-status-failed"]);
+  assignString(style, theme.colorAgentFailedText, ["--agent-status-failed-text"]);
+  assignString(style, theme.colorAgentStopped, ["--agent-status-stopped"]);
+  assignString(style, theme.colorAgentStoppedText, ["--agent-status-stopped-text"]);
+  assignString(style, theme.colorAgentQueued, ["--agent-status-queued"]);
   assignPixels(style, theme.composerBorderWidthPx, ["--app-composer-border-width"]);
   assignPixels(style, theme.controlRadiusPx, ["--radius", "--app-header-control-radius"]);
   assignPixels(style, theme.toolbarHeightPx, ["--app-chat-header-height"]);

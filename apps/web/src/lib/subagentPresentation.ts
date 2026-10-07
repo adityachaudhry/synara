@@ -379,9 +379,9 @@ export function subagentStatusTextToneClassName(
 ): string {
   switch (statusKind) {
     case "running":
-      return "text-sky-300/85";
+      return "text-[color:var(--agent-status-running-text)]";
     case "failed":
-      return "text-rose-300/85";
+      return "text-[color:var(--agent-status-failed-text)]";
     default:
       return "text-muted-foreground/55";
   }
@@ -392,15 +392,15 @@ export function subagentStatusDotClassName(
 ): string {
   switch (statusKind) {
     case "running":
-      return "bg-sky-300/95";
+      return "bg-[color:var(--agent-status-running)]";
     case "completed":
-      return "bg-emerald-300/80";
+      return "bg-[color:var(--agent-status-completed)]";
     case "failed":
-      return "bg-rose-300/90";
+      return "bg-[color:var(--agent-status-failed)]";
     case "stopped":
-      return "bg-amber-300/85";
+      return "bg-[color:var(--agent-status-stopped)]";
     case "queued":
-      return "bg-violet-300/80";
+      return "bg-[color:var(--agent-status-queued)]";
     default:
       return "bg-muted-foreground/25";
   }

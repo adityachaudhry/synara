@@ -74,17 +74,17 @@ function settledWorkflowPresentation(workflowRun: WorkflowRunState): {
   toneClassName: string;
 } {
   if (workflowRun.pausedByUser) {
-    return { label: "Paused", toneClassName: "text-amber-300/80" };
+    return { label: "Paused", toneClassName: "text-[color:var(--agent-status-stopped-text)]" };
   }
   switch (workflowRun.status) {
     case "paused":
-      return { label: "Paused", toneClassName: "text-amber-300/80" };
+      return { label: "Paused", toneClassName: "text-[color:var(--agent-status-stopped-text)]" };
     case "failed":
-      return { label: "Failed", toneClassName: "text-rose-300/85" };
+      return { label: "Failed", toneClassName: "text-[color:var(--agent-status-failed-text)]" };
     case "stopped":
-      return { label: "Stopped", toneClassName: "text-amber-300/80" };
+      return { label: "Stopped", toneClassName: "text-[color:var(--agent-status-stopped-text)]" };
     default:
-      return { label: "Completed", toneClassName: "text-emerald-300/75" };
+      return { label: "Completed", toneClassName: "text-[color:var(--agent-status-completed-text)]" };
   }
 }
 

@@ -26,6 +26,18 @@ export interface SynaraHostTheme {
   readonly colorCurrentUserMessageText?: string;
   readonly colorOtherUserMessage?: string;
   readonly colorComposerBorder?: string;
+  /** Border of the panels stacked on the composer (workflow card, subagent strip). */
+  readonly colorStackedPanelBorder?: string;
+  /** Agent status dots and labels in the subagent strip and workflow card. */
+  readonly colorAgentRunning?: string;
+  readonly colorAgentRunningText?: string;
+  readonly colorAgentCompleted?: string;
+  readonly colorAgentCompletedText?: string;
+  readonly colorAgentFailed?: string;
+  readonly colorAgentFailedText?: string;
+  readonly colorAgentStopped?: string;
+  readonly colorAgentStoppedText?: string;
+  readonly colorAgentQueued?: string;
   readonly composerBorderWidthPx?: number;
   readonly controlRadiusPx?: number;
   readonly toolbarHeightPx?: number;

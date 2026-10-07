@@ -88,6 +88,17 @@
     background: var(--app-shell-background, transparent);
   }
   :root {
+  /* Agent status hues (subagent strip, workflow card). Hosts override them through
+     SynaraHostTheme; these defaults are the original palette. */
+  --agent-status-running: color-mix(in oklab, oklch(82.8% 0.111 230.318) 95%, transparent);
+  --agent-status-running-text: color-mix(in oklab, oklch(82.8% 0.111 230.318) 85%, transparent);
+  --agent-status-completed: color-mix(in oklab, oklch(84.5% 0.143 164.978) 80%, transparent);
+  --agent-status-completed-text: color-mix(in oklab, oklch(84.5% 0.143 164.978) 75%, transparent);
+  --agent-status-failed: color-mix(in oklab, oklch(81% 0.117 11.638) 90%, transparent);
+  --agent-status-failed-text: color-mix(in oklab, oklch(81% 0.117 11.638) 85%, transparent);
+  --agent-status-stopped: color-mix(in oklab, oklch(87.9% 0.169 91.605) 85%, transparent);
+  --agent-status-stopped-text: color-mix(in oklab, oklch(87.9% 0.169 91.605) 80%, transparent);
+  --agent-status-queued: color-mix(in oklab, oklch(81.1% 0.111 293.571) 80%, transparent);
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
        hairlines (chat/dock/diff headers) AND the right-side pane splits
        (diff/browser/dock). All resolve through here so those divider directions read
