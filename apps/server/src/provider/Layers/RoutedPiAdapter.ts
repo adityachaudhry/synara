@@ -363,19 +363,47 @@ export const makeRoutedPiAdapterWithCapacity = (capacity?: SandboxCapacity) => E
         ),
       );
 
-  const durableTarget = (threadId: string): Promise<DurableThreadTarget | undefined> =>
-    Effect.runPromise(Effect.gen(function* () {
-      const binding = remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(ThreadId.makeUnsafe(threadId)));
-      if (!binding?.headless) return undefined;
-      return {
-        threadId,
-        lifecycleGeneration: binding.fence.lifecycleGeneration,
-        cwd: binding.cwd,
-        homeDir: binding.homeDir,
-        runner: sandboxRunner(binding),
-        envId: binding.workspace.runtimeId,
-      };
+  // One replacement at a time per thread when a durable thread's sandbox is gone.
+  const reprovisioning = new Map<string, Promise<ProviderWorkerRuntimeBinding>>();
+  const reprovisionHeadless = (threadId: string, lost: ProviderWorkerRuntimeBinding) => {
+    const existing = reprovisioning.get(threadId);
+    if (existing) return existing;
+    const repositoryBinding = lost.repositoryCheckout?.binding ?? lost.repositoryUnavailable?.binding;
+    const started = Effect.runPromise(withCheckpointBarrier(threadId, Effect.gen(function* () {
+      yield* Effect.logWarning("durable Pi sandbox lost; provisioning a replacement", {
+        threadId, sandboxId: lost.workspace.runtimeId,
+      });
+      // Same generation: the conversation and its events continue; only the sandbox changes.
+      const binding = yield* provisioner.start({
+        threadId: ThreadId.makeUnsafe(threadId),
+        lifecycleGeneration: lost.fence.lifecycleGeneration,
+        headless: true,
+        ...(repositoryBinding ? { repositoryBinding } : {}),
+      });
+      yield* persistRemoteBinding({ threadId: ThreadId.makeUnsafe(threadId), lifecycleGeneration: binding.fence.lifecycleGeneration, binding });
+      yield* provisioner.adopt(binding);
+      remoteByThread.set(threadId, binding);
+      return binding;
+    }))).finally(() => reprovisioning.delete(threadId));
+    reprovisioning.set(threadId, started);
+    return started;
+  };
+  const durableTarget = async (threadId: string): Promise<DurableThreadTarget | undefined> => {
+    let binding = await Effect.runPromise(Effect.gen(function* () {
+      return remoteByThread.get(threadId) ?? (yield* loadPersistedRemote(ThreadId.makeUnsafe(threadId)));
     }));
+    if (!binding?.headless) return undefined;
+    if (reprovisioning.has(threadId)) binding = await reprovisioning.get(threadId)!;
+    else if (await Effect.runPromise(workspaceUnavailable(binding))) binding = await reprovisionHeadless(threadId, binding);
+    return {
+      threadId,
+      lifecycleGeneration: binding.fence.lifecycleGeneration,
+      cwd: binding.cwd,
+      homeDir: binding.homeDir,
+      runner: sandboxRunner(binding),
+      envId: binding.workspace.runtimeId,
+    };
+  };
   const engine = durableEnabled
     ? yield* Effect.acquireRelease(
         Effect.promise(() =>

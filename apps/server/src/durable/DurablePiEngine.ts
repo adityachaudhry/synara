@@ -122,6 +122,7 @@ interface ThreadState {
   watching: boolean;
   stopped: boolean;
   lastUsage?: ThreadTokenUsageSnapshot | undefined;
+  turnStartedAt?: number | undefined;
 }
 
 export interface DurableStartInput {
@@ -156,6 +157,28 @@ const modelRefOf = (model: string | undefined) => {
 
 const DEFAULT_MODEL = { provider: "anthropic", modelId: "claude-opus-5-5" } as const;
 
+const IMAGE_TYPES: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** Pi Durable's read tool does not return images yet; the agent reads screenshots and scans this way. */
+function readWithImages(read: ReturnType<typeof createReadTool>): ToolRegistration {
+  return {
+    ...read,
+    execute: async (args: unknown, api: Parameters<ToolRegistration["execute"]>[1], context: Parameters<ToolRegistration["execute"]>[2]) => {
+      const mimeType = IMAGE_TYPES[path.extname(String((args as { path?: unknown }).path ?? "")).toLowerCase()];
+      if (!mimeType || !api.env) return read.execute(args as never, api as never, context);
+      const absolute = await api.env.absolutePath(String((args as { path: string }).path), context);
+      if (!absolute.ok) throw absolute.error;
+      const bytes = await api.env.readBinaryFile(absolute.value, context);
+      if (!bytes.ok) throw bytes.error;
+      if (bytes.value.byteLength > MAX_IMAGE_BYTES) {
+        return { content: [{ type: "text", text: `${String((args as { path: string }).path)} is an image larger than 5 MB; convert or crop it with bash first.` }] };
+      }
+      return { content: [{ type: "image", data: Buffer.from(bytes.value).toString("base64"), mimeType }] };
+    },
+  } as unknown as ToolRegistration;
+}
+
 export class DurablePiEngine {
   readonly #options: DurablePiEngineOptions;
   #harness!: HarnessType;
@@ -186,7 +209,7 @@ export class DurablePiEngine {
     this.#registry.install(
       defineExtension({
         name: "synara-coding",
-        tools: [createReadTool(), createWriteTool(), createEditTool(), createBashTool()],
+        tools: [readWithImages(createReadTool()), createWriteTool(), createEditTool(), createBashTool()],
         sections: [
           section("profile", () => (glasswing ? GLASSWING_AGENT_SYSTEM_PROMPT : "You are a helpful coding agent."), { tag: false }),
           section("harness_policy", () => renderSynaraHarnessPolicy({ gatewayControlAvailable: this.#options.gatewayUrl !== undefined }), { tag: false }),
@@ -377,6 +400,7 @@ export class DurablePiEngine {
     const content = await this.#content(input);
     const turnId = TurnId.makeUnsafe(crypto.randomUUID());
     state.activeTurnId = turnId;
+    state.turnStartedAt = Date.now();
     state.turns.push(turnId);
     await this.#watch(state);
     this.#emitTurnStarted(state);
@@ -700,6 +724,17 @@ export class DurablePiEngine {
       if (status === "failed" && errorMessage) {
         this.#emit(state, { type: "runtime.error", turnId: null, payload: { message: errorMessage, class: "provider_error", detail: { source: "pi.durable" } } });
       }
+      console.info(JSON.stringify({
+        event: "durable.turn.completed",
+        threadId: state.threadId,
+        turnId,
+        status,
+        durationMs: state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined,
+        model: state.model,
+        lastInputTokens: state.lastUsage?.inputTokens,
+        lastCachedInputTokens: state.lastUsage?.cachedInputTokens,
+        lastOutputTokens: state.lastUsage?.outputTokens,
+      }));
       state.activeTurnId = undefined;
       state.assistantItemId = undefined;
       state.reasoningItemId = undefined;
