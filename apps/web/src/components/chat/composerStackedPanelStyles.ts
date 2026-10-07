@@ -70,7 +70,9 @@ export const COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME = "px-2.5 pb-1.5";
  * regardless of row count.
  */
 export const COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME =
-  "max-h-56 overflow-y-auto overscroll-contain";
+  // Rows bleed 4px each side (-mx-1) for their hover fill; the region gives them that room
+  // (-mx-1 px-1) and never scrolls sideways.
+  "-mx-1 max-h-56 overflow-y-auto overflow-x-hidden overscroll-contain px-1";
 
 /** Footer/meta row below stacked panel content (background agents). */
 export const COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME =
