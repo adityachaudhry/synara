@@ -1055,7 +1055,9 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
           if (Exit.isFailure(connection)) return yield* Effect.failCause(connection.cause);
         }
       }
-      if (Exit.isSuccess(connection) && binding.workspace.runtimeKind === "daytona-sandbox") {
+      // A headless sandbox runs no worker; its agent processes are stopped by UID below.
+      if (Exit.isSuccess(connection) && binding.headless) nativeAgentUidVerified = true;
+      else if (Exit.isSuccess(connection) && binding.workspace.runtimeKind === "daytona-sandbox") {
         // Check while the worker is still connected: after exit, root-owned
         // detached children cannot be attributed safely to its generation.
         const uid = yield* workspaceRuntime.exec(binding.workspace, {
