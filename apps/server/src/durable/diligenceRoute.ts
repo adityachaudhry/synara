@@ -13,7 +13,14 @@ import { diligenceRunner, type DiligenceRequest } from "./diligence.ts";
 
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
-const authorized = (header: string | undefined) => {
+/** Only the Railway private network (or a local stack) may reach these routes, even with the token. */
+const privateHost = (host: string | undefined) => {
+  const name = (host ?? "").toLowerCase().replace(/:\d+$/u, "");
+  return name.endsWith(".railway.internal") || name === "localhost" || name === "127.0.0.1" || name === "[::1]";
+};
+
+const authorized = (header: string | undefined, host: string | undefined) => {
+  if (!privateHost(host)) return false;
   const expected = process.env.GLASSWING_ARTIFACT_SERVICE_TOKEN?.trim();
   const token = extractBearerToken(header);
   if (!expected || !token) return false;
@@ -31,7 +38,7 @@ const runIdFrom = (url: string, suffix = "") => {
 
 const acceptRoute = HttpRouter.add("POST", "/internal/diligence/runs", Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  if (!authorized(request.headers.authorization)) return json({ error: "unauthorized" }, 401);
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
   const runner = diligenceRunner();
   if (!runner) return json({ error: "durable diligence is not available on this controller" }, 503);
   const body = yield* readMcpJsonBody(request, MAX_PLAN_BYTES);
@@ -49,7 +56,7 @@ const acceptRoute = HttpRouter.add("POST", "/internal/diligence/runs", Effect.ge
 
 const cancelRoute = HttpRouter.add("POST", "/internal/diligence/runs/:runId/cancel", Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  if (!authorized(request.headers.authorization)) return json({ error: "unauthorized" }, 401);
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
   const runId = runIdFrom(request.url, "/cancel");
   const runner = diligenceRunner();
   if (!runId || !runner) return json({ error: "unknown run" }, 404);
@@ -61,7 +68,7 @@ const cancelRoute = HttpRouter.add("POST", "/internal/diligence/runs/:runId/canc
 
 const statusRoute = HttpRouter.add("GET", "/internal/diligence/runs/:runId", Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  if (!authorized(request.headers.authorization)) return json({ error: "unauthorized" }, 401);
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
   const runId = runIdFrom(request.url);
   const runner = diligenceRunner();
   if (!runId || !runner) return json({ error: "unknown run" }, 404);
