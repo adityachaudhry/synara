@@ -296,9 +296,11 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
     /** Capture what can still be read, stop agent processes, destroy the sandbox. */
     const release = (binding: ProviderWorkerRuntimeBinding) => Effect.gen(function* () {
       if (!(yield* isWorkspaceUnavailable(binding))) {
+        // Stop the agent's processes first so the capture reads settled files.
+        yield* exec(binding.workspace, `pkill -KILL -u ${S3_LFS_AGENT_UID} 2>/dev/null; for i in $(seq 1 50); do pgrep -u ${S3_LFS_AGENT_UID} >/dev/null || exit 0; sleep 0.1; done; exit 0`, 15)
+          .pipe(Effect.catch(() => Effect.void));
         yield* checkpointOutbox(binding).pipe(Effect.catch((cause) =>
-          Effect.logWarning("sandbox capture before release failed; files from the last capture are kept", { threadId: binding.threadId, cause })));
-        yield* exec(binding.workspace, `pkill -KILL -u ${S3_LFS_AGENT_UID} 2>/dev/null || true`, 10).pipe(Effect.catch(() => Effect.void));
+          Effect.logWarning("sandbox capture before release failed; files from the last capture are kept", { threadId: binding.threadId, cause: Cause.pretty(Cause.fail(cause)) })));
       }
       yield* workspaceRuntime.destroy(binding.workspace).pipe(Effect.catch((cause) =>
         cause instanceof WorkspaceRuntimeError && cause.unavailable ? Effect.void : Effect.fail(cause)));

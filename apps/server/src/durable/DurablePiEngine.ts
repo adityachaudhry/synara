@@ -67,6 +67,7 @@ import { callAgentGatewayMcpTool, listAgentGatewayMcpTools } from "../agentGatew
 import { parseModelReference, toPiProviderModelDescriptor } from "../provider/piModelCatalog.ts";
 import { textFromToolResult, toolItemType, toolLifecycleData, toolResultForDisplay, toolTitle } from "../provider/piToolDisplay.ts";
 import { configurePiWebAccess, createCrunchbaseTools, createWebAccessTools } from "./extensionTools.ts";
+import { createPerplexityTools } from "./perplexityTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
 import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
@@ -205,10 +206,15 @@ export class DurablePiEngine {
 
     const glasswing = isGlasswingAgentProfileEnabled();
     const today = () => new Date().toISOString().slice(0, 10);
+    // Tools and research are shared by chat threads and diligence runs; the chat profile is chat-only.
+    this.toolsExtension = defineExtension({
+      name: "synara-tools",
+      tools: [readWithImages(createReadTool()), createWriteTool(), createEditTool(), createBashTool()],
+    }) as unknown as Extension;
+    this.#registry.install(this.toolsExtension);
     this.#registry.install(
       defineExtension({
-        name: "synara-coding",
-        tools: [readWithImages(createReadTool()), createWriteTool(), createEditTool(), createBashTool()],
+        name: "synara-chat-profile",
         sections: [
           section("profile", () => (glasswing ? GLASSWING_AGENT_SYSTEM_PROMPT : "You are a helpful coding agent."), { tag: false }),
           section("harness_policy", () => renderSynaraHarnessPolicy({ gatewayControlAvailable: this.#options.gatewayUrl !== undefined }), { tag: false }),
@@ -227,9 +233,11 @@ export class DurablePiEngine {
         return [];
       }),
     ]);
-    if (web.length + crunchbase.length > 0) {
-      this.#registry.install(defineExtension({ name: "synara-research", tools: [...web, ...crunchbase] }) as unknown as Extension);
-    }
+    this.researchExtension = defineExtension({
+      name: "synara-research",
+      tools: [...web, ...crunchbase, ...createPerplexityTools()],
+    }) as unknown as Extension;
+    this.#registry.install(this.researchExtension);
 
     // A lost volume (or a forced drill) restores the newest off-volume snapshot before opening.
     await restoreHarnessIfNeeded(this.#options.storagePath, process.env.SYNARA_DURABLE_RESTORE === "1");
@@ -243,6 +251,8 @@ export class DurablePiEngine {
           retry: { maxRetries: 3 },
         } as never,
         env: async (target) => {
+          const registered = this.#conversationTargets.get(target.conversationId);
+          if (registered) return this.#targetEnv(`synara-conversation:${target.conversationId}`, registered.cwd, registered.resolve);
           const thread = this.#byConversation.get(target.conversationId);
           if (!thread) return undefined;
           return this.#lazyEnv(thread);
@@ -282,6 +292,43 @@ export class DurablePiEngine {
       resumed: [...this.#threads.values()].filter((thread) => thread.activeTurnId).length,
       tools: this.#registry.snapshot().tools().map((entry) => entry.tool.name),
     }));
+  }
+
+  toolsExtension!: Extension;
+  researchExtension!: Extension;
+  readonly #conversationTargets = new Map<ConversationId, { cwd: string; resolve: () => Promise<DurableThreadTarget | undefined> }>();
+
+  /** The Harness, for durable work beyond chat threads (diligence runs). */
+  get harness(): HarnessType {
+    return this.#harness;
+  }
+
+  get models() {
+    return this.#models;
+  }
+
+  /** Routes a non-thread conversation's tools to a sandbox (diligence steps). */
+  registerConversationTarget(conversationId: ConversationId, cwd: string, resolve: () => Promise<DurableThreadTarget | undefined>) {
+    this.#conversationTargets.set(conversationId, { cwd, resolve });
+  }
+
+  #targetEnv(id: string, cwd: string, resolveTarget: () => Promise<DurableThreadTarget | undefined>) {
+    let resolved: Promise<DurableThreadTarget> | undefined;
+    const resolve = () => {
+      resolved ??= resolveTarget().then((target) => {
+        if (!target) throw new Error("This conversation has no sandbox for files or commands.");
+        return target;
+      });
+      return resolved;
+    };
+    return new SandboxExecutionEnv({
+      id,
+      cwd,
+      runner: {
+        run: async (command, options) => (await resolve()).runner.run(command, options),
+        upload: async (filePath, data) => (await resolve()).runner.upload(filePath, data),
+      },
+    });
   }
 
   /** The environment object is cheap; it reaches the sandbox only when a tool calls it. */

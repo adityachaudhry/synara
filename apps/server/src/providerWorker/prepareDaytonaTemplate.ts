@@ -6,7 +6,7 @@ import { availableDaytonaContainerTargets } from "../workspaceRuntime/daytonaReg
 
 export const DAYTONA_MOUNTPOINT_INSTALL = "curl -fsSL https://s3.amazonaws.com/mountpoint-s3-release/1.24.0/x86_64/mount-s3-1.24.0-x86_64.tar.gz -o /tmp/mount-s3.tar.gz && echo 'a99bea20510eaabaf9d7cbfe95ab221a11005cacaa77cfc311a2912bbbdbfd72  /tmp/mount-s3.tar.gz' | sha256sum -c - && mkdir -p /opt/aws/mountpoint-s3 && tar -xzf /tmp/mount-s3.tar.gz -C /opt/aws/mountpoint-s3 && ln -sf /opt/aws/mountpoint-s3/bin/mount-s3 /usr/local/bin/mount-s3 && rm /tmp/mount-s3.tar.gz";
 const BASE_IMAGE = "node:24.13.1-bookworm-slim";
-const BASE_SETUP = "apt-get update -qq && apt-get install -y -qq --no-install-recommends git git-lfs s3fs poppler-utils python3 python3-openpyxl procps coreutils curl ca-certificates sudo && useradd -m -s /bin/bash daytona && echo 'daytona ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/daytona && chmod 440 /etc/sudoers.d/daytona";
+const BASE_SETUP = "apt-get update -qq && apt-get install -y -qq --no-install-recommends git git-lfs s3fs poppler-utils python3 python3-openpyxl python3-yaml ripgrep procps coreutils curl ca-certificates sudo && useradd -m -s /bin/bash daytona && echo 'daytona ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/daytona && chmod 440 /etc/sudoers.d/daytona";
 
 /** Snapshot existence does not prove this organization can start workers in its region. */
 export async function verifyDaytonaWorkerRegion(input: { apiKey: string; target: string }) {

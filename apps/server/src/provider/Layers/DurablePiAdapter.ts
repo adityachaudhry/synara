@@ -20,6 +20,7 @@ import { Cause, Deferred, Effect, Exit, Layer, Option, PubSub, Queue, Scope, Str
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { DurablePiEngine, type DurableThreadTarget } from "../../durable/DurablePiEngine.ts";
+import { DiligenceRunner, setDiligenceRunner } from "../../durable/diligence.ts";
 import type { SandboxRunner } from "../../durable/sandboxEnv.ts";
 import { setHeadlessSessionSource } from "../../providerWorker/headlessSessions.ts";
 import { ProviderWorkerProvisioningError } from "../../providerWorker/Errors";
@@ -250,6 +251,19 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     (opened) => Effect.promise(() => opened.close()),
   );
   setHeadlessSessionSource((threadId) => engine.listSessions().filter((session) => threadId === undefined || session.threadId === threadId));
+  if (execInWorkspace && writeWorkspaceFile) {
+    // Durable diligence runs share this Harness and the sandbox provisioner.
+    const diligence = new DiligenceRunner(engine, {
+      claim: (key, generation, repository) => Effect.runPromise(provisioner.start({
+        threadId: ThreadId.makeUnsafe(key), lifecycleGeneration: generation, headless: true, fresh: true, repositoryBinding: repository,
+      })),
+      unavailable: (binding) => Effect.runPromise(unavailable(binding)),
+      runner: sandboxRunner,
+      release: (binding) => Effect.runPromise(provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
+    });
+    setDiligenceRunner(diligence);
+    yield* Effect.promise(() => diligence.resume());
+  }
   const call = <A>(method: string, run: () => Promise<A>) =>
     Effect.tryPromise({ try: run, catch: (cause) => adapterError(method, cause instanceof Error ? cause.message : `Durable Pi '${method}' failed.`, cause) });
 
