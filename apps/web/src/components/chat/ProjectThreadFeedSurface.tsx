@@ -252,20 +252,24 @@ export function ProjectThreadFeedSurface({
   const feedContentRef = useRef<HTMLElement | null>(null);
   const positionedProjectIdRef = useRef<ProjectId | null>(null);
 
-  const threads = useMemo(
-    () =>
-      displayThreads
-        .filter(
-          (thread) =>
-            thread.projectId === projectId &&
-            thread.creationSource == null &&
-            thread.sidechatSourceThreadId == null &&
-            thread.forkSourceThreadId == null &&
-            thread.feedSummary !== null,
-        )
-        .toSorted((left, right) => threadActivityAt(left).localeCompare(threadActivityAt(right))),
-    [displayThreads, projectId],
-  );
+  const threads = useMemo(() => {
+    const visible = displayThreads.filter(
+      (thread) =>
+        thread.projectId === projectId &&
+        (thread.creationSource == null || thread.creationSource === "diligence_run") &&
+        thread.sidechatSourceThreadId == null &&
+        thread.forkSourceThreadId == null &&
+        thread.feedSummary !== null,
+    );
+    // A run started from a chat sits right below that chat until its own activity is newer.
+    const activityById = new Map(visible.map((thread) => [thread.id, threadActivityAt(thread)]));
+    const sortKey = (thread: SidebarThreadSummary) => {
+      const own = activityById.get(thread.id)!;
+      const source = thread.sourceThreadId ? activityById.get(thread.sourceThreadId) : undefined;
+      return source !== undefined && source >= own ? `${source}~` : own;
+    };
+    return visible.toSorted((left, right) => sortKey(left).localeCompare(sortKey(right)));
+  }, [displayThreads, projectId]);
 
   useLayoutEffect(() => {
     if (threads.length === 0 || positionedProjectIdRef.current === projectId) return;

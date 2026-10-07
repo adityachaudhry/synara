@@ -254,6 +254,8 @@ export const ThreadCreationSource = Schema.Literals([
   "external_mcp",
   "provider_native",
   "automation_run",
+  // A controller-run diligence thread; sourceThreadId is the chat that started it, if any.
+  "diligence_run",
 ]);
 export type ThreadCreationSource = typeof ThreadCreationSource.Type;
 export const ProviderReviewTarget = Schema.Union([

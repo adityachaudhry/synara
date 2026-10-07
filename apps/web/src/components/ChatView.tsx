@@ -1403,6 +1403,12 @@ export default function ChatView({
   const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
   const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const parentThreadIdForStrip = serverThread?.parentThreadId ?? null;
+  const parentThreadForStrip = useStore(
+    useMemo(() => createThreadSelector(parentThreadIdForStrip), [parentThreadIdForStrip]),
+  );
+  // A diligence step thread is reached from its run thread, whose card lists every step.
+  const isDiligenceStepThread = parentThreadForStrip?.creationSource === "diligence_run";
   const threadDetailSyncState = useStore((state) =>
     threadId ? (state.threadDetailSyncById?.[threadId] ?? null) : null,
   );
@@ -1415,6 +1421,7 @@ export default function ChatView({
   const crossTaskSourceThreadId =
     serverThread?.creationSource &&
     serverThread.creationSource !== "provider_native" &&
+    serverThread.creationSource !== "diligence_run" &&
     serverThread.sourceThreadId
       ? serverThread.sourceThreadId
       : null;
@@ -11467,7 +11474,9 @@ export default function ChatView({
   const showComposerWorkflowRunCard = workflowRunState !== null;
   // A durable workflow card (a diligence run) already lists its agents; the strip would repeat them.
   const showComposerSubagentStrip =
-    composerSubagentStripItems.length > 0 && workflowRunState?.durable !== true;
+    composerSubagentStripItems.length > 0 &&
+    workflowRunState?.durable !== true &&
+    !isDiligenceStepThread;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
   // The workflow card already lists its run and member agents, so the generic

@@ -329,6 +329,8 @@ export interface ThreadTurnState {
 }
 
 export interface SidebarThreadSummary {
+  /** The thread this one was started from (a chat that started a diligence run). */
+  sourceThreadId?: ThreadId | null;
   id: ThreadId;
   projectId: ProjectId;
   title: string;

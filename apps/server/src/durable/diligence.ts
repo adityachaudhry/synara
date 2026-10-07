@@ -54,8 +54,10 @@ export interface DiligenceRequest {
   readonly repository: ProjectRepositoryBinding;
   /** Where the published report will appear (Glasswing web). */
   readonly reportUrl?: string;
-  /** Who asked for the run, shown as the author of the run thread's request. */
+  /** Who asked for the run; named in the run thread's request (which Glasswing posts). */
   readonly requestedBy?: { readonly subject: string; readonly label?: string };
+  /** The Synara chat thread that started the run, if any; the feed shows the run below it. */
+  readonly sourceThreadId?: string;
   readonly plan: {
     readonly recipeVersion: string;
     readonly instructions: string;

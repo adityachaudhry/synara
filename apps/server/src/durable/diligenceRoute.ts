@@ -39,10 +39,21 @@ const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Qui
 /** The run thread's opening request, as the analyst would put it; the feed shows it. */
 const runRequestText = (plan: DiligenceRequest) => {
   const company = plan.company.name;
-  if (plan.mode === "quick") return `Quick read on ${company}: does it earn a full diligence?`;
-  if (plan.mode === "memo") return `Investment memo for ${company}, written from its latest diligence.`;
+  const by = requesterName(plan.requestedBy?.label);
+  const started = by ? `, started by ${by}` : "";
+  if (plan.mode === "quick") return `Quick read on ${company}${started}: does it earn a full diligence?`;
+  if (plan.mode === "memo") return `Investment memo for ${company}${started}, written from its latest diligence.`;
   const steps = plan.plan.steps.map((step) => stepLabel(step).toLowerCase());
-  return `Full diligence on ${company}: ${steps.join(", ")}.`;
+  return `Full diligence on ${company}${started}: ${steps.join(", ")}.`;
+};
+
+/** "Aditya Chaudhry" stays; "aditya@glasswing.vc" becomes "Aditya". */
+const requesterName = (label: string | undefined) => {
+  const value = label?.trim();
+  if (!value) return undefined;
+  if (!value.includes("@")) return value;
+  const local = value.split("@")[0]!.split(/[._-]/u)[0]!;
+  return local ? local.charAt(0).toUpperCase() + local.slice(1) : undefined;
 };
 
 /** The run's top-level thread in the company's project; the run works without it if this fails. */
@@ -70,6 +81,8 @@ const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
     envMode: "local",
     branch: null,
     worktreePath: null,
+    creationSource: "diligence_run",
+    ...(plan.sourceThreadId ? { sourceThreadId: ThreadId.makeUnsafe(plan.sourceThreadId) } : {}),
     createdAt: now.toISOString(),
   } as never);
   // The run starts with a request in the thread, so the workspace feed lists it like any thread.
@@ -81,7 +94,7 @@ const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
       messageId: `diligence-request-${plan.runId}`,
       role: "user",
       text: runRequestText(plan),
-      author: plan.requestedBy ?? { subject: "glasswing:diligence", label: "Glasswing" },
+      author: { subject: "glasswing:diligence", label: "Glasswing" },
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     }],
