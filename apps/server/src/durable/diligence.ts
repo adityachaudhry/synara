@@ -53,7 +53,7 @@ export interface DiligenceRequest {
     readonly files: Readonly<Record<string, string>>;
     readonly steps: readonly DiligenceStep[];
     readonly maxConcurrency?: number;
-    readonly repair: { readonly model: string; readonly thinking?: string; readonly prompt: string };
+    readonly repair: { readonly model: string; readonly thinking?: string; readonly prompt: string; readonly maxFindings?: number };
     readonly gateCommand: string;
   };
 }
@@ -277,7 +277,7 @@ export class DiligenceRunner {
       if (step.gate) {
         await this.#update(runId, (draft) => { draft.steps[step.id]!.phase = "gate"; });
         gate = await this.#runGate(runId, request, step.gate);
-        const repairable = gate.findings.filter((finding) => !gate!.generative.includes(finding)).slice(0, 12);
+        const repairable = gate.findings.filter((finding) => !gate!.generative.includes(finding)).slice(0, request.plan.repair.maxFindings ?? 12);
         if (repairable.length > 0) {
           await this.#update(runId, (draft) => { draft.steps[step.id]!.phase = "repair"; });
           await conversation.configure({
@@ -292,8 +292,8 @@ export class DiligenceRunner {
           gate = await this.#runGate(runId, request, step.gate);
         }
       }
-      const outputs = await this.#readFiles(runId, request, [...step.outputs, ...(request.plan.steps.flatMap((other) =>
-        (other.release ?? []).filter((release) => release.step === step.id).map((release) => release.file)))]);
+      // Everything the step left in the outbox (handoffs, project memory, review results), not only declared outputs.
+      const outputs = await this.#readFiles(runId, request, [...step.outputs, ...(await this.#outboxFiles(request))]);
       const usage = await this.#usage(conversation.id);
       await this.#update(runId, (draft) => {
         const record = draft.steps[step.id]!;
@@ -467,6 +467,12 @@ export class DiligenceRunner {
     return missing;
   }
 
+  async #outboxFiles(request: DiligenceRequest) {
+    const target = await this.#target(request);
+    const listed = await target.runner.run(`cd ${RUN_ROOT} && find outbox -type f -size -4M`, { timeoutSeconds: 30 });
+    return listed.exitCode === 0 ? listed.output.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("outbox/")) : [];
+  }
+
   async #readFiles(runId: string, request: DiligenceRequest, files: readonly string[]) {
     const target = await this.#target(request);
     const read: Record<string, string> = {};
@@ -502,7 +508,6 @@ export class DiligenceRunner {
   }
 
   async #deliver(request: DiligenceRequest, state: RunState) {
-    const api = artifactApiClient();
     const runId = request.runId;
     await this.#flushEvents();
     const steps = request.plan.steps.map((step) => {
@@ -537,10 +542,10 @@ export class DiligenceRunner {
         durationSeconds: duration ?? 0, ...(record.gate ? { gate: record.gate } : {}),
       })),
     };
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 10; attempt++) {
       try {
-        if (!api) throw new Error("Glasswing API is not configured.");
-        await api(`/internal/runs/${encodeURIComponent(runId)}/complete`, body);
+        // Completion publishes to Git and S3 and can take minutes; a repeat gets 409 until it is done.
+        await completeRun(runId, body);
         await this.#harness.commit(async (tx) => {
           ((await tx.doc(StateDoc, runId, null)) as unknown as RunState).delivered = true;
           delete (await tx.doc(ActiveRuns)).runs[runId];
@@ -574,6 +579,19 @@ export class DiligenceRunner {
         log("events.delivery-failed", { runId, count: events.length, message: String(cause) }));
     }
   }
+}
+
+async function completeRun(runId: string, body: unknown) {
+  const origin = process.env.SYNARA_ARTIFACT_API_URL?.trim();
+  const token = process.env.GLASSWING_ARTIFACT_SERVICE_TOKEN?.trim();
+  if (!origin || !token) throw new Error("Glasswing API is not configured.");
+  const response = await fetch(`${new URL(origin).origin}/internal/runs/${encodeURIComponent(runId)}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(600_000),
+  });
+  if (!response.ok) throw new Error(`Completion failed with HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
 }
 
 let current: DiligenceRunner | undefined;
