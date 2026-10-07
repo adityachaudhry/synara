@@ -245,6 +245,12 @@ export class DurablePiEngine {
       }
     }
     this.#harness.resume();
+    console.info(JSON.stringify({
+      event: "durable.engine.ready",
+      threads: this.#threads.size,
+      resumed: [...this.#threads.values()].filter((thread) => thread.activeTurnId).length,
+      tools: this.#registry.snapshot().tools().map((entry) => entry.tool.name),
+    }));
   }
 
   /** The environment object is cheap; it reaches the sandbox only when a tool calls it. */

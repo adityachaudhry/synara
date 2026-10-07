@@ -31,6 +31,15 @@ export interface ProviderWorkerAttachmentStageInput {
 }
 
 export interface ProviderWorkerProvisionerShape {
+  /** Run a root command in a bound sandbox. Durable threads run their tools through this. */
+  readonly execInWorkspace?: (
+    binding: ProviderWorkerRuntimeBinding,
+    input: { readonly command: string; readonly timeoutSeconds?: number },
+  ) => Effect.Effect<{ readonly exitCode: number | null; readonly stdout: string; readonly stderr: string; readonly timedOut: boolean; readonly truncated: boolean }, unknown>;
+  readonly writeWorkspaceFile?: (
+    binding: ProviderWorkerRuntimeBinding,
+    input: { readonly path: string; readonly data: Uint8Array; readonly mode?: number },
+  ) => Effect.Effect<void, unknown>;
   /** A positive result means the runtime is conclusively gone; connection errors stay recoverable. */
   readonly isWorkspaceUnavailable?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<boolean>;
   /** Persist uncertain coverage before sending a request that can change native state. */

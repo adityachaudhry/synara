@@ -1696,6 +1696,8 @@ export const makeProviderWorkerProvisioner = (options: ProviderWorkerProvisioner
     }
 
     return {
+      execInWorkspace: (binding, input) => workspaceRuntime.exec(binding.workspace, input),
+      writeWorkspaceFile: (binding, input) => workspaceRuntime.writeFile(binding.workspace, input),
       isWorkspaceUnavailable,
       markWorkspaceMutation,
       withWorkspaceMutation,
