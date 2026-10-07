@@ -134,6 +134,7 @@ Use these as implementation references when designing protocol handling, UX flow
 
 ## GlasswingOS Integration Lanes
 
+- GlasswingOS runs Pi as Pi Durable conversations in the controller with disposable Daytona tool sandboxes (dev since 2026-10-07). Read `docs/operations/pi-durable-runtime.md` before touching the Pi runtime, sandboxes or `/internal/diligence`.
 - `emanuele/main` is the sole upstream source for future Synara improvements. Do not use or merge the fork's `origin/main` as upstream.
 - `glasswingos/dev` is the GlasswingOS integration branch. Merge reviewed `emanuele/main` updates and GlasswingOS work here first; Glasswing dev resolves the latest successfully published dev UI package at build time and connects to the stable dev server URL. Do not make manual consumer pin commits.
 - `glasswingos/main` is the production lane. Advance it only by promoting a commit already proven on `glasswingos/dev`; do not develop features or merge upstream directly on it. Glasswing production follows only the production package channel and production server URL.
