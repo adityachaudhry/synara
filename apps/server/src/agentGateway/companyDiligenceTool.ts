@@ -1,6 +1,6 @@
 import path from "node:path";
 import { ThreadId, TurnId } from "@synara/contracts";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schedule } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
@@ -79,24 +79,31 @@ export function makeCompanyDiligenceTools(input: {
       const author = thread.messages.find((m) => m.id === turn?.pendingMessageId)?.author;
       if (!author)
         return yield* Effect.fail(new ToolInputError("Diligence requires an authenticated user request."));
-      const runtime = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const payload = runtime?.runtimePayload;
-      const binding = decodeProviderWorkerRuntimeBinding(
-        payload && typeof payload === "object" && "distributedPiRuntime" in payload
-          ? payload.distributedPiRuntime : undefined,
-      );
-      const checkout = binding?.repositoryCheckout?.binding;
-      if (!binding || binding.repositoryUnavailable || binding.threadId !== threadId ||
-          binding.fence.lifecycleGeneration !== runtime?.lifecycleGeneration ||
-          !checkout || checkout.kind !== repository.kind || checkout.origin !== repository.origin ||
-          checkout.owner !== repository.owner || checkout.repository !== repository.repository ||
-          checkout.ref !== repository.ref || checkout.path !== repository.path)
-        return yield* Effect.fail(new ToolInputError("The active workspace does not match this company. Retry after it reconnects."));
+      // The live workspace matters only for files saved before the run; a sandbox may still be claiming.
+      const liveBinding = Effect.gen(function* () {
+        const runtime = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const payload = runtime?.runtimePayload;
+        const binding = decodeProviderWorkerRuntimeBinding(
+          payload && typeof payload === "object" && "distributedPiRuntime" in payload
+            ? payload.distributedPiRuntime : undefined,
+        );
+        const checkout = binding?.repositoryCheckout?.binding;
+        if (!binding || binding.repositoryUnavailable || binding.threadId !== threadId ||
+            binding.fence.lifecycleGeneration !== runtime?.lifecycleGeneration ||
+            !checkout || checkout.kind !== repository.kind || checkout.origin !== repository.origin ||
+            checkout.owner !== repository.owner || checkout.repository !== repository.repository ||
+            checkout.ref !== repository.ref || checkout.path !== repository.path)
+          return yield* Effect.fail(new ToolInputError("The active workspace does not match this company. Retry after it reconnects."));
+        return binding;
+      });
       const files: Array<{ path: string; sha256: string; content_base64: string }> = [];
       let bytes = 0;
-      for (const relativePath of paths as string[]) {
+      const binding = (paths as string[]).length === 0 ? undefined : yield* liveBinding.pipe(
+        Effect.retry({ schedule: Schedule.spaced("2 seconds"), times: 45 }),
+      );
+      for (const relativePath of binding ? paths as string[] : []) {
         yield* context.assertCallerTurnActive();
-        const file = yield* readFile(binding, path.posix.join(binding.cwd, relativePath));
+        const file = yield* readFile(binding!, path.posix.join(binding!.cwd, relativePath));
         if (file.workspaceSource === "checkpoint")
           return yield* Effect.fail(new ToolInputError("The live workspace is unavailable; saved checkpoints cannot replace the requested current edits."));
         bytes += file.sizeBytes;
