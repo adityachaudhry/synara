@@ -80,10 +80,10 @@ const ctx = BACKGROUND_CONTEXT;
  * events are published on the parent thread with provider refs that make Synara show them in the
  * child thread `subagent:<parentThreadId>:<providerThreadId>`.
  */
-interface ThreadRoute {
-  readonly parentThreadId: string;
-  readonly providerThreadId: string;
-}
+type ThreadRoute = {
+  parentThreadId: string;
+  providerThreadId: string;
+};
 
 /** threadId → conversation, kept in the Harness so a restart finds running work. */
 const ThreadIndex = defineDoc<{ threads: Record<string, { conversationId: number; generation: string; cwd: string; route?: ThreadRoute }> }>({

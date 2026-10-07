@@ -22,6 +22,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { ThreadId, type ChatAttachment, type ProjectRepositoryBinding } from "@synara/contracts";
 
+import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import type { ProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBinding";
 import type { DurablePiEngine, DurableThreadTarget } from "./DurablePiEngine.ts";
@@ -374,7 +375,7 @@ export class DiligenceRunner {
       await this.#engine.attachChild({ key, conversationId: record.conversationId as ConversationId, cwd: RUN_ROOT, route: { parentThreadId: threadId, providerThreadId }, model: step.model });
     }
     this.#engine.registerConversationTarget(record.conversationId as ConversationId, RUN_ROOT, () => this.#target(request));
-    if (state.status !== "running") this.#releaseLater(runId);
+    if (state.status !== "running") this.#releaseLater(runId!);
     await this.#engine.steerTurn({
       threadId: ThreadId.makeUnsafe(key),
       input: input.input,
