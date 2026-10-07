@@ -375,7 +375,7 @@ export function WorkflowRunCard({
           ) : (
             <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
-          <ComposerStackedPanelRowLabel tone="meta">
+          <ComposerStackedPanelRowLabel tone="meta" className="text-[length:var(--workflow-card-font-md)]">
             <span className="font-medium text-[color:var(--workflow-card-title)]">{workflowRun.name}</span>
             {settledPresentation ? (
               <span className={cn("ml-1.5", settledPresentation.toneClassName)}>
