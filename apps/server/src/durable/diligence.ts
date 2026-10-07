@@ -20,9 +20,9 @@ import {
   UsageDoc,
   watchEvents,
 } from "@earendil-works/pi-durable";
-import type { ProjectRepositoryBinding, ThreadId } from "@synara/contracts";
+import { ThreadId, type ChatAttachment, type ProjectRepositoryBinding } from "@synara/contracts";
 
-import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
+import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import type { ProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBinding";
 import type { DurablePiEngine, DurableThreadTarget } from "./DurablePiEngine.ts";
 import { shellQuote } from "./sandboxEnv.ts";
@@ -41,6 +41,9 @@ export interface DiligenceStep {
   readonly prompt: string;
   readonly outputs: readonly string[];
   readonly gate?: { readonly sectionId: string; readonly file: string };
+  /** Shown in the run thread; Glasswing names steps and phases (defaults below). */
+  readonly label?: string;
+  readonly phase?: string;
 }
 
 export interface DiligenceRequest {
@@ -48,6 +51,8 @@ export interface DiligenceRequest {
   readonly mode: string;
   readonly company: { readonly id: string; readonly slug: string; readonly name: string };
   readonly repository: ProjectRepositoryBinding;
+  /** Where the published report will appear (Glasswing web). */
+  readonly reportUrl?: string;
   readonly plan: {
     readonly recipeVersion: string;
     readonly instructions: string;
@@ -70,6 +75,8 @@ type StepRecord = {
   turns?: number;
   gate?: { findings: string[]; generative: string[] };
   error?: string;
+  /** The step's agent was announced in the run thread. */
+  shown?: boolean;
 };
 type RunState = {
   status: "running" | "succeeded" | "failed" | "canceled";
@@ -82,6 +89,9 @@ type RunState = {
   completedAt?: string;
   delivered?: boolean;
   cancelRequested?: boolean;
+  /** The Synara thread that shows this run, and its run-long turn. */
+  threadId?: string;
+  runTurnId?: string;
 };
 
 // Stored as plain JSON; typed through the accessors below.
@@ -95,6 +105,37 @@ const StateDoc = defineDocFamily<JsonObject, null>({
 const ActiveRuns = defineDoc<{ runs: Record<string, true> }>({
   kind: "synara.diligence-active", version: 1, scope: "session", initial: () => ({ runs: {} }),
 });
+/** Run thread → run, for messages, stops and chats on finished runs. */
+const RunThreads = defineDoc<{ threads: Record<string, string> }>({
+  kind: "synara.diligence-threads", version: 1, scope: "session", initial: () => ({ threads: {} }),
+});
+
+const STEP_LABELS: Record<string, string> = {
+  "diligence-intake": "Intake",
+  "company-snapshot": "Company snapshot",
+  "market-pain": "Market pain",
+  "team-diligence": "Team",
+  "product-value": "Product & value",
+  "technical-diligence": "Technical",
+  "market-sizing": "Market sizing",
+  "competition-positioning": "Competition",
+  "exit-fund-return": "Exit & fund return",
+  "executive-investment-read": "Executive summary",
+  "memo-compose": "Investment memo",
+  "quick-tearsheet": "Quick read",
+  "feedback-review": "Team feedback check",
+};
+const PHASES = ["Getting oriented", "Working the diligence questions", "Writing the investment read"] as const;
+const stepLabel = (step: DiligenceStep) =>
+  step.label ?? STEP_LABELS[step.id] ?? step.id.replace(/-/gu, " ").replace(/^./u, (c) => c.toUpperCase());
+const stepPhase = (step: DiligenceStep) =>
+  step.phase ?? (["diligence-intake", "company-snapshot"].includes(step.id) ? PHASES[0]
+    : ["executive-investment-read", "memo-compose", "quick-tearsheet", "feedback-review"].includes(step.id) ? PHASES[2] : PHASES[1]);
+const MODE_TITLES: Record<string, string> = { full: "full diligence", quick: "a quick read", memo: "the investment memo" };
+/** The run thread's ID for a run; the child thread of a step is `subagent:<this>:step:<stepId>`. */
+export const diligenceThreadId = (runId: string) => `diligence-run-${runId}`;
+const childKey = (threadId: string, stepId: string) => `subagent:${threadId}:step:${stepId}`;
+const FOLLOW_UP_RELEASE_MS = 30 * 60_000;
 
 export interface DiligenceSandboxes {
   /** Claims a fresh sandbox with the company checkout. */
@@ -111,8 +152,15 @@ const modelRef = (model: string) => {
 
 const log = (event: string, detail: Record<string, unknown>) => console.info(`[diligence] ${JSON.stringify({ event, ...detail })}`);
 
+export interface DiligenceThreads {
+  /** Opens the run thread's own conversation, so analysts can also chat in it. */
+  startThreadSession(threadId: string, repository: ProjectRepositoryBinding): Promise<void>;
+}
+
 export class DiligenceRunner {
   readonly #engine: DurablePiEngine;
+  #threads: DiligenceThreads | undefined;
+  readonly #releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly #sandboxes: DiligenceSandboxes;
   readonly #extensions: readonly Extension[];
   readonly #loops = new Map<string, Promise<void>>();
@@ -134,16 +182,36 @@ export class DiligenceRunner {
     return this.#engine.harness;
   }
 
+  setThreads(threads: DiligenceThreads) {
+    this.#threads = threads;
+  }
+
   /** Continues every run that was active when the controller stopped. */
   async resume() {
     const active = (await this.#harness.snapshot(ActiveRuns, ctx))?.runs ?? {};
     for (const runId of Object.keys(active)) {
+      const state = await this.#state(runId);
+      if (state?.threadId && state.runTurnId && this.#engine.hasSession(state.threadId)) {
+        // The run's turn is still open in Synara; keep it open and keep startup from settling it.
+        this.#engine.beginExternalTurn(state.threadId, state.runTurnId, false);
+        resumingDurableThreads.add(state.threadId);
+      }
       log("run.resumed", { runId });
       this.#start(runId);
     }
+    // Finished runs keep answering follow-ups in their step threads.
+    const threads = (await this.#harness.snapshot(RunThreads, ctx))?.threads ?? {};
+    for (const runId of new Set(Object.values(threads))) {
+      const request = await this.#plan(runId);
+      const state = await this.#state(runId);
+      if (!request || !state) continue;
+      for (const record of Object.values(state.steps)) {
+        if (record.conversationId !== undefined) this.#engine.registerConversationTarget(record.conversationId as ConversationId, RUN_ROOT, () => this.#target(request));
+      }
+    }
   }
 
-  async accept(request: DiligenceRequest): Promise<{ runId: string; accepted: true }> {
+  async accept(request: DiligenceRequest, options: { readonly threadId?: string } = {}): Promise<{ runId: string; accepted: true; threadId?: string }> {
     if (!(await this.#plan(request.runId))) {
       await this.#harness.commit(async (tx) => {
         (await tx.doc(PlanDoc, request.runId, null)).request = JSON.parse(JSON.stringify(request)) as JsonObject;
@@ -154,8 +222,180 @@ export class DiligenceRunner {
       log("run.accepted", { runId: request.runId, steps: request.plan.steps.length, mode: request.mode });
       this.#event(request.runId, "status", { state: "running-durable" });
     }
+    if (options.threadId) await this.#openThread(request, options.threadId).catch((cause) =>
+      log("thread.open-failed", { runId: request.runId, message: String(cause) }));
     this.#start(request.runId);
-    return { runId: request.runId, accepted: true };
+    const threadId = (await this.#state(request.runId))?.threadId;
+    return { runId: request.runId, accepted: true, ...(threadId ? { threadId } : {}) };
+  }
+
+  // ------------------------------------------------------------ run thread
+
+  /** Starts the run thread: its run-long turn, an opening note and the workflow card. */
+  async #openThread(request: DiligenceRequest, threadId: string) {
+    const runId = request.runId;
+    const state = await this.#state(runId);
+    if (!state || state.threadId || state.status !== "running" || !this.#threads) return;
+    if (!this.#engine.hasSession(threadId)) await this.#threads.startThreadSession(threadId, request.repository);
+    const runTurnId = `diligence-run:${runId}`;
+    await this.#harness.commit(async (tx) => {
+      const draft = (await tx.doc(StateDoc, runId, null)) as unknown as RunState;
+      draft.threadId = threadId;
+      draft.runTurnId = runTurnId;
+      (await tx.doc(RunThreads)).threads[threadId] = runId;
+    }, ctx);
+    this.#engine.beginExternalTurn(threadId, runTurnId, true);
+    this.#engine.emitExternalMessage(threadId, `${runId}-open`,
+      `Running ${MODE_TITLES[request.mode] ?? request.mode} on ${request.company.name}. ` +
+      (request.plan.steps.length > 1
+        ? "Each step works in its own thread below. Open one to watch it work, or message it to steer: point it at a source, ask it to check something, or question a claim. "
+        : "Open the step below to watch it work, or message it to steer. ") +
+      "The report updates when the run finishes.");
+    const plans = Object.fromEntries(request.plan.steps.map((step) => [stepLabel(step), { phase: stepPhase(step), model: step.model.split("/").pop() }]));
+    this.#engine.emitExternal(threadId, {
+      type: "task.started",
+      payload: {
+        taskId: `diligence-${runId}`,
+        taskType: "durable_workflow",
+        description: `Diligence · ${request.company.name}`,
+        workflowName: "Diligence",
+        workflowPhases: PHASES.filter((phase) => request.plan.steps.some((step) => stepPhase(step) === phase)).map((title) => ({ title })),
+        workflowAgentPlans: plans,
+      },
+    });
+  }
+
+  #threadOf(state: RunState | undefined) {
+    return state?.threadId && this.#engine.hasSession(state.threadId) ? state.threadId : undefined;
+  }
+
+  /** Shows a starting step: an agent row in the workflow card and its own child thread. */
+  async #showStep(request: DiligenceRequest, step: DiligenceStep, conversationId: ConversationId) {
+    const state = await this.#state(request.runId);
+    const threadId = this.#threadOf(state);
+    if (!threadId) return undefined;
+    const key = childKey(threadId, step.id);
+    if (!state!.steps[step.id]?.shown) {
+      const label = stepLabel(step);
+      this.#engine.emitExternal(threadId, {
+        type: "item.started",
+        itemId: `diligence-agent-${request.runId}-${step.id}`,
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: label,
+          data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: label, model: step.model.split("/").pop() } },
+        },
+      });
+      this.#engine.emitExternal(threadId, {
+        type: "task.started",
+        payload: { taskId: `diligence-${request.runId}:${step.id}`, description: label, workflowTaskId: `diligence-${request.runId}`, toolUseId: `step:${step.id}` },
+      });
+      await this.#update(request.runId, (draft) => { draft.steps[step.id]!.shown = true; });
+    }
+    await this.#engine.attachChild({ key, conversationId, cwd: RUN_ROOT, route: { parentThreadId: threadId, providerThreadId: `step:${step.id}` }, model: step.model });
+    return key;
+  }
+
+  async #stepSettled(runId: string, step: DiligenceStep, status: "completed" | "failed") {
+    const threadId = this.#threadOf(await this.#state(runId));
+    if (!threadId) return;
+    this.#engine.emitExternal(threadId, {
+      type: "task.completed",
+      payload: { taskId: `diligence-${runId}:${step.id}`, status },
+    });
+    this.#engine.emitExternal(threadId, {
+      type: "item.completed",
+      itemId: `diligence-agent-${runId}-${step.id}`,
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: status === "completed" ? "completed" : "failed",
+        title: stepLabel(step),
+        data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: stepLabel(step), status } },
+      },
+    });
+  }
+
+  async #closeThread(request: DiligenceRequest, state: RunState) {
+    const threadId = this.#threadOf(state);
+    if (!threadId || !this.#engine.hasExternalTurn(threadId)) return;
+    const steps = request.plan.steps;
+    const failed = steps.filter((step) => state.steps[step.id]?.status === "failed");
+    const skipped = steps.filter((step) => state.steps[step.id]?.status === "skipped");
+    const report = request.reportUrl ? ` [Open the report](${request.reportUrl}).` : "";
+    const text = state.status === "succeeded"
+      ? `Diligence finished: all ${steps.length} steps completed. Glasswing is publishing the report now.${report} Each step thread keeps its agent's research, so you can ask any of them a follow-up.`
+      : state.status === "canceled"
+        ? "Diligence was stopped. Steps that finished keep their threads and research."
+        : `Diligence finished with problems. ${failed.map((step) => `${stepLabel(step)} failed: ${(state.steps[step.id]?.error ?? "unknown error").slice(0, 200)}`).join(" ")}` +
+          (skipped.length ? ` Skipped because an earlier step failed: ${skipped.map(stepLabel).join(", ")}.` : "") +
+          " Steps that finished keep their threads; you can message them.";
+    this.#engine.emitExternalMessage(threadId, `${request.runId}-close`, text);
+    this.#engine.emitExternal(threadId, {
+      type: "task.completed",
+      payload: { taskId: `diligence-${request.runId}`, status: state.status === "succeeded" ? "completed" : state.status === "canceled" ? "stopped" : "failed" },
+    });
+    this.#engine.endExternalTurn(threadId, state.status === "canceled" ? "interrupted" : state.status === "failed" ? "failed" : "completed",
+      state.status === "failed" ? "Some diligence steps failed." : undefined);
+  }
+
+  async #runFor(threadId: string) {
+    return (await this.#harness.snapshot(RunThreads, ctx))?.threads[threadId];
+  }
+
+  /** The company of a run thread, for the thread's own chat sandbox. */
+  async repositoryForThread(threadId: string) {
+    const runId = await this.#runFor(threadId);
+    return runId ? (await this.#plan(runId))?.repository : undefined;
+  }
+
+  /** Stop on the run thread stops the run. */
+  async cancelByThread(threadId: string) {
+    const runId = await this.#runFor(threadId);
+    if (!runId) return false;
+    const state = await this.#state(runId);
+    if (state?.status !== "running") return false;
+    await this.cancel(runId);
+    return true;
+  }
+
+  /** An analyst's message to a step thread: steers a running step, or starts a follow-up turn. */
+  async steer(threadId: string, providerThreadId: string, input: { readonly input: string; readonly attachments?: ReadonlyArray<ChatAttachment> | undefined }) {
+    const runId = await this.#runFor(threadId);
+    const stepId = providerThreadId.startsWith("step:") ? providerThreadId.slice("step:".length) : undefined;
+    const request = runId ? await this.#plan(runId) : undefined;
+    const state = runId ? await this.#state(runId) : undefined;
+    const record = stepId ? state?.steps[stepId] : undefined;
+    if (!request || !state || !stepId || !record) throw new Error("This diligence step is not known to the controller.");
+    if (record.conversationId === undefined) throw new Error("This step has not started yet. Message it once it is running.");
+    const key = childKey(threadId, stepId);
+    if (!this.#engine.isDurableThread(key)) {
+      const step = request.plan.steps.find((entry) => entry.id === stepId)!;
+      await this.#engine.attachChild({ key, conversationId: record.conversationId as ConversationId, cwd: RUN_ROOT, route: { parentThreadId: threadId, providerThreadId }, model: step.model });
+    }
+    this.#engine.registerConversationTarget(record.conversationId as ConversationId, RUN_ROOT, () => this.#target(request));
+    if (state.status !== "running") this.#releaseLater(runId);
+    await this.#engine.steerTurn({
+      threadId: ThreadId.makeUnsafe(key),
+      input: input.input,
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+      attachmentsDir: "/workspace/.synara-provider-worker/state/attachments",
+    });
+  }
+
+  /** A finished run's sandbox is reclaimed for follow-ups; release it after a quiet half hour. */
+  #releaseLater(runId: string) {
+    clearTimeout(this.#releaseTimers.get(runId));
+    const timer = setTimeout(() => {
+      this.#releaseTimers.delete(runId);
+      void this.#state(runId).then(async (state) => {
+        if (state?.status === "running" || !state?.sandbox) return;
+        await this.#sandboxes.release(state.sandbox).catch(() => undefined);
+        this.#targets.delete(runId);
+      });
+    }, FOLLOW_UP_RELEASE_MS);
+    timer.unref();
+    this.#releaseTimers.set(runId, timer);
   }
 
   async cancel(runId: string) {
@@ -289,13 +529,18 @@ export class DiligenceRunner {
     const runId = request.runId;
     try {
       const conversation = await this.#conversationFor(request, step);
-      await this.#submit(conversation, step.prompt, `diligence:${runId}:${step.id}`, step.id, runId);
+      const key = await this.#showStep(request, step, conversation.id).catch((cause) => {
+        log("thread.step-failed", { runId, step: step.id, message: String(cause) });
+        return undefined;
+      });
+      const submit = (content: string, requestId: string) => this.#submit(conversation, content, requestId, step.id, runId, key);
+      await submit(step.prompt, `diligence:${runId}:${step.id}`);
       let missing = await this.#missingOutputs(runId, request, step.outputs);
       if (missing.length) {
         // A replaced sandbox can lose files written since the last capture; the conversation still has the work.
         log("step.recovering", { runId, step: step.id, missing });
-        await this.#submit(conversation, `These required files are missing from the workspace: ${missing.map((file) => `\`${file}\``).join(", ")}. The workspace may have been replaced. Recreate each file now from your work in this conversation, then reply only: recovered.`,
-          `diligence:${runId}:${step.id}:recover`, step.id, runId);
+        await submit(`These required files are missing from the workspace: ${missing.map((file) => `\`${file}\``).join(", ")}. The workspace may have been replaced. Recreate each file now from your work in this conversation, then reply only: recovered.`,
+          `diligence:${runId}:${step.id}:recover`);
         missing = await this.#missingOutputs(runId, request, step.outputs);
       }
       if (missing.length) throw new Error(`Step finished without its outputs: ${missing.join(", ")}`);
@@ -314,7 +559,7 @@ export class DiligenceRunner {
             .replaceAll("{findings}", repairable.map((finding) => `- ${finding}`).join("\n"))
             .replaceAll("{file}", step.gate.file)
             .replaceAll("{sectionId}", step.gate.sectionId);
-          await this.#submit(conversation, prompt, `diligence:${runId}:${step.id}:repair`, step.id, runId);
+          await submit(prompt, `diligence:${runId}:${step.id}:repair`);
           gate = await this.#runGate(runId, request, step.gate);
         }
       }
@@ -332,6 +577,7 @@ export class DiligenceRunner {
       });
       this.#event(runId, "step", { skill: step.id, state: "done", turns: usage.turns, cost_usd: usage.costUsd, duration_seconds: await this.#duration(runId, step.id) });
       log("step.done", { runId, step: step.id, costUsd: usage.costUsd, turns: usage.turns, gateFindings: gate?.findings.length ?? 0 });
+      await this.#stepSettled(runId, step, "completed");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       await this.#update(runId, (draft) => {
@@ -342,6 +588,7 @@ export class DiligenceRunner {
       this.#event(runId, "step", { skill: step.id, state: "failed" });
       this.#event(runId, "log", { line: `${step.id} failed: ${message.slice(0, 300)}` });
       log("step.failed", { runId, step: step.id, message: message.slice(0, 500) });
+      await this.#stepSettled(runId, step, "failed").catch(() => undefined);
     } finally {
       this.#wakers.get(runId)?.();
     }
@@ -370,13 +617,16 @@ export class DiligenceRunner {
     return conversation;
   }
 
-  async #submit(conversation: Conversation, content: string, requestId: string, stepId: string, runId: string) {
+  async #submit(conversation: Conversation, content: string, requestId: string, stepId: string, runId: string, key?: string) {
     const stream = await watchEvents(this.#harness, conversation.id, ctx);
     stream.start(async (events) => {
       for (const event of events) this.#activity(runId, stepId, event);
     });
     try {
-      const submission = await conversation.submit({ type: "input", content, requestId }, ctx);
+      // Shown in the step's thread when the run has one.
+      const submission = key
+        ? await this.#engine.runChildTurn(key, content, requestId)
+        : await conversation.submit({ type: "input", content, requestId }, ctx);
       const settled = await submission.wait(ctx);
       if (settled.status !== "done") throw new Error(`Step ${stepId} ended without an answer (${settled.reason}).`);
     } finally {
@@ -545,6 +795,7 @@ export class DiligenceRunner {
     });
     log("run.finished", { runId: request.runId, status });
     const state = await this.#state(request.runId);
+    if (state) await this.#closeThread(request, state).catch((cause) => log("thread.close-failed", { runId: request.runId, message: String(cause) }));
     if (state) await this.#deliver(request, state);
   }
 

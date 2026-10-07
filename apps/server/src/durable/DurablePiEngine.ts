@@ -75,8 +75,18 @@ import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 const PROVIDER = "pi" as const;
 const ctx = BACKGROUND_CONTEXT;
 
+/**
+ * Where a conversation's events go when it is a child of a Synara thread (a diligence step): its
+ * events are published on the parent thread with provider refs that make Synara show them in the
+ * child thread `subagent:<parentThreadId>:<providerThreadId>`.
+ */
+interface ThreadRoute {
+  readonly parentThreadId: string;
+  readonly providerThreadId: string;
+}
+
 /** threadId → conversation, kept in the Harness so a restart finds running work. */
-const ThreadIndex = defineDoc<{ threads: Record<string, { conversationId: number; generation: string; cwd: string }> }>({
+const ThreadIndex = defineDoc<{ threads: Record<string, { conversationId: number; generation: string; cwd: string; route?: ThreadRoute }> }>({
   kind: "synara.thread-index",
   version: 1,
   scope: "session",
@@ -122,6 +132,10 @@ interface ThreadState {
   stopped: boolean;
   lastUsage?: ThreadTokenUsageSnapshot | undefined;
   turnStartedAt?: number | undefined;
+  /** Set for a child conversation shown under another thread. */
+  route?: ThreadRoute | undefined;
+  /** A turn driven from outside the conversation (a diligence run on its run thread). */
+  externalTurnId?: TurnId | undefined;
 }
 
 export interface DurableStartInput {
@@ -265,6 +279,7 @@ export class DurablePiEngine {
     for (const [threadId, entry] of Object.entries(index.threads)) {
       const conversationId = entry.conversationId as ConversationId;
       const state = this.#state(threadId, conversationId, entry.generation, entry.cwd);
+      if (entry.route) state.route = entry.route;
       const inputs = (await this.#watch(state))?.run?.inputs ?? [];
       if (inputs.length > 0) {
         // Restart during a turn: re-attach to the running work before the scheduler continues it.
@@ -555,12 +570,98 @@ export class DurablePiEngine {
   }
 
   listSessions(): ProviderSession[] {
-    return [...this.#threads.values()].filter((state) => !state.stopped).map((state) => this.#session(state));
+    return [...this.#threads.values()].filter((state) => !state.stopped && !state.route).map((state) => this.#session(state));
   }
 
   hasSession(threadId: string) {
     const state = this.#threads.get(threadId);
-    return state !== undefined && !state.stopped;
+    return state !== undefined && !state.stopped && !state.route;
+  }
+
+  generationOf(threadId: string) {
+    return this.#threads.get(threadId)?.lifecycleGeneration;
+  }
+
+  // ------------------------------------------------- child and external turns
+
+  /** Shows an existing conversation (a diligence step) as a child thread of `route.parentThreadId`. */
+  async attachChild(input: { readonly key: string; readonly conversationId: ConversationId; readonly cwd: string; readonly route: ThreadRoute; readonly model?: string | undefined }) {
+    const existing = this.#threads.get(input.key);
+    if (existing) return;
+    const state = this.#state(input.key, input.conversationId, this.#threads.get(input.route.parentThreadId)?.lifecycleGeneration ?? "child", input.cwd);
+    state.route = input.route;
+    if (input.model) state.model = input.model;
+    await this.#harness.commit(async (tx) => {
+      const index = await tx.doc(ThreadIndex);
+      index.threads[input.key] = { conversationId: input.conversationId as number, generation: state.lifecycleGeneration, cwd: input.cwd, route: input.route };
+    }, ctx);
+    await this.#watch(state);
+  }
+
+  /**
+   * Runs one request on a child conversation as a visible turn. The request ID makes it idempotent:
+   * after a restart the same request re-attaches to its running submission.
+   */
+  async runChildTurn(key: string, content: string, requestId: string) {
+    const state = this.#require(key);
+    const turnId = TurnId.makeUnsafe(requestId);
+    // An analyst's follow-up runs to completion first.
+    while (state.activeTurnId && state.activeTurnId !== turnId) await new Promise((resolve) => setTimeout(resolve, 500));
+    const conversation = await this.#conversation(state);
+    if (state.activeTurnId !== turnId) {
+      state.activeTurnId = turnId;
+      state.turnStartedAt = Date.now();
+      state.turns.push(turnId);
+      await this.#watch(state);
+      this.#emitTurnStarted(state);
+    }
+    const submission = await conversation.submit({ type: "input", content, requestId }, ctx);
+    this.#settleWhenDone(state, turnId, submission.id);
+    return submission;
+  }
+
+  /** Opens a turn on a thread whose work happens elsewhere (the diligence run thread). */
+  beginExternalTurn(threadId: string, turnId: string, announce: boolean) {
+    const state = this.#require(threadId);
+    const id = TurnId.makeUnsafe(turnId);
+    state.externalTurnId = id;
+    if (state.activeTurnId === id) return;
+    state.activeTurnId = id;
+    state.turns.push(id);
+    if (announce) this.#emitTurnStarted(state);
+  }
+
+  /** Publishes an event in the thread's external turn. */
+  emitExternal(threadId: string, event: { type: string; payload: unknown; itemId?: string; providerRefs?: unknown }) {
+    const state = this.#require(threadId);
+    this.#emit(state, { ...event, itemId: event.itemId === undefined ? undefined : RuntimeItemId.makeUnsafe(event.itemId), turnId: state.externalTurnId ?? null });
+  }
+
+  /** Posts a complete assistant message in the thread's external turn. */
+  emitExternalMessage(threadId: string, id: string, text: string) {
+    const itemId = `external-message-${id}`;
+    this.emitExternal(threadId, { type: "item.started", itemId, payload: { itemType: "assistant_message", status: "inProgress", title: "Assistant" } });
+    this.emitExternal(threadId, { type: "content.delta", itemId, payload: { streamKind: "assistant_text", delta: text, contentIndex: 0 } });
+    this.emitExternal(threadId, { type: "item.completed", itemId, payload: { itemType: "assistant_message", status: "completed", title: "Assistant" } });
+  }
+
+  endExternalTurn(threadId: string, status: "completed" | "interrupted" | "failed", errorMessage?: string) {
+    const state = this.#threads.get(threadId);
+    const turnId = state?.externalTurnId;
+    if (!state || !turnId) return;
+    state.externalTurnId = undefined;
+    if (state.activeTurnId === turnId) state.activeTurnId = undefined;
+    this.#emit(state, {
+      type: "turn.completed",
+      turnId,
+      payload: status === "completed" ? { state: "completed", stopReason: null }
+        : status === "interrupted" ? { state: "interrupted", stopReason: "aborted", errorMessage: errorMessage ?? "Stopped." }
+          : { state: "failed", stopReason: "error", errorMessage: errorMessage ?? "Failed." },
+    });
+  }
+
+  hasExternalTurn(threadId: string) {
+    return this.#threads.get(threadId)?.externalTurnId !== undefined;
   }
 
   readThread(threadId: string) {
@@ -646,16 +747,23 @@ export class DurablePiEngine {
     this.#gatewayExtensionInstalled = true;
   }
 
-  #emit(state: ThreadState, event: { type: string; payload: unknown; itemId?: RuntimeItemId; providerRefs?: unknown; turnId?: TurnId | null }) {
-    const { turnId, ...rest } = event;
+  #emit(state: ThreadState, event: { type: string; payload: unknown; itemId?: RuntimeItemId | undefined; providerRefs?: unknown; turnId?: TurnId | null }) {
+    const { turnId, itemId, providerRefs, ...rest } = event;
     const resolvedTurn = turnId === null ? undefined : (turnId ?? state.activeTurnId);
+    const route = state.route;
+    const parent = route ? this.#threads.get(route.parentThreadId) : undefined;
+    const refs = route
+      ? { ...(providerRefs as object | undefined), providerThreadId: route.providerThreadId, providerParentThreadId: route.parentThreadId }
+      : providerRefs;
     this.#options.publish({
       eventId: EventId.makeUnsafe(crypto.randomUUID()),
       provider: PROVIDER,
-      threadId: ThreadId.makeUnsafe(state.threadId),
+      threadId: ThreadId.makeUnsafe(route ? route.parentThreadId : state.threadId),
       createdAt: new Date().toISOString(),
-      lifecycleGeneration: state.lifecycleGeneration,
+      lifecycleGeneration: parent?.lifecycleGeneration ?? state.lifecycleGeneration,
       ...(resolvedTurn ? { turnId: resolvedTurn } : {}),
+      ...(itemId ? { itemId } : {}),
+      ...(refs ? { providerRefs: refs } : {}),
       ...rest,
       raw: { source: "pi.sdk.event", messageType: "pi.durable", payload: null },
     } as unknown as ProviderRuntimeEvent);

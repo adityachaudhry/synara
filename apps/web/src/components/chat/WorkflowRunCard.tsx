@@ -403,17 +403,19 @@ export function WorkflowRunCard({
             </>
           ) : (
             <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
-                onClick={onPause}
-                aria-label="Pause workflow"
-                title="Pause workflow (resume replays completed agents from cache)"
-              >
-                <PauseIcon className="size-3" />
-              </Button>
+              {workflowRun.durable ? null : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
+                  onClick={onPause}
+                  aria-label="Pause workflow"
+                  title="Pause workflow (resume replays completed agents from cache)"
+                >
+                  <PauseIcon className="size-3" />
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"

@@ -57,6 +57,9 @@ export interface WorkflowRunState {
   pausedByUser: boolean;
   // Persisted launch identifiers; both present means the run can be resumed.
   runId: string | null;
+  // Run by the controller rather than a CLI script (diligence): no pause/resume, and the
+  // settled card stays until dismissed.
+  durable: boolean;
   scriptPath: string | null;
   // Null when no phase information was parsed: render the flat agent list.
   phases: WorkflowPhaseSummary[] | null;
@@ -464,7 +467,7 @@ export function deriveWorkflowRunState(input: {
   // The panel tracks the latest workflow run. Settled runs stay visible while
   // they can still be resumed (or were paused by the user) until dismissed.
   const workflow = [...snapshots.values()].findLast(
-    (snapshot) => snapshot.taskType === "local_workflow",
+    (snapshot) => snapshot.taskType === "local_workflow" || snapshot.taskType === "durable_workflow",
   );
   if (!workflow) {
     return null;
@@ -473,7 +476,8 @@ export function deriveWorkflowRunState(input: {
   const pausedByUser =
     workflow.status === "stopped" && (input.pausedByUserTaskIds?.has(workflow.taskId) ?? false);
   const canResume = workflow.runId !== null && workflow.scriptPath !== null;
-  if (settled && (input.dismissedTaskIds?.has(workflow.taskId) || (!pausedByUser && !canResume))) {
+  const durable = workflow.taskType === "durable_workflow";
+  if (settled && (input.dismissedTaskIds?.has(workflow.taskId) || (!pausedByUser && !canResume && !durable))) {
     return null;
   }
 
@@ -790,6 +794,7 @@ export function deriveWorkflowRunState(input: {
     settled,
     pausedByUser,
     runId: workflow.runId,
+    durable,
     scriptPath: workflow.scriptPath,
     phases,
     runningCount: agents.filter((agent) => agent.statusKind === "running").length,

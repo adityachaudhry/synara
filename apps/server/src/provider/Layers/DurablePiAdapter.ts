@@ -20,7 +20,7 @@ import { Cause, Deferred, Effect, Exit, Layer, Option, PubSub, Queue, Scope, Str
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { DurablePiEngine, type DurableThreadTarget } from "../../durable/DurablePiEngine.ts";
-import { DiligenceRunner, setDiligenceRunner } from "../../durable/diligence.ts";
+import { DiligenceRunner, diligenceRunner, setDiligenceRunner } from "../../durable/diligence.ts";
 import type { SandboxRunner } from "../../durable/sandboxEnv.ts";
 import { setHeadlessSessionSource } from "../../providerWorker/headlessSessions.ts";
 import { ProviderWorkerProvisioningError } from "../../providerWorker/Errors";
@@ -292,6 +292,17 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       runner: sandboxRunner,
       release: (binding) => Effect.runPromise(provisioner.stop(binding).pipe(Effect.catch(() => Effect.void))),
     });
+    diligence.setThreads({
+      // The run thread is also a company chat; its sandbox is claimed when someone writes in it.
+      startThreadSession: async (threadId, repository) => {
+        await engine.startSession({
+          threadId: ThreadId.makeUnsafe(threadId),
+          lifecycleGeneration: newGeneration(),
+          cwd: `/workspace/repository/${repository.path}`,
+          modelSelection: { provider: "pi", model: "anthropic/claude-opus-5-5" },
+        });
+      },
+    });
     setDiligenceRunner(diligence);
     yield* Effect.promise(() => diligence.resume());
   }
@@ -382,6 +393,11 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
 
   const sendTurn: PiAdapterShape["sendTurn"] = (input) => withBarrier(input.threadId, Effect.gen(function* () {
     if (!engine.hasSession(input.threadId)) return yield* new ProviderAdapterSessionNotFoundError({ provider: "pi", threadId: input.threadId });
+    // A diligence run thread has no sandbox until someone chats in it.
+    if (!pendingClaims.has(input.threadId) && !(yield* currentBinding(input.threadId))) {
+      const repository = yield* Effect.promise(() => diligenceRunner()?.repositoryForThread(input.threadId) ?? Promise.resolve(undefined));
+      if (repository) void backgroundClaim(input.threadId, engine.generationOf(input.threadId) ?? newGeneration(), repository);
+    }
     let binding = yield* liveSandbox(input.threadId);
     let text = input.input;
     let repositoryUnavailable = false;
@@ -485,7 +501,23 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     prepareWorkspace,
     sendTurn,
     steerTurn,
-    interruptTurn: (threadId, turnId) => call("turn.interrupt", () => engine.interruptTurn(threadId, turnId)),
+    interruptTurn: (threadId, turnId, providerThreadId) => call("turn.interrupt", async () => {
+      // A diligence step thread stops its step; the run thread stops the run.
+      if (providerThreadId) return engine.interruptTurn(`subagent:${threadId}:${providerThreadId}`);
+      if (engine.hasExternalTurn(threadId) && (await diligenceRunner()?.cancelByThread(threadId))) return;
+      return engine.interruptTurn(threadId, turnId);
+    }),
+    steerSubagent: (threadId, providerThreadId, input) => call("subagent.steer", async () => {
+      const runner = diligenceRunner();
+      if (!runner) throw new Error("Durable diligence is not available on this controller.");
+      // Images reach the model directly; other files would need staging in the run sandbox.
+      const attachments = (input.attachments ?? []).filter((attachment) => attachment.type === "image");
+      await runner.steer(threadId, providerThreadId, { input: input.input, ...(attachments.length ? { attachments } : {}) });
+    }),
+    stopTask: (threadId, taskId) => call("task.stop", async () => {
+      if (taskId.startsWith("diligence-") && !taskId.includes(":")) await diligenceRunner()?.cancelByThread(threadId);
+      else if (taskId.startsWith("diligence-")) await engine.interruptTurn(`subagent:${threadId}:step:${taskId.slice(taskId.indexOf(":") + 1)}`);
+    }),
     respondToRequest: () => Effect.fail(adapterError("request.respond", "Pi has no approval requests.")),
     respondToUserInput: () => Effect.void,
     stopSession: release,

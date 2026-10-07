@@ -4,12 +4,16 @@
  */
 import { timingSafeEqual } from "node:crypto";
 
-import { Effect, Layer } from "effect";
+import { CommandId, ProjectId, ThreadId } from "@synara/contracts";
+import { Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { readMcpJsonBody } from "../agentGateway/httpRoute.ts";
 import { extractBearerToken } from "../agentGateway/bearerToken.ts";
-import { diligenceRunner, type DiligenceRequest } from "./diligence.ts";
+import { ExternalProjectResolver } from "../externalProjectResolver.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { diligenceRunner, diligenceThreadId, type DiligenceRequest } from "./diligence.ts";
 
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
@@ -31,6 +35,38 @@ const authorized = (header: string | undefined, host: string | undefined) => {
 
 const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
+const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Quick read", memo: "Investment memo" };
+
+/** The run's top-level thread in the company's project; the run works without it if this fails. */
+const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
+  const threadId = ThreadId.makeUnsafe(diligenceThreadId(plan.runId));
+  const snapshots = yield* ProjectionSnapshotQuery;
+  if (Option.isSome(yield* snapshots.getThreadShellById(threadId))) return threadId;
+  const resolver = yield* ExternalProjectResolver;
+  const projectId: ProjectId = yield* resolver.resolveExternalProject({
+    externalKey: `glasswing-company:${plan.company.id}`,
+    name: plan.company.name,
+    repositoryBinding: plan.repository,
+  });
+  const engine = yield* OrchestrationEngineService;
+  const now = new Date();
+  yield* engine.dispatch({
+    type: "thread.create",
+    commandId: CommandId.makeUnsafe(`diligence-thread-${plan.runId}`),
+    threadId,
+    projectId,
+    title: `${RUN_TITLES[plan.mode] ?? "Diligence"} · ${now.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" })}`,
+    modelSelection: { provider: "pi", model: "anthropic/claude-opus-5-5" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    createdAt: now.toISOString(),
+  } as never);
+  return threadId;
+});
+
 const runIdFrom = (url: string, suffix = "") => {
   const match = new URL(url, "http://local").pathname.match(new RegExp(`^/internal/diligence/runs/([0-9a-fA-F-]{8,64})${suffix}$`, "u"));
   return match?.[1];
@@ -47,7 +83,13 @@ const acceptRoute = HttpRouter.add("POST", "/internal/diligence/runs", Effect.ge
   if (!plan?.runId || !plan.company?.slug || !plan.repository?.path || !Array.isArray(plan.plan?.steps) || !plan.plan.steps.length) {
     return json({ error: "runId, company, repository and plan.steps are required" }, 400);
   }
-  const result = yield* Effect.tryPromise(() => runner.accept(plan)).pipe(
+  const threadId = yield* ensureRunThread(plan).pipe(
+    Effect.catch((cause) => Effect.sync(() => {
+      console.warn(`[diligence] ${JSON.stringify({ event: "thread.create-failed", runId: plan.runId, message: String(cause) })}`);
+      return undefined;
+    })),
+  );
+  const result = yield* Effect.tryPromise(() => runner.accept(plan, threadId ? { threadId } : {})).pipe(
     Effect.map((accepted) => json(accepted, 202)),
     Effect.catch((cause) => Effect.succeed(json({ error: String(cause) }, 500))),
   );

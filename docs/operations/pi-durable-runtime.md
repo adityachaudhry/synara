@@ -9,6 +9,10 @@ Status: live on `glasswingos/dev` since 7 October 2026. `glasswingos/main` (prod
 - **Files survive replacement.** The provisioner captures each thread's outbox (`/workspace/.synara/outbox/`) and checkout drafts to controller stores every minute, at turn end and before release, and restores them into a replacement sandbox. "Save to company" promotes selected files through Glasswing's Git writer.
 - **Turns start before the sandbox.** Sandbox claims run in the background; a tool call waits for the claim.
 
+## Diligence run threads
+
+Each accepted run gets a top-level thread `diligence-run-<runId>` in the company's project (created by the accept route through `ExternalProjectResolver` + `thread.create`). The run holds one long turn on that thread: an opening note, a `durable_workflow` task that the workflow card renders (phases, one row per step), and a closing summary. Each step's conversation is attached to the engine as a child (`subagent:<runThread>:step:<stepId>`): its events are published on the run thread with `providerRefs.providerThreadId = step:<stepId>`, so ingestion shows them in the nested child thread, and a `collab_agent_tool_call` item names it and links the card row. A message in a step thread reaches `steerSubagent` → `DiligenceRunner.steer` (steers a running step, or starts a follow-up on a finished one, reclaiming the run sandbox; released after 30 quiet minutes). Stop on the run thread cancels the run; stop on a step aborts that step. The run thread is also an ordinary company chat; its sandbox is claimed when someone writes in it. Costs are never shown.
+
 ## Modules (`apps/server/src/`)
 
 | Module | Role |
