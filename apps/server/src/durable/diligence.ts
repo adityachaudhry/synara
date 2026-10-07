@@ -327,15 +327,21 @@ export class DiligenceRunner {
     });
   }
 
-  async #closeThread(request: DiligenceRequest, state: RunState) {
+  async #closeThread(request: DiligenceRequest, state: RunState, recorded: string | undefined) {
     const threadId = this.#threadOf(state);
     if (!threadId || !this.#engine.hasExternalTurn(threadId)) return;
     const steps = request.plan.steps;
     const failed = steps.filter((step) => state.steps[step.id]?.status === "failed");
     const skipped = steps.filter((step) => state.steps[step.id]?.status === "skipped");
     const report = request.reportUrl ? ` [Open the report](${request.reportUrl}).` : "";
+    const completed = steps.length === 1 ? "the step completed" : `all ${steps.length} steps completed`;
+    const published = recorded === "succeeded"
+      ? ` The report is published.${report}`
+      : recorded === undefined
+        ? " Glasswing has not received the results yet; the report will update once it does."
+        : " Glasswing could not publish the report; the run's status in Glasswing has the details.";
     const text = state.status === "succeeded"
-      ? `Diligence finished: ${steps.length === 1 ? "the step completed" : `all ${steps.length} steps completed`}. Glasswing is publishing the report now.${report} ${steps.length === 1 ? "The step thread keeps its agent's research, so you can ask it a follow-up." : "Each step thread keeps its agent's research, so you can ask any of them a follow-up."}`
+      ? `Diligence finished: ${completed}.${published} ${steps.length === 1 ? "The step thread keeps its agent's research, so you can ask it a follow-up." : "Each step thread keeps its agent's research, so you can ask any of them a follow-up."}`
       : state.status === "canceled"
         ? "Diligence was stopped. Steps that finished keep their threads and research."
         : `Diligence finished with problems. ${failed.map((step) => `${stepLabel(step)} failed: ${(state.steps[step.id]?.error ?? "unknown error").slice(0, 200)}`).join(" ")}` +
@@ -410,7 +416,13 @@ export class DiligenceRunner {
   }
 
   async cancel(runId: string) {
+    const first = (await this.#state(runId))?.cancelRequested !== true;
     await this.#update(runId, (state) => { state.cancelRequested = true; });
+    if (first) {
+      // Glasswing stops showing the run as live now; completion follows once the steps wind down.
+      this.#event(runId, "status", { state: "canceling" });
+      await this.#flushEvents();
+    }
     const state = await this.#state(runId);
     for (const step of Object.values(state?.steps ?? {})) {
       if (step.status === "running" && step.conversationId !== undefined) {
@@ -533,7 +545,10 @@ export class DiligenceRunner {
       });
     }
     const final = await this.#state(runId);
-    if (final && final.status !== "running" && !final.delivered) await this.#deliver(request, final);
+    if (final && final.status !== "running" && !final.delivered) {
+      await this.#closeThread(request, final, await this.#deliver(request, final))
+        .catch((cause) => log("thread.close-failed", { runId, message: String(cause) }));
+    }
   }
 
   async #runStep(request: DiligenceRequest, step: DiligenceStep) {
@@ -806,12 +821,16 @@ export class DiligenceRunner {
     });
     log("run.finished", { runId: request.runId, status });
     const state = await this.#state(request.runId);
-    if (state) await this.#closeThread(request, state).catch((cause) => log("thread.close-failed", { runId: request.runId, message: String(cause) }));
-    if (state) await this.#deliver(request, state);
+    // The thread's closing note follows Glasswing's verdict, so "done" there means the
+    // report is published (and the workspace banners clear at the same time).
+    if (state) await this.#closeThread(request, state, await this.#deliver(request, state))
+      .catch((cause) => log("thread.close-failed", { runId: request.runId, message: String(cause) }));
   }
 
-  async #deliver(request: DiligenceRequest, state: RunState) {
+  /** Hands the run to Glasswing; returns the status Glasswing recorded, if it accepted it. */
+  async #deliver(request: DiligenceRequest, state: RunState): Promise<string | undefined> {
     const runId = request.runId;
+    let recorded: string | undefined;
     await this.#flushEvents();
     const steps = request.plan.steps.map((step) => {
       const record = state.steps[step.id] ?? { status: "pending" as const };
@@ -848,7 +867,7 @@ export class DiligenceRunner {
     for (let attempt = 0; attempt < 10; attempt++) {
       try {
         // Completion publishes to Git and S3 and can take minutes; a repeat gets 409 until it is done.
-        await completeRun(runId, body);
+        recorded = (await completeRun(runId, body)) ?? state.status;
         await this.#harness.commit(async (tx) => {
           ((await tx.doc(StateDoc, runId, null)) as unknown as RunState).delivered = true;
           delete (await tx.doc(ActiveRuns)).runs[runId];
@@ -867,6 +886,7 @@ export class DiligenceRunner {
     }
     if (state.sandbox) await this.#sandboxes.release(state.sandbox).catch(() => undefined);
     this.#targets.delete(runId);
+    return recorded;
   }
 
   // ---------------------------------------------------------------- events
@@ -900,6 +920,8 @@ async function completeRun(runId: string, body: unknown) {
     signal: AbortSignal.timeout(600_000),
   });
   if (!response.ok) throw new Error(`Completion failed with HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  const payload = (await response.json().catch(() => null)) as { status?: unknown } | null;
+  return typeof payload?.status === "string" ? payload.status : undefined;
 }
 
 let current: DiligenceRunner | undefined;
