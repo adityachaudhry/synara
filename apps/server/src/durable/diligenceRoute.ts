@@ -13,7 +13,7 @@ import { extractBearerToken } from "../agentGateway/bearerToken.ts";
 import { ExternalProjectResolver } from "../externalProjectResolver.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { diligenceRunner, diligenceThreadId, stepLabel, type DiligenceRequest } from "./diligence.ts";
+import { diligenceRunner, diligenceThreadId, type DiligenceRequest } from "./diligence.ts";
 
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
@@ -40,11 +40,10 @@ const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Qui
 const runRequestText = (plan: DiligenceRequest) => {
   const company = plan.company.name;
   const by = requesterName(plan.requestedBy?.label);
-  const started = by ? `, started by ${by}` : "";
-  if (plan.mode === "quick") return `Quick read on ${company}${started}: does it earn a full diligence?`;
-  if (plan.mode === "memo") return `Investment memo for ${company}${started}, written from its latest diligence.`;
-  const steps = plan.plan.steps.map((step) => stepLabel(step).toLowerCase());
-  return `Full diligence on ${company}${started}: ${steps.join(", ")}.`;
+  const forWhom = by ? ` for ${by}` : "";
+  if (plan.mode === "quick") return `Quick read on ${company} is running${forWhom}. About 4 minutes; a link to the read will be posted here.`;
+  if (plan.mode === "memo") return `Investment memo for ${company} is being written${forWhom}. About 3 minutes.`;
+  return `Full diligence on ${company} is running${forWhom}. About 20 minutes; the summary and report link will be posted here.`;
 };
 
 /** "Aditya Chaudhry" stays; "aditya@glasswing.vc" becomes "Aditya". */
