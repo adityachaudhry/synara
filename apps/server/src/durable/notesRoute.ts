@@ -118,4 +118,26 @@ const messagesRoute = HttpRouter.add("GET", "/internal/notes/:noteId/messages", 
   });
 }));
 
-export const notesRouteLayer = Layer.mergeAll(notesRoute, messagesRoute);
+/** Archive a note thread Glasswing has superseded (re-posted in a newer form). Idempotent. */
+const archiveRoute = HttpRouter.add("POST", "/internal/notes/:noteId/archive", Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
+  const noteId = new URL(request.url, "http://local").pathname.match(/^\/internal\/notes\/([^/]+)\/archive$/u)?.[1];
+  if (!noteId || !NOTE_ID.test(noteId)) return json({ error: "invalid note id" }, 400);
+  const threadId = ThreadId.makeUnsafe(noteThreadId(noteId));
+  const snapshots = yield* ProjectionSnapshotQuery;
+  const shell = yield* snapshots.getThreadShellById(threadId);
+  if (Option.isNone(shell)) return json({ archived: false });
+  if (shell.value.archivedAt) return json({ archived: true });
+  const engine = yield* OrchestrationEngineService;
+  return yield* engine.dispatch({
+    type: "thread.archive",
+    commandId: CommandId.makeUnsafe(`note-archive-${noteId}`),
+    threadId,
+  } as never).pipe(
+    Effect.map(() => json({ archived: true })),
+    Effect.catch((cause) => Effect.succeed(json({ error: String(cause) }, 500))),
+  );
+}));
+
+export const notesRouteLayer = Layer.mergeAll(notesRoute, messagesRoute, archiveRoute);
