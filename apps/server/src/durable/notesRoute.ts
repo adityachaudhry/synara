@@ -53,14 +53,16 @@ const postNote = (note: NoteRequest) => Effect.gen(function* () {
     worktreePath: null,
     createdAt: at,
   } as never);
-  // The note is Glasswing speaking; a reply continues the thread with the company's agent.
+  // The note is the thread's starter, authored by Glasswing. The feed lists a thread by its
+  // first user-role message (as with a diligence run's request), so it is imported as one;
+  // importing does not start an agent turn. A reply continues the thread with the company's agent.
   yield* engine.dispatch({
     type: "thread.messages.import",
     commandId: CommandId.makeUnsafe(`note-message-${note.noteId}`),
     threadId,
     messages: [{
       messageId: `note-${note.noteId}`,
-      role: "assistant",
+      role: "user",
       text: note.text,
       author: { subject: "glasswing:note", label: "Glasswing" },
       createdAt: at,
