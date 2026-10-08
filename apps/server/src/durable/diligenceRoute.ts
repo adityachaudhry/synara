@@ -23,7 +23,7 @@ const privateHost = (host: string | undefined) => {
   return name.endsWith(".railway.internal") || name === "localhost" || name === "127.0.0.1" || name === "[::1]";
 };
 
-const authorized = (header: string | undefined, host: string | undefined) => {
+export const authorized = (header: string | undefined, host: string | undefined) => {
   if (!privateHost(host)) return false;
   const expected = process.env.GLASSWING_ARTIFACT_SERVICE_TOKEN?.trim();
   const token = extractBearerToken(header);
@@ -33,7 +33,7 @@ const authorized = (header: string | undefined, host: string | undefined) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
+export const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
 const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Quick read", memo: "Investment memo" };
 /** The run thread's opening request, as the analyst would put it; the feed shows it. */

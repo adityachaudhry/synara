@@ -1,0 +1,92 @@
+/**
+ * Internal route for Glasswing notes: a message from Glasswing posted as its own thread
+ * in a company's workspace feed (e.g. what the partner meeting said about the company).
+ * Same private-network + service-token guard as the diligence routes. Idempotent on noteId.
+ */
+import { CommandId, ProjectId, ThreadId } from "@synara/contracts";
+import { Effect, Option } from "effect";
+import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+
+import { readMcpJsonBody } from "../agentGateway/httpRoute.ts";
+import { ExternalProjectResolver } from "../externalProjectResolver.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import type { DiligenceRequest } from "./diligence.ts";
+import { authorized, json } from "./diligenceRoute.ts";
+
+interface NoteRequest {
+  readonly noteId: string;
+  readonly company: { readonly id: string; readonly slug: string; readonly name: string };
+  readonly repository: DiligenceRequest["repository"];
+  readonly title: string;
+  readonly text: string;
+  readonly createdAt?: string;
+}
+
+const NOTE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,120}$/u;
+
+export const noteThreadId = (noteId: string) => `glasswing-note-${noteId}`;
+
+const postNote = (note: NoteRequest) => Effect.gen(function* () {
+  const threadId = ThreadId.makeUnsafe(noteThreadId(note.noteId));
+  const snapshots = yield* ProjectionSnapshotQuery;
+  if (Option.isSome(yield* snapshots.getThreadShellById(threadId))) return threadId;
+  const resolver = yield* ExternalProjectResolver;
+  const projectId: ProjectId = yield* resolver.resolveExternalProject({
+    externalKey: `glasswing-company:${note.company.id}`,
+    name: note.company.name,
+    repositoryBinding: note.repository,
+  });
+  const engine = yield* OrchestrationEngineService;
+  const at = note.createdAt && !Number.isNaN(Date.parse(note.createdAt)) ? note.createdAt : new Date().toISOString();
+  yield* engine.dispatch({
+    type: "thread.create",
+    commandId: CommandId.makeUnsafe(`note-thread-${note.noteId}`),
+    threadId,
+    projectId,
+    title: note.title,
+    modelSelection: { provider: "pi", model: "anthropic/claude-opus-5-5" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    createdAt: at,
+  } as never);
+  // The note is Glasswing speaking; a reply continues the thread with the company's agent.
+  yield* engine.dispatch({
+    type: "thread.messages.import",
+    commandId: CommandId.makeUnsafe(`note-message-${note.noteId}`),
+    threadId,
+    messages: [{
+      messageId: `note-${note.noteId}`,
+      role: "assistant",
+      text: note.text,
+      author: { subject: "glasswing:note", label: "Glasswing" },
+      createdAt: at,
+      updatedAt: at,
+    }],
+    createdAt: at,
+  } as never);
+  return threadId;
+});
+
+const notesRoute = HttpRouter.add("POST", "/internal/notes", Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
+  const body = yield* readMcpJsonBody(request, 256 * 1024);
+  if (body.kind !== "ok") return json({ error: body.kind === "too-large" ? "note too large" : "invalid JSON" }, body.kind === "too-large" ? 413 : 400);
+  const note = body.body as NoteRequest;
+  if (!note?.noteId || !NOTE_ID.test(note.noteId) || !note.company?.id || !note.repository?.path || !note.title?.trim() || !note.text?.trim()) {
+    return json({ error: "noteId, company, repository, title and text are required" }, 400);
+  }
+  return yield* postNote(note).pipe(
+    Effect.map((threadId) => json({ threadId }, 201)),
+    Effect.catch((cause) => Effect.sync(() => {
+      console.warn(`[notes] ${JSON.stringify({ event: "note.post-failed", noteId: note.noteId, message: String(cause) })}`);
+      return json({ error: String(cause) }, 500);
+    })),
+  );
+}));
+
+export const notesRouteLayer = notesRoute;
