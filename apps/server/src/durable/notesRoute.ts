@@ -19,6 +19,8 @@ interface NoteRequest {
   readonly company: { readonly id: string; readonly slug: string; readonly name: string };
   readonly repository: DiligenceRequest["repository"];
   readonly title: string;
+  /** The feed starter (a short line); `text` then follows as Glasswing's reply. */
+  readonly starter?: string;
   readonly text: string;
   readonly createdAt?: string;
 }
@@ -53,21 +55,23 @@ const postNote = (note: NoteRequest) => Effect.gen(function* () {
     worktreePath: null,
     createdAt: at,
   } as never);
-  // The note is the thread's starter, authored by Glasswing. The feed lists a thread by its
-  // first user-role message (as with a diligence run's request), so it is imported as one;
-  // importing does not start an agent turn. A reply continues the thread with the company's agent.
+  // The feed lists a thread by its first user-role message (as with a diligence run's
+  // request), so the starter is imported as one, authored by Glasswing; the note's content
+  // follows as Glasswing's reply. Importing starts no agent turn; a person's reply continues
+  // the thread with the company's agent.
+  const author = { subject: "glasswing:note", label: "Glasswing" };
+  const starter = note.starter?.trim();
+  const later = new Date(Date.parse(at) + 1000).toISOString();
   yield* engine.dispatch({
     type: "thread.messages.import",
     commandId: CommandId.makeUnsafe(`note-message-${note.noteId}`),
     threadId,
-    messages: [{
-      messageId: `note-${note.noteId}`,
-      role: "user",
-      text: note.text,
-      author: { subject: "glasswing:note", label: "Glasswing" },
-      createdAt: at,
-      updatedAt: at,
-    }],
+    messages: starter
+      ? [
+          { messageId: `note-${note.noteId}`, role: "user", text: starter, author, createdAt: at, updatedAt: at },
+          { messageId: `note-${note.noteId}-body`, role: "assistant", text: note.text, author, createdAt: later, updatedAt: later },
+        ]
+      : [{ messageId: `note-${note.noteId}`, role: "user", text: note.text, author, createdAt: at, updatedAt: at }],
     createdAt: at,
   } as never);
   return threadId;
