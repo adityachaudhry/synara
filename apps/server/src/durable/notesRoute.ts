@@ -4,7 +4,7 @@
  * Same private-network + service-token guard as the diligence routes. Idempotent on noteId.
  */
 import { CommandId, ProjectId, ThreadId } from "@synara/contracts";
-import { Effect, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 
 import { readMcpJsonBody } from "../agentGateway/httpRoute.ts";
@@ -89,4 +89,27 @@ const notesRoute = HttpRouter.add("POST", "/internal/notes", Effect.gen(function
   );
 }));
 
-export const notesRouteLayer = notesRoute;
+/** The thread's messages, so Glasswing can fold the team's replies (corrections) into its record. */
+const messagesRoute = HttpRouter.add("GET", "/internal/notes/:noteId/messages", Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
+  const noteId = new URL(request.url, "http://local").pathname.match(/^\/internal\/notes\/([^/]+)\/messages$/u)?.[1];
+  if (!noteId || !NOTE_ID.test(noteId)) return json({ error: "unknown note" }, 404);
+  const snapshots = yield* ProjectionSnapshotQuery;
+  const thread = yield* snapshots.getThreadDetailForExportById(ThreadId.makeUnsafe(noteThreadId(noteId))).pipe(
+    Effect.catch(() => Effect.succeed(Option.none())),
+  );
+  if (Option.isNone(thread)) return json({ error: "unknown note" }, 404);
+  return json({
+    threadId: thread.value.id,
+    messages: thread.value.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      author: message.author ?? null,
+      createdAt: message.createdAt,
+    })),
+  });
+}));
+
+export const notesRouteLayer = Layer.mergeAll(notesRoute, messagesRoute);
