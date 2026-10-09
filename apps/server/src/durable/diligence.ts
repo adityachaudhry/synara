@@ -7,6 +7,8 @@
  * finished steps stay finished. Step outputs are kept in the Harness, so a lost sandbox is
  * rebuilt from the company revision plus those outputs.
  */
+import { createHash } from "node:crypto";
+
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   type AgentEvent,
@@ -26,7 +28,7 @@ import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import type { ProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBinding";
 import type { DurablePiEngine, DurableThreadTarget } from "./DurablePiEngine.ts";
-import { shellQuote } from "./sandboxEnv.ts";
+import { shellQuote, type SandboxRunner } from "./sandboxEnv.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const RUN_ROOT = "/workspace/run";
@@ -58,10 +60,16 @@ export interface DiligenceRequest {
   readonly requestedBy?: { readonly subject: string; readonly label?: string };
   /** The Synara chat thread that started the run, if any; the feed shows the run below it. */
   readonly sourceThreadId?: string;
+  /** Selects the sandbox lifetime: `eval` for evaluation reruns; defaults to diligence. */
+  readonly purpose?: "diligence" | "eval";
   readonly plan: {
     readonly recipeVersion: string;
     readonly instructions: string;
+    /** Run-root files. Those under `memory/` (the context pack) are installed root-owned and read-only. */
     readonly files: Readonly<Record<string, string>>;
+    /** The context pack this plan carries, for sandbox labels and the completion report. */
+    readonly packId?: string;
+    readonly manifest?: { readonly pack_id?: string; readonly packId?: string };
     readonly steps: readonly DiligenceStep[];
     readonly maxConcurrency?: number;
     readonly repair: { readonly model: string; readonly thinking?: string; readonly prompt: string; readonly maxFindings?: number };
@@ -148,9 +156,15 @@ export const diligenceThreadId = (runId: string) => `diligence-run-${runId}`;
 const childKey = (threadId: string, stepId: string) => `subagent:${threadId}:step:${stepId}`;
 const FOLLOW_UP_RELEASE_MS = 30 * 60_000;
 
+export interface DiligenceSandboxMeta {
+  readonly purpose: "diligence" | "eval";
+  readonly runId: string;
+  readonly packId?: string | undefined;
+}
+
 export interface DiligenceSandboxes {
   /** Claims a fresh sandbox with the company checkout. */
-  claim(key: string, generation: string, repository: ProjectRepositoryBinding): Promise<ProviderWorkerRuntimeBinding>;
+  claim(key: string, generation: string, repository: ProjectRepositoryBinding, meta: DiligenceSandboxMeta): Promise<ProviderWorkerRuntimeBinding>;
   unavailable(binding: ProviderWorkerRuntimeBinding): Promise<boolean>;
   runner(binding: ProviderWorkerRuntimeBinding): DurableThreadTarget["runner"];
   release(binding: ProviderWorkerRuntimeBinding): Promise<void>;
@@ -162,6 +176,26 @@ const modelRef = (model: string) => {
 };
 
 const log = (event: string, detail: Record<string, unknown>) => console.info(`[diligence] ${JSON.stringify({ event, ...detail })}`);
+
+/** Sorted keys, no whitespace: Python `json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. */
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+};
+
+/** The sha256 of the canonical JSON of the plan as received; Glasswing checks it against the plan it stored. */
+export const planSha256 = (plan: DiligenceRequest["plan"]) => createHash("sha256").update(canonicalJson(plan), "utf8").digest("hex");
+
+const packIdOf = (request: DiligenceRequest) => {
+  const id = request.plan.packId ?? request.plan.manifest?.pack_id ?? request.plan.manifest?.packId;
+  return typeof id === "string" && /^[A-Za-z0-9_.:-]{1,128}$/u.test(id) ? id : undefined;
+};
+
+/** Plan files under this directory are the controller's memory: root-owned and read-only in the sandbox. */
+const MEMORY_DIR = "memory";
 
 export interface DiligenceThreads {
   /** Opens the run thread's own conversation, so analysts can also chat in it. */
@@ -717,7 +751,9 @@ export class DiligenceRunner {
       let binding = state?.sandbox;
       if (!binding || (await this.#sandboxes.unavailable(binding))) {
         const generation = (state?.sandboxGeneration ?? 0) + 1;
-        binding = await this.#sandboxes.claim(`diligence-${runId}`, `diligence-${runId}-${generation}`, request.repository);
+        binding = await this.#sandboxes.claim(`diligence-${runId}`, `diligence-${runId}-${generation}`, request.repository, {
+          purpose: request.purpose === "eval" ? "eval" : "diligence", runId, packId: packIdOf(request),
+        });
         await this.#prepare(request, binding, state?.outputs ?? {});
         const claimed = binding;
         await this.#update(runId, (draft) => {
@@ -748,23 +784,42 @@ export class DiligenceRunner {
       `find ${shellQuote(company)} -xdev \\( -type f -o -type d \\) -exec chmod a-w {} + 2>/dev/null || true`,
     ].join(" && "), { timeoutSeconds: 120 });
     if (setup.exitCode !== 0) throw new Error(`Run directory setup failed: ${setup.output.slice(-400)}`);
-    const files = { ...request.plan.files, ...outputs };
-    const entries = Object.entries(files);
-    for (let index = 0; index < entries.length; index += 6) {
-      await Promise.all(entries.slice(index, index + 6).map(async ([relative, content]) => {
-        if (relative.startsWith("/") || relative.split("/").includes("..")) throw new Error(`Invalid plan path: ${relative}`);
-        const target = `${RUN_ROOT}/${relative}`;
-        const dir = target.slice(0, target.lastIndexOf("/"));
+    const files = Object.entries({ ...request.plan.files, ...outputs }).map(([relative, content]) => {
+      if (relative.startsWith("/") || relative.split("/").includes("..")) throw new Error(`Invalid plan path: ${relative}`);
+      return { path: `${RUN_ROOT}/${relative}`, data: new TextEncoder().encode(content) };
+    });
+    await this.#uploadFiles(request.runId, runner, files);
+    const memory = `${RUN_ROOT}/${MEMORY_DIR}`;
+    const owned = await runner.run([
+      `{ chown -R ${AGENT_UID}:${AGENT_UID} ${RUN_ROOT}/outbox ${RUN_ROOT}/.observability ${RUN_ROOT}/.tmp ${RUN_ROOT}/.glasswing 2>/dev/null; chmod -R a+rX ${RUN_ROOT}; true; }`,
+      // Memory is the controller's: root-owned, files 0444 and directories 0555, so the agent reads it but cannot change it.
+      `if [ -d ${memory} ]; then chown -R 0:0 ${memory} && find ${memory} -type d -exec chmod 0555 {} + && find ${memory} -type f -exec chmod 0444 {} +; fi`,
+      // A root-owned sticky run root: the agent still creates its own entries (outbox/ is its own), but cannot
+      // rename or remove root-owned ones, so memory/ cannot be swapped for a writable copy.
+      `chown 0:0 ${RUN_ROOT} && chmod 1777 ${RUN_ROOT}`,
+      `{ [ ! -d ${memory} ] || [ "$(stat -c '%u %a' ${memory})" = "0 555" ]; }`,
+    ].join(" && "), { timeoutSeconds: 60 });
+    if (owned.exitCode !== 0) throw new Error(`Run directory ownership failed: ${owned.output.slice(-400)}`);
+  }
+
+  /** One bulk transfer where the runtime has it; otherwise (or if it fails) one upload per file, as before. */
+  async #uploadFiles(runId: string, runner: SandboxRunner, files: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array }>) {
+    if (runner.uploadMany) {
+      try {
+        await runner.uploadMany(files.map((file) => ({ ...file, mode: 0o644 })));
+        return;
+      } catch (cause) {
+        log("run.bulk-upload-failed", { runId, files: files.length, message: String(cause).slice(0, 300) });
+      }
+    }
+    for (let index = 0; index < files.length; index += 6) {
+      await Promise.all(files.slice(index, index + 6).map(async (file) => {
+        const dir = file.path.slice(0, file.path.lastIndexOf("/"));
         const made = await runner.run(`mkdir -p ${shellQuote(dir)}`, { timeoutSeconds: 30 });
         if (made.exitCode !== 0) throw new Error(`Could not create ${dir}`);
-        await runner.upload(target, new TextEncoder().encode(content));
+        await runner.upload(file.path, file.data);
       }));
     }
-    const owned = await runner.run(
-      `chown -R ${AGENT_UID}:${AGENT_UID} ${RUN_ROOT}/outbox ${RUN_ROOT}/.observability ${RUN_ROOT}/.tmp ${RUN_ROOT}/.glasswing 2>/dev/null; chmod -R a+rX ${RUN_ROOT}; chown ${AGENT_UID}:${AGENT_UID} ${RUN_ROOT}`,
-      { timeoutSeconds: 60 },
-    );
-    if (owned.exitCode !== 0) throw new Error(`Run directory ownership failed: ${owned.output.slice(-400)}`);
   }
 
   async #filesExist(runId: string, request: DiligenceRequest, files: readonly string[]) {
@@ -807,7 +862,20 @@ export class DiligenceRunner {
   async #readFiles(runId: string, request: DiligenceRequest, files: readonly string[]) {
     const target = await this.#target(request);
     const read: Record<string, string> = {};
-    for (const file of new Set(files)) {
+    const unique = [...new Set(files)];
+    if (target.runner.downloadMany) {
+      try {
+        const bytes = await target.runner.downloadMany(unique.map((file) => `${RUN_ROOT}/${file}`));
+        for (const file of unique) {
+          const data = bytes.get(`${RUN_ROOT}/${file}`);
+          if (data) read[file] = Buffer.from(data).toString("utf8");
+        }
+        return read;
+      } catch (cause) {
+        log("run.bulk-read-failed", { runId, files: unique.length, message: String(cause).slice(0, 300) });
+      }
+    }
+    for (const file of unique) {
       const result = await target.runner.run(`base64 -w0 ${shellQuote(`${RUN_ROOT}/${file}`)}`, { timeoutSeconds: 60 });
       if (result.exitCode === 0) read[file] = Buffer.from(result.output.trim(), "base64").toString("utf8");
     }
@@ -872,6 +940,8 @@ export class DiligenceRunner {
       costUsd: Math.round(steps.reduce((total, { record }) => total + (record.costUsd ?? 0), 0) * 10000) / 10000,
       turns: steps.reduce((total, { record }) => total + (record.turns ?? 0), 0),
       ...(state.sourceCommit ? { sourceCommit: state.sourceCommit } : {}),
+      planSha256: planSha256(request.plan),
+      ...(packIdOf(request) ? { packId: packIdOf(request) } : {}),
       files: { ...state.outputs, ".observability/pipeline.json": JSON.stringify(pipeline, null, 2) },
       steps: steps.map(({ step, record, duration }) => ({
         id: step.id, state: record.status, costUsd: record.costUsd ?? 0, turns: record.turns ?? 0,
