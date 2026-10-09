@@ -2,13 +2,13 @@ import type { OrchestrationMessageAuthor } from "@synara/contracts";
 
 export const GLASSWING_AGENT_PROFILE_VERSION = "2026-10-06.1";
 
-export function isGlasswingAgentProfileEnabled(
-  environment: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return Boolean(
-    environment.GLASSWING_CRUNCHBASE_MCP_URL?.trim() &&
-      environment.GLASSWING_CRUNCHBASE_MCP_TOKEN?.trim(),
-  );
+/**
+ * The Glasswing company behind a project's external key (`glasswing-company:<uuid>`).
+ * The Glasswing profile applies exactly to conversations in such projects, whatever
+ * research tools happen to be configured.
+ */
+export function glasswingCompanyIdFromExternalKey(externalKey: string | null | undefined): string | undefined {
+  return externalKey?.match(/^glasswing-company:([a-f0-9-]{36})$/u)?.[1];
 }
 
 export const GLASSWING_AGENT_SYSTEM_PROMPT = `<glasswing_agent_profile version="${GLASSWING_AGENT_PROFILE_VERSION}">

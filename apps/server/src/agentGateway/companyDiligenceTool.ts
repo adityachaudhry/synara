@@ -9,6 +9,7 @@ import type { ProviderWorkerProvisionerShape } from "../providerWorker/Services/
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { decodeProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBinding.ts";
 import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
+import { glasswingCompanyIdFromExternalKey } from "../provider/glasswingAgentProfile.ts";
 import {
   isProviderPersistencePathSafe,
   MAX_PROVIDER_PERSISTENCE_CANDIDATES,
@@ -68,7 +69,7 @@ export function makeCompanyDiligenceTools(input: {
       if (!thread || !context.callerTurnId)
         return yield* Effect.fail(new ToolInputError("The requesting conversation is no longer active."));
       const project = Option.getOrUndefined(yield* input.snapshotQuery.getProjectShellById(thread.projectId));
-      const companyId = project?.externalKey?.match(/^glasswing-company:([a-f0-9-]{36})$/u)?.[1];
+      const companyId = glasswingCompanyIdFromExternalKey(project?.externalKey);
       const repository = project?.repositoryBinding;
       const companySlug = repository?.path.match(/^companies\/([a-z0-9][a-z0-9-]*)$/u)?.[1];
       if (!companyId || !companySlug || !repository)

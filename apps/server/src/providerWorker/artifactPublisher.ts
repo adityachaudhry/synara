@@ -7,6 +7,7 @@ import {
 } from "../providerPersistence.ts";
 import type { WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
+import { resolveSandboxNetworkPolicy, sandboxHostAllowed } from "../workspaceRuntime/sandboxNetwork.ts";
 import { privateWorkerHosts } from "./privateNetwork.ts";
 
 interface ArtifactRecord {
@@ -47,12 +48,12 @@ export function artifactApiClient() {
       "Artifact API origin must be HTTPS, loopback, or an explicit Railway private service.",
     );
   }
-  return async <T>(route: string, body?: unknown): Promise<T> => {
+  return async <T>(route: string, body?: unknown, options?: { readonly timeoutMs?: number }): Promise<T> => {
     const response = await fetch(`${url.origin}${route}`, {
       method: body === undefined ? "GET" : "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(options?.timeoutMs ?? 30_000),
     });
     if (!response.ok) throw new Error(`Artifact API failed with HTTP ${response.status}.`);
     return response.json() as Promise<T>;
@@ -132,6 +133,15 @@ export const publishOutboxArtifacts = Effect.fn(function* (input: {
 
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
+const uploadHostAllowed = (host: string) => {
+  if (process.env.SYNARA_WORKSPACE_RUNTIME !== "daytona") return true;
+  try {
+    return sandboxHostAllowed(resolveSandboxNetworkPolicy(process.env), host);
+  } catch {
+    return true;
+  }
+};
+
 /** Headless sandboxes have no worker; the sandbox uploads the verified file with curl. */
 const uploadFromSandbox = Effect.fn(function* (
   workspaceRuntime: WorkspaceRuntimeShape,
@@ -144,6 +154,10 @@ const uploadFromSandbox = Effect.fn(function* (
   const url = new URL(file.uploadUrl);
   if (url.protocol !== "https:" || url.username || url.password || url.hash) {
     return yield* Effect.fail(new Error("Artifact upload requires a signed HTTPS URL."));
+  }
+  if (!uploadHostAllowed(url.hostname)) {
+    // The sandbox's outbound allow-list would block this upload; add the host to SYNARA_DAYTONA_EXTRA_ALLOWED_DOMAINS.
+    yield* Effect.logWarning("artifact upload host is outside the sandbox allow-list", { host: url.hostname });
   }
   const target = `${PROVIDER_PERSISTENCE_OUTBOX_ROOT}/${file.path}`;
   const headers = Object.entries(file.headers).map(([key, value]) => `-H ${quote(`${key}: ${value}`)}`).join(" ");

@@ -16,6 +16,7 @@ import {
   type ProviderSession,
 } from "@synara/contracts";
 import { Cause, Deferred, Effect, Exit, Layer, Option, PubSub, Queue, Scope, Stream } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
@@ -30,6 +31,7 @@ import { observeProviderOperation } from "../../providerOperationDiagnostics";
 import type { SandboxCapacity } from "../../workspaceRuntime/SandboxCapacity";
 import { ProviderAdapterRequestError, ProviderAdapterSessionNotFoundError } from "../Errors";
 import { makeKeyedLock } from "../keyedLock";
+import { glasswingCompanyIdFromExternalKey } from "../glasswingAgentProfile.ts";
 import { extractResumeSessionFile } from "../piSessionFiles.ts";
 import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
@@ -59,6 +61,20 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
   const directory = yield* ProviderSessionDirectory;
   const serverConfig = Option.getOrUndefined(yield* Effect.serviceOption(ServerConfig));
   const credentials = Option.getOrUndefined(yield* Effect.serviceOption(AgentGatewayCredentials));
+  const sql = Option.getOrUndefined(yield* Effect.serviceOption(SqlClient.SqlClient));
+  /** A thread's Glasswing company, read from its project's external key in the projection. */
+  const resolveCompany = sql
+    ? async (threadId: string) => {
+        const rows = await Effect.runPromise(sql<{ readonly externalKey: string | null }>`
+          SELECT projects.external_key AS "externalKey"
+          FROM projection_threads AS threads
+          JOIN projection_projects AS projects ON projects.project_id = threads.project_id
+          WHERE threads.thread_id = ${threadId}
+          LIMIT 1
+        `);
+        return glasswingCompanyIdFromExternalKey(rows[0]?.externalKey);
+      }
+    : undefined;
   const execInWorkspace = provisioner.execInWorkspace;
   const writeWorkspaceFile = provisioner.writeWorkspaceFile;
   const home = serverConfig?.stateDir ?? (process.env.SYNARA_HOME ? path.join(process.env.SYNARA_HOME, "userdata") : undefined);
@@ -287,9 +303,11 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       publish: (event) => {
         Queue.offerUnsafe(events, event);
       },
+      resolveCompany,
     })),
     (opened) => Effect.promise(() => opened.close()),
   );
+  contextPackIdOf = (threadId) => engine.contextPackId(threadId);
   setHeadlessSessionSource((threadId) => engine.listSessions().filter((session) => threadId === undefined || session.threadId === threadId));
   if (execInWorkspace && writeWorkspaceFile) {
     // Durable diligence runs share this Harness and the sandbox provisioner.

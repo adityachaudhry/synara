@@ -59,7 +59,6 @@ import type { TSchema } from "typebox";
 import { appendFileAttachmentsPromptBlock } from "../provider/attachmentProjection.ts";
 import {
   GLASSWING_AGENT_SYSTEM_PROMPT,
-  isGlasswingAgentProfileEnabled,
   renderGlasswingMessageAuthorContext,
 } from "../provider/glasswingAgentProfile.ts";
 import { renderSynaraHarnessPolicy } from "../agentGateway/harnessPolicy.ts";
@@ -70,6 +69,7 @@ import { configurePiWebAccess, createCrunchbaseTools, createWebAccessTools } fro
 import { createPerplexityTools } from "./perplexityTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
 import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
+import { ContextPackCache, requesterEmailOf } from "./contextPack.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 
 const PROVIDER = "pi" as const;
@@ -111,7 +111,12 @@ export interface DurablePiEngineOptions {
   readonly readAttachment: (attachment: ChatAttachment) => Promise<Uint8Array | undefined>;
   readonly gatewayUrl: string | undefined;
   readonly publish: (event: ProviderRuntimeEvent) => void;
+  /** The Glasswing company of a thread's project, if it is one; selects the Glasswing profile and context pack. */
+  readonly resolveCompany?: ((threadId: string) => Promise<string | undefined>) | undefined;
 }
+
+/** A thread that is not (yet) a company conversation is asked about again after this long. */
+const COMPANY_LOOKUP_RETRY_MS = 60_000;
 
 interface ThreadState {
   readonly threadId: string;
@@ -208,6 +213,8 @@ export class DurablePiEngine {
   readonly #registry = createRegistry();
   #backupTimer: ReturnType<typeof setInterval> | undefined;
   readonly #models = createModels();
+  readonly #contextPacks = new ContextPackCache();
+  readonly #companies = new Map<string, { readonly at: number; readonly companyId: Promise<string | undefined> }>();
 
   private constructor(options: DurablePiEngineOptions) {
     this.#options = options;
@@ -224,7 +231,6 @@ export class DurablePiEngine {
     if (process.env.ANTHROPIC_API_KEY) this.#models.setProvider(anthropicProvider());
     if (process.env.OPENAI_API_KEY) this.#models.setProvider(openaiProvider());
 
-    const glasswing = isGlasswingAgentProfileEnabled();
     const today = () => new Date().toISOString().slice(0, 10);
     // Tools and research are shared by chat threads and diligence runs; the chat profile is chat-only.
     this.toolsExtension = defineExtension({
@@ -236,8 +242,14 @@ export class DurablePiEngine {
       defineExtension({
         name: "synara-chat-profile",
         sections: [
-          section("profile", () => (glasswing ? GLASSWING_AGENT_SYSTEM_PROMPT : "You are a helpful coding agent."), { tag: false }),
+          section("profile", async (input) =>
+            ((await this.#conversationCompany(input.conversationId)) ? GLASSWING_AGENT_SYSTEM_PROMPT : "You are a helpful coding agent."), { tag: false }),
           section("harness_policy", () => renderSynaraHarnessPolicy({ gatewayControlAvailable: this.#options.gatewayUrl !== undefined }), { tag: false }),
+          // The Glasswing context pack (firm, person and deal memory), after the static sections so they stay cacheable.
+          section("glasswing_context", (input) => {
+            const thread = this.#byConversation.get(input.conversationId);
+            return thread && !thread.route ? this.#contextPacks.prompt(thread.threadId) : undefined;
+          }),
           section("environment", (input) => `Current date: ${today()}\nCurrent working directory: ${input.env?.cwd ?? "unknown"}`),
         ],
       }) as unknown as Extension,
@@ -327,6 +339,41 @@ export class DurablePiEngine {
 
   get models() {
     return this.#models;
+  }
+
+  /** The Glasswing company of a thread's project; positive answers are kept, negative ones retried after a minute. */
+  #companyOf(threadId: string): Promise<string | undefined> {
+    const resolve = this.#options.resolveCompany;
+    if (!resolve) return Promise.resolve(undefined);
+    const cached = this.#companies.get(threadId);
+    if (cached && Date.now() - cached.at < COMPANY_LOOKUP_RETRY_MS) return cached.companyId;
+    const companyId = resolve(threadId).catch((cause: unknown) => {
+      console.warn(JSON.stringify({ event: "durable.company.lookup-failed", threadId, message: String(cause).slice(0, 300) }));
+      this.#companies.delete(threadId);
+      return undefined;
+    });
+    this.#companies.set(threadId, { at: Date.now(), companyId });
+    void companyId.then((found) => {
+      if (found && this.#companies.get(threadId)?.companyId === companyId) this.#companies.set(threadId, { at: Number.POSITIVE_INFINITY, companyId });
+    });
+    return companyId;
+  }
+
+  async #conversationCompany(conversationId: ConversationId) {
+    const thread = this.#byConversation.get(conversationId);
+    return thread && !thread.route ? this.#companyOf(thread.threadId) : undefined;
+  }
+
+  /** Fetches the thread's context pack at a session's first turn and when it is older than 30 minutes. */
+  async #refreshContextPack(state: ThreadState, author: OrchestrationMessageAuthor | undefined) {
+    if (state.route) return;
+    const companyId = await this.#companyOf(state.threadId);
+    if (companyId) await this.#contextPacks.refresh(state.threadId, { companyId, requesterEmail: requesterEmailOf(author) });
+  }
+
+  /** The thread's current context pack, for sandbox labels. */
+  contextPackId(threadId: string) {
+    return this.#contextPacks.packId(threadId);
   }
 
   /** Routes a non-thread conversation's tools to a sandbox (diligence steps). */
@@ -446,6 +493,7 @@ export class DurablePiEngine {
     state.lifecycleGeneration = input.lifecycleGeneration;
     state.cwd = input.cwd;
     state.stopped = false;
+    this.#contextPacks.reset(input.threadId);
     if (input.unfenced) state.unfenced = true;
     await this.#harness.commit(async (tx) => {
       const index = await tx.doc(ThreadIndex);
@@ -520,7 +568,7 @@ export class DurablePiEngine {
       input.repositoryUnavailable
         ? "Company files are currently unavailable and all tools are disabled for this turn. Continue conversation using only the messages provided. Do not claim to have read, verified, edited or saved company files, or started diligence. If the request needs those operations, explain the limitation; do not invent file contents."
         : null,
-      isGlasswingAgentProfileEnabled() ? renderGlasswingMessageAuthorContext(input.author) : null,
+      (await this.#companyOf(input.threadId)) ? renderGlasswingMessageAuthorContext(input.author) : null,
       text,
     ]
       .filter(Boolean)
@@ -544,6 +592,7 @@ export class DurablePiEngine {
       await this.#installGatewayTools(input.gatewayBearerToken);
     }
     await conversation.configure({ tools: input.repositoryUnavailable ? [] : null }, ctx);
+    await this.#refreshContextPack(state, input.author);
     const content = await this.#content(input);
     const turnId = TurnId.makeUnsafe(crypto.randomUUID());
     state.activeTurnId = turnId;
