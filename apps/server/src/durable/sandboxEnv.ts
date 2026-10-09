@@ -49,6 +49,10 @@ export interface SandboxRunner {
   run(command: string, options: { readonly timeoutSeconds?: number }): Promise<SandboxCommandResult>;
   /** Writes bytes to a sandbox path readable by the agent user. */
   upload(filePath: string, data: Uint8Array): Promise<void>;
+  /** One transfer for many files (root-owned, mode 0644 unless given); absent when the runtime has no bulk API. */
+  uploadMany?(files: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array; readonly mode?: number }>): Promise<void>;
+  /** One transfer for many regular files, read as root; missing paths are omitted. */
+  downloadMany?(paths: ReadonlyArray<string>): Promise<ReadonlyMap<string, Uint8Array>>;
 }
 
 export const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;

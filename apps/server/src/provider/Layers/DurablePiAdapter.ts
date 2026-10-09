@@ -189,6 +189,8 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     gatewayTokens.delete(threadId);
   };
 
+  /** The thread's current context pack, once the engine has fetched one (a sandbox label only). */
+  let contextPackIdOf: (threadId: string) => string | undefined = () => undefined;
   /** Claims a fresh sandbox for the thread, under the given generation. */
   const claimSandbox = (threadId: string, lifecycleGeneration: string, repositoryBinding: NonNullable<ProviderWorkerRuntimeBinding["repositoryCheckout"]>["binding"] | undefined, speculative = false) =>
     provisioner.start({
@@ -196,6 +198,8 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       lifecycleGeneration,
       headless: true,
       fresh: true,
+      purpose: "chat",
+      labels: { thread_id: threadId, ...(contextPackIdOf(threadId) ? { pack_id: contextPackIdOf(threadId)! } : {}) },
       ...(speculative ? { speculative: true } : {}),
       ...(repositoryBinding ? { repositoryBinding } : {}),
     }).pipe(
@@ -240,6 +244,12 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       Effect.map((result) => ({ exitCode: result.exitCode, output: result.stdout + result.stderr, timedOut: result.timedOut, truncated: result.truncated })),
     )),
     upload: (filePath, data) => Effect.runPromise(writeWorkspaceFile!(binding, { path: filePath, data, mode: 0o644 })),
+    ...(provisioner.writeWorkspaceFiles ? {
+      uploadMany: (files) => Effect.runPromise(provisioner.writeWorkspaceFiles!(binding, files.map((file) => ({ ...file, mode: file.mode ?? 0o644 })))),
+    } : {}),
+    ...(provisioner.readWorkspaceFiles ? {
+      downloadMany: (paths) => Effect.runPromise(provisioner.readWorkspaceFiles!(binding, paths)),
+    } : {}),
   });
   // One replacement at a time when a thread's sandbox is lost during a turn.
   const replacing = new Map<string, Promise<ProviderWorkerRuntimeBinding>>();
@@ -285,8 +295,10 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     // Durable diligence runs share this Harness and the sandbox provisioner.
     const diligence = new DiligenceRunner(engine, {
       // Adopted like a chat sandbox, so startup recovery does not destroy it as a leaked creation.
-      claim: (key, generation, repository) => Effect.runPromise(provisioner.start({
+      claim: (key, generation, repository, meta) => Effect.runPromise(provisioner.start({
         threadId: ThreadId.makeUnsafe(key), lifecycleGeneration: generation, headless: true, fresh: true, repositoryBinding: repository,
+        purpose: meta.purpose,
+        labels: { run_id: meta.runId, ...(meta.packId ? { pack_id: meta.packId } : {}) },
       }).pipe(Effect.tap((binding) => provisioner.adopt(binding)))),
       unavailable: (binding) => Effect.runPromise(unavailable(binding)),
       runner: sandboxRunner,

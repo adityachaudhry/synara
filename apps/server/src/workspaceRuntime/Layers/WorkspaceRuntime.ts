@@ -404,6 +404,8 @@ export function makeWorkspaceRuntimeLive(
                         idleTimeoutMinutes: enabled.idleTimeoutMinutes,
                         ...(enabled.region === undefined ? {} : { region: enabled.region }),
                         environment: input.environment,
+                        ...(input.purpose ? { purpose: input.purpose } : {}),
+                        ...(input.labels ? { labels: input.labels } : {}),
                       })
                       .pipe(
                         Effect.mapError(toRuntimeError("create")),
@@ -626,6 +628,18 @@ export function makeWorkspaceRuntimeLive(
           }),
         );
 
+      const writeFiles: NonNullable<WorkspaceRuntimeShape["writeFiles"]> = (binding, files) =>
+        requireEnabled(config, "writeFiles").pipe(
+          Effect.flatMap(() => client.writeFiles!(binding.runtimeId, files)),
+          Effect.mapError(toRuntimeError("writeFiles", binding.runtimeId)),
+        );
+
+      const readFiles: NonNullable<WorkspaceRuntimeShape["readFiles"]> = (binding, paths) =>
+        requireEnabled(config, "readFiles").pipe(
+          Effect.flatMap(() => client.readFiles!(binding.runtimeId, paths)),
+          Effect.mapError(toRuntimeError("readFiles", binding.runtimeId)),
+        );
+
       const listFiles: NonNullable<WorkspaceRuntimeShape["listFiles"]> = (binding, path) =>
         requireEnabled(config, "listFiles").pipe(
           Effect.flatMap(() => {
@@ -751,6 +765,8 @@ export function makeWorkspaceRuntimeLive(
         exec,
         writeFile,
         readFile,
+        ...(client.writeFiles ? { writeFiles } : {}),
+        ...(client.readFiles ? { readFiles } : {}),
         listFiles,
         statFile,
         startDurableProcess,

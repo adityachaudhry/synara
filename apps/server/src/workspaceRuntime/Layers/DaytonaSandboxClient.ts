@@ -11,8 +11,34 @@ import { availableDaytonaContainerTargets } from "../daytonaRegions.ts";
 
 const MANAGED_LABEL = "synara-managed";
 const OPERATION_LABEL = "synara-create-operation-id";
+/** Environment and purpose labels separate dev and production inside the one Glasswing Ventures organization. */
+const ENV_LABEL = "env";
+const PURPOSE_LABEL = "purpose";
+const RESERVED_LABELS = new Set([MANAGED_LABEL, OPERATION_LABEL, ENV_LABEL, PURPOSE_LABEL]);
 const STAGING_ROOT = "/home/daytona/.synara-control";
+const PROBE_TTL_MINUTES = 15;
+const BULK_READ_BATCH = 200;
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+/** Caller labels (thread_id, run_id, pack_id) with reserved keys and odd values dropped. */
+const extraLabels = (labels: Readonly<Record<string, string>> | undefined) =>
+  Object.fromEntries(Object.entries(labels ?? {}).flatMap(([key, value]) => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    return /^[a-z][a-z0-9_.-]{0,62}$/u.test(key) && !RESERVED_LABELS.has(key) && trimmed && trimmed.length <= 256 ? [[key, trimmed]] : [];
+  }));
+
+const sameList = (left: string | undefined, right: string) => {
+  const normalize = (value: string | undefined) => (value ?? "").split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join(",");
+  return normalize(left) === normalize(right);
+};
+
+/** Runs as root: installs staged uploads at their targets, root-owned, like `install -D -m`. */
+const INSTALL_STAGED_SCRIPT = `const fs=require("node:fs"),path=require("node:path");
+for(const f of JSON.parse(fs.readFileSync(process.argv[1],"utf8"))){fs.mkdirSync(path.dirname(f.to),{recursive:true,mode:0o755});const t=f.to+".synara-"+process.pid;fs.copyFileSync(f.from,t);fs.chownSync(t,0,0);fs.chmodSync(t,f.mode);fs.renameSync(t,f.to)}`;
+/** Runs as root: copies readable regular files into a staging directory the toolbox user can read. */
+const STAGE_FOR_READ_SCRIPT = `const fs=require("node:fs"),dir=process.argv[1],paths=JSON.parse(Buffer.from(process.argv[2],"base64").toString("utf8")),gid=fs.statSync(dir).gid,present=[];
+paths.forEach((p,i)=>{try{if(!fs.statSync(p).isFile())return;const t=dir+"/"+i;fs.copyFileSync(p,t);fs.chownSync(t,0,gid);fs.chmodSync(t,0o640);present.push(i)}catch{}});
+process.stdout.write("\\n@@SYNARA_STAGED@@"+JSON.stringify(present)+"\\n")`;
 
 function status(sandbox: Sandbox): RailwaySandboxStatus {
   switch (sandbox.state) {
@@ -84,7 +110,12 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
               pendingProbes.delete(target);
             }
             pendingProbes.set(target, { id: operationId, startedAt: Date.now() });
-            probe = await allocator.create({ snapshot: snapshotFor(target), labels: { "synara-region-probe": operationId }, autoStopInterval: 1, autoDeleteInterval: 1 }, { timeout: 30 });
+            probe = await allocator.create({
+              snapshot: snapshotFor(target),
+              labels: { "synara-region-probe": operationId, [ENV_LABEL]: config.environmentName, [PURPOSE_LABEL]: "probe" },
+              autoStopInterval: 1, ephemeral: true, ttlMinutes: PROBE_TTL_MINUTES,
+              ...(config.domainAllowList ? { domainAllowList: config.domainAllowList } : {}),
+            }, { timeout: 30 });
             await probe.delete(30, true);
             pendingProbes.delete(target);
             blockedTargets.delete(target);
@@ -110,6 +141,32 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
       yield* refresh;
       yield* Effect.forkScoped(Effect.sleep("15 seconds").pipe(Effect.andThen(refresh.pipe(Effect.repeat(Schedule.spaced(Duration.seconds(15)))))));
     }
+    /**
+     * Warm-pool members are created before anyone claims them, so the settings asked for at
+     * create are checked on the claimed sandbox and applied when missing. A sandbox that cannot
+     * be brought to policy is deleted by the caller; none is handed out without its allow-list.
+     */
+    const enforceCreateSettings = async (sandbox: Sandbox, expected: { readonly labels: Record<string, string>; readonly ttlMinutes: number }) => {
+      await sandbox.refreshData();
+      const applied: string[] = [];
+      if (config.domainAllowList && !sameList(sandbox.domainAllowList, config.domainAllowList)) {
+        await sandbox.updateNetworkSettings({ domainAllowList: config.domainAllowList });
+        applied.push("domainAllowList");
+      }
+      if (typeof sandbox.autoDeleteInterval === "number" && sandbox.autoDeleteInterval !== 0) {
+        await sandbox.setAutoDeleteInterval(0);
+        applied.push("ephemeral");
+      }
+      if (expected.ttlMinutes > 0 && !sandbox.autoDestroyAt) {
+        await sandbox.setTtl(expected.ttlMinutes);
+        applied.push("ttlMinutes");
+      }
+      if (Object.entries(expected.labels).some(([key, value]) => sandbox.labels?.[key] !== value)) {
+        await sandbox.setLabels({ ...sandbox.labels, ...expected.labels });
+        applied.push("labels");
+      }
+      if (applied.length) console.warn(JSON.stringify({ event: "daytona.create.settings-applied", sandboxId: sandbox.id, applied }));
+    };
     const handles = new Map<string, Sandbox>();
     const get = async (id: string) => {
       const sandbox = handles.get(id) ?? await daytona.get(id);
@@ -143,16 +200,25 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
           });
           const candidates = eligibleTargets.filter((target) => !blockedTargets.has(target));
           if (!candidates.length) throw new RailwaySandboxClientError({ operation: "create", detail: "No prepared Daytona region is ready; retry after regional recovery.", createRejected: true });
+          const purpose = input.purpose ?? "chat";
+          const ttlMinutes = config.ttlMinutes[purpose];
+          const labels = {
+            ...extraLabels(input.labels),
+            [MANAGED_LABEL]: "true", [OPERATION_LABEL]: input.operationId,
+            [ENV_LABEL]: config.environmentName, [PURPOSE_LABEL]: purpose,
+          };
           let sandbox: Sandbox | undefined;
           for (const target of candidates) {
             try {
               sandbox = await allocators.get(target)!.create({
-            snapshot: snapshotFor(target),
-            labels: { [MANAGED_LABEL]: "true", [OPERATION_LABEL]: input.operationId },
-            // Provider idle retirement is earlier; the periodic outbox read renews activity during live turns.
-            autoStopInterval: input.idleTimeoutMinutes,
-            autoArchiveInterval: 24 * 60,
-            autoDeleteInterval: -1,
+                snapshot: snapshotFor(target),
+                labels,
+                // Provider idle retirement is earlier; the periodic outbox read renews activity during live turns.
+                autoStopInterval: input.idleTimeoutMinutes,
+                // Disposable: a stopped sandbox is deleted (it is replaced, never resumed) and none outlives its TTL.
+                ephemeral: true,
+                ttlMinutes,
+                ...(config.domainAllowList ? { domainAllowList: config.domainAllowList } : {}),
               });
               break;
             } catch (cause) {
@@ -165,6 +231,7 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
           if (!sandbox) throw new Error("Daytona allocation did not return a sandbox.");
           handles.set(sandbox.id, sandbox);
           try {
+            await enforceCreateSettings(sandbox, { labels, ttlMinutes });
             if (Object.keys(input.environment).length) await sandbox.updateEnv({ ...input.environment });
             const prepared = await sandbox.process.executeCommand(`mkdir -p -m 700 ${quote(STAGING_ROOT)} && chmod 700 ${quote(STAGING_ROOT)}`);
             if (prepared.exitCode !== 0) throw new Error("Daytona private staging directory could not be prepared.");
@@ -263,6 +330,61 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
         },
         catch: (cause) => failure("readFile", cause, id),
       }),
+      writeFiles: (id, files) => Effect.tryPromise({
+        try: async () => {
+          if (files.length === 0) return;
+          const sandbox = await get(id);
+          const staging = `${STAGING_ROOT}/bulk-${randomUUID()}`;
+          const made = await sandbox.process.executeCommand(`mkdir -m 700 ${quote(staging)}`);
+          if (made.exitCode !== 0) throw new Error("Daytona bulk staging directory could not be prepared.");
+          try {
+            const manifest = files.map((file, index) => ({ from: `${staging}/${index}`, to: file.path, mode: file.mode ?? 0o600 }));
+            await sandbox.fs.uploadFiles([
+              ...files.map((file, index) => ({ source: Buffer.from(file.data), destination: `${staging}/${index}` })),
+              { source: Buffer.from(JSON.stringify(manifest)), destination: `${staging}/manifest.json` },
+            ], 300);
+            const installed = await execute(sandbox, `node -e ${quote(INSTALL_STAGED_SCRIPT)} ${quote(`${staging}/manifest.json`)}`, undefined, 120);
+            if (installed.exitCode !== 0) throw new Error("Daytona bulk file installation failed.");
+          } finally {
+            const removed = await sandbox.process.executeCommand(`rm -rf ${quote(staging)} && test ! -e ${quote(staging)}`);
+            if (removed.exitCode !== 0) console.warn(JSON.stringify({ event: "daytona.bulk.cleanup-failed", sandboxId: id }));
+          }
+        },
+        catch: (cause) => failure("writeFiles", cause, id),
+      }),
+      readFiles: (id, paths) => Effect.tryPromise({
+        try: async () => {
+          const read = new Map<string, Uint8Array>();
+          if (paths.length === 0) return read;
+          const sandbox = await get(id);
+          for (let start = 0; start < paths.length; start += BULK_READ_BATCH) {
+            const batch = paths.slice(start, start + BULK_READ_BATCH);
+            const staging = `${STAGING_ROOT}/bulk-${randomUUID()}`;
+            try {
+              const encoded = Buffer.from(JSON.stringify(batch)).toString("base64");
+              const staged = await execute(sandbox, `install -d -m 0750 -g daytona ${quote(staging)} && node -e ${quote(STAGE_FOR_READ_SCRIPT)} ${quote(staging)} ${encoded}`, undefined, 120);
+              const marker = staged.result.split("\n").findLast((line) => line.startsWith("@@SYNARA_STAGED@@"));
+              if (staged.exitCode !== 0 || !marker) throw new Error("Daytona bulk file staging failed.");
+              const present = JSON.parse(marker.slice("@@SYNARA_STAGED@@".length)) as number[];
+              if (present.length === 0) continue;
+              const results = await sandbox.fs.downloadFiles(present.map((index) => ({ source: `${staging}/${index}` })), 300);
+              for (const result of results) {
+                const index = Number(result.source.slice(staging.length + 1));
+                // An empty file may come back without a body.
+                const data = result.result ?? Buffer.alloc(0);
+                if (result.error || !Buffer.isBuffer(data) || !Number.isInteger(index) || batch[index] === undefined)
+                  throw new Error(`Daytona bulk download failed: ${result.error ?? "unexpected result"}`);
+                read.set(batch[index]!, new Uint8Array(data));
+              }
+              if (results.length !== present.length) throw new Error("Daytona bulk download returned an incomplete result.");
+            } finally {
+              await execute(sandbox, `rm -rf ${quote(staging)}`, undefined, 30).catch(() => undefined);
+            }
+          }
+          return read;
+        },
+        catch: (cause) => failure("readFiles", cause, id),
+      }),
       listFiles: (id, filePath) => Effect.tryPromise({
         try: async () => {
           const sandbox = await get(id);
@@ -324,7 +446,8 @@ export function makeDaytonaSandboxClientLive(config: Extract<DaytonaSandboxRunti
       list: Effect.tryPromise({
         try: async () => {
           const records = [];
-          for await (const sandbox of daytona.list({ labels: { [MANAGED_LABEL]: "true" } })) {
+          // This environment's sandboxes only: the organization also holds the other environment's.
+          for await (const sandbox of daytona.list({ labels: { [MANAGED_LABEL]: "true", [ENV_LABEL]: config.environmentName } })) {
             records.push({ id: sandbox.id, status: status(sandbox), region: sandbox.target });
           }
           return records;

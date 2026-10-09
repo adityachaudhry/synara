@@ -16,6 +16,9 @@ export interface RailwaySandboxRecord {
   readonly region: string;
 }
 
+/** Why a sandbox exists; selects its lifetime and labels it for operators. */
+export type SandboxPurpose = "chat" | "diligence" | "eval";
+
 export interface RailwaySandboxCreateInput {
   readonly operationId: string;
   readonly checkpointName?: string;
@@ -23,6 +26,10 @@ export interface RailwaySandboxCreateInput {
   readonly idleTimeoutMinutes: number;
   readonly region?: string;
   readonly environment: Readonly<Record<string, string>>;
+  /** Defaults to chat. */
+  readonly purpose?: SandboxPurpose;
+  /** Operator labels such as `thread_id`, `run_id` and `pack_id`; never credentials. */
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 export interface RailwaySandboxExecInput {
@@ -40,6 +47,13 @@ export interface RailwaySandboxExecResult {
 }
 
 export interface RailwaySandboxWriteFileInput {
+  readonly path: string;
+  readonly data: string | Uint8Array;
+  readonly mode?: number;
+}
+
+/** One file of a bulk write: installed root-owned with `mode` (default 0600), parents created. */
+export interface RailwaySandboxBulkWriteEntry {
   readonly path: string;
   readonly data: string | Uint8Array;
   readonly mode?: number;
@@ -99,6 +113,16 @@ export interface RailwaySandboxClientShape {
     runtimeId: string,
     path: string,
   ) => Effect.Effect<ReadonlyArray<RailwaySandboxFileEntry>, RailwaySandboxClientFailure>;
+  /** Many files in one transfer; same result as `writeFile` for each. */
+  readonly writeFiles?: (
+    runtimeId: string,
+    files: ReadonlyArray<RailwaySandboxBulkWriteEntry>,
+  ) => Effect.Effect<void, RailwaySandboxClientFailure>;
+  /** Many regular files in one transfer, read as root; missing or unreadable paths are omitted. */
+  readonly readFiles?: (
+    runtimeId: string,
+    paths: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, Uint8Array>, RailwaySandboxClientFailure>;
   readonly statFile?: (
     runtimeId: string,
     path: string,

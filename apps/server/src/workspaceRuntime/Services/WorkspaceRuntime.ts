@@ -1,6 +1,9 @@
 import { ServiceMap, type Effect } from "effect";
 
 import type { WorkspaceRuntimeError } from "../Errors";
+import type { SandboxPurpose } from "./RailwaySandboxClient";
+
+export type { SandboxPurpose };
 
 export interface WorkspaceRuntimeBinding {
   readonly runtimeKind: "railway-sandbox" | "daytona-sandbox" | "docker-container";
@@ -30,6 +33,10 @@ export interface WorkspaceRuntimeCreateInput {
   readonly checkpointName?: string;
   readonly networkIsolation?: "ISOLATED" | "PRIVATE";
   readonly onCapacityAdmitted?: () => void;
+  /** Selects the sandbox lifetime; defaults to chat. */
+  readonly purpose?: SandboxPurpose;
+  /** Operator labels (`thread_id`, `run_id`, `pack_id`); never credentials. */
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 export interface WorkspaceExecInput {
@@ -47,6 +54,12 @@ export interface WorkspaceExecResult {
 }
 
 export interface WorkspaceRuntimeWriteFileInput {
+  readonly path: string;
+  readonly data: string | Uint8Array;
+  readonly mode?: number;
+}
+
+export interface WorkspaceRuntimeBulkWriteEntry {
   readonly path: string;
   readonly data: string | Uint8Array;
   readonly mode?: number;
@@ -111,6 +124,15 @@ export interface WorkspaceRuntimeShape {
     binding: WorkspaceRuntimeBinding,
     path: string,
   ) => Effect.Effect<ReadonlyArray<WorkspaceRuntimeFileEntry>, WorkspaceRuntimeError>;
+  /** Bulk forms of writeFile/readFile; only runtimes with a bulk transfer API provide them. */
+  readonly writeFiles?: (
+    binding: WorkspaceRuntimeBinding,
+    files: ReadonlyArray<WorkspaceRuntimeBulkWriteEntry>,
+  ) => Effect.Effect<void, WorkspaceRuntimeError>;
+  readonly readFiles?: (
+    binding: WorkspaceRuntimeBinding,
+    paths: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, Uint8Array>, WorkspaceRuntimeError>;
   readonly statFile?: (
     binding: WorkspaceRuntimeBinding,
     path: string,

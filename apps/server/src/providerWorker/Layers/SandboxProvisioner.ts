@@ -170,6 +170,8 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
         environment: {},
         networkIsolation: options.networkIsolation ?? "ISOLATED",
         ...(input.onCapacityAdmitted ? { onCapacityAdmitted: input.onCapacityAdmitted } : {}),
+        ...(input.purpose ? { purpose: input.purpose } : {}),
+        ...(input.labels ? { labels: input.labels } : {}),
       }).pipe(observeProviderOperation("workspace.create", { threadId: input.threadId, lifecycleGeneration: input.lifecycleGeneration }));
       const prepare = Effect.gen(function* () {
         yield* prepareToolchain(workspace);
@@ -496,9 +498,13 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
       checkpointOutbox(binding).pipe(Effect.catch(() => Effect.void)), { concurrency: 2, discard: true }),
     ).pipe(Effect.repeat(Schedule.spaced(Duration.minutes(1)))));
 
+    const writeFiles = workspaceRuntime.writeFiles;
+    const readFiles = workspaceRuntime.readFiles;
     return {
       execInWorkspace: (binding, input) => workspaceRuntime.exec(binding.workspace, input),
       writeWorkspaceFile: (binding, input) => workspaceRuntime.writeFile(binding.workspace, input),
+      ...(writeFiles ? { writeWorkspaceFiles: (binding, files) => writeFiles(binding.workspace, files) } : {}),
+      ...(readFiles ? { readWorkspaceFiles: (binding, paths) => readFiles(binding.workspace, paths) } : {}),
       isWorkspaceUnavailable,
       start,
       restart,
@@ -524,11 +530,14 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
     } satisfies ProviderWorkerProvisionerShape;
   });
 
+/** Controller copies of thread Outbox files, with checkout drafts under `drafts/`; backed up off-volume. */
+export const providerCheckpointRoot = (baseDir: string) => path.join(baseDir, "provider-outbox-checkpoints");
+
 export const makeSandboxProvisionerLive = (options: Omit<SandboxProvisionerOptions, "checkpointRoot"> & { readonly checkpointRoot?: string }) =>
   Layer.effect(ProviderWorkerProvisioner, Effect.gen(function* () {
     const serverConfig = yield* ServerConfig;
     return yield* makeSandboxProvisioner({
       ...options,
-      checkpointRoot: options.checkpointRoot ?? path.join(serverConfig.baseDir, "provider-outbox-checkpoints"),
+      checkpointRoot: options.checkpointRoot ?? providerCheckpointRoot(serverConfig.baseDir),
     });
   }));

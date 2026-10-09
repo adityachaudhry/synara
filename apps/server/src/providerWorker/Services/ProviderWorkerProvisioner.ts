@@ -8,6 +8,7 @@ import type {
   ProviderWorkspaceFile,
 } from "../../providerPersistence.ts";
 
+import type { SandboxPurpose } from "../../workspaceRuntime/Services/WorkspaceRuntime";
 import type { ProviderWorkerProvisioningError } from "../Errors";
 import type { ProviderWorkerRuntimeBinding } from "../runtimeBinding";
 
@@ -25,6 +26,10 @@ export interface ProviderWorkerProvisionInput {
   readonly repositoryBinding?: ProjectRepositoryBinding;
   readonly agentGatewayConnection?: AgentGatewayMcpConnection;
   readonly onCapacityAdmitted?: () => void;
+  /** Selects the sandbox lifetime; defaults to chat. */
+  readonly purpose?: SandboxPurpose;
+  /** Operator labels for the sandbox (`thread_id`, `run_id`, `pack_id`). */
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 export interface ProviderWorkerAttachmentStageInput {
@@ -42,6 +47,15 @@ export interface ProviderWorkerProvisionerShape {
     binding: ProviderWorkerRuntimeBinding,
     input: { readonly path: string; readonly data: Uint8Array; readonly mode?: number },
   ) => Effect.Effect<void, unknown>;
+  /** Bulk transfers where the runtime has them: root-owned writes, root reads (missing paths omitted). */
+  readonly writeWorkspaceFiles?: (
+    binding: ProviderWorkerRuntimeBinding,
+    files: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array; readonly mode?: number }>,
+  ) => Effect.Effect<void, unknown>;
+  readonly readWorkspaceFiles?: (
+    binding: ProviderWorkerRuntimeBinding,
+    paths: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, Uint8Array>, unknown>;
   /** A positive result means the runtime is conclusively gone; connection errors stay recoverable. */
   readonly isWorkspaceUnavailable?: (binding: ProviderWorkerRuntimeBinding) => Effect.Effect<boolean>;
   /** Persist uncertain coverage before sending a request that can change native state. */
