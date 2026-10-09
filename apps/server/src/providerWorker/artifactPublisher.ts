@@ -23,6 +23,15 @@ interface UploadGrant {
   headers: Record<string, string>;
 }
 
+/** A non-2xx answer from the Glasswing API; the message keeps the established "HTTP <status>" form. */
+export class ArtifactApiError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Artifact API failed with HTTP ${status}.`);
+    this.status = status;
+  }
+}
+
 export function artifactApiClient() {
   const origin = process.env.SYNARA_ARTIFACT_API_URL?.trim();
   const token = process.env.GLASSWING_ARTIFACT_SERVICE_TOKEN?.trim();
@@ -55,7 +64,7 @@ export function artifactApiClient() {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(options?.timeoutMs ?? 30_000),
     });
-    if (!response.ok) throw new Error(`Artifact API failed with HTTP ${response.status}.`);
+    if (!response.ok) throw new ArtifactApiError(response.status);
     return response.json() as Promise<T>;
   };
 }

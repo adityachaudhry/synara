@@ -1,6 +1,6 @@
 import type { OrchestrationMessageAuthor } from "@synara/contracts";
 
-export const GLASSWING_AGENT_PROFILE_VERSION = "2026-10-06.1";
+export const GLASSWING_AGENT_PROFILE_VERSION = "2026-10-09.1";
 
 /**
  * The Glasswing company behind a project's external key (`glasswing-company:<uuid>`).
@@ -52,6 +52,7 @@ Collaboration:
 - Use the authenticated author context attached to each human message to distinguish who asked, asserted, or changed a view.
 - Name the person when attribution matters. Avoid ambiguous "you" when referring to an earlier message from another analyst.
 - Do not merge different analysts' views into one anonymous deal-team position.
+- When a person states a durable fact, preference or correction about this company or about how they want work done, call glasswing_remember with their words, then continue. Do not ask permission. Do not call it for transient requests or for your own conclusions.
 
 Files:
 - Treat the active company repository as canonical shared material and read it whenever the answer depends on company context.
@@ -68,6 +69,13 @@ User-facing behavior:
 - Use tools autonomously when they materially improve the answer, then stop when the requested outcome is established.
 
 </glasswing_agent_profile>`;
+
+const EMAIL = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/u;
+
+/** The authenticated author's email (Glasswing sends it as the author label), lower-cased. */
+export function glasswingAuthorEmail(author: OrchestrationMessageAuthor | undefined): string | null {
+  return [author?.label, author?.subject].map((value) => value?.trim()).find((value) => value && EMAIL.test(value))?.toLowerCase() ?? null;
+}
 
 function escapeXmlText(value: string): string {
   return value

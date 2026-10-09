@@ -85,6 +85,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner.ts";
 import { makeCompanyDiligenceTools } from "../companyDiligenceTool.ts";
+import { makeCompanyMemoryTools } from "../companyMemoryTool.ts";
 import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
 
 // Providers already receive the versioned host policy exactly once in their
@@ -136,6 +137,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     provisioner: Option.getOrUndefined(yield* Effect.serviceOption(ProviderWorkerProvisioner)),
     adapters: Option.getOrUndefined(yield* Effect.serviceOption(ProviderAdapterRegistry)),
   });
+  const companyMemoryTools = makeCompanyMemoryTools({ snapshotQuery, projectionTurns });
   const browserAutomationHost = Option.getOrElse(
     yield* Effect.serviceOption(BrowserAutomationHost),
     () => makeBrowserAutomationHost({}),
@@ -801,6 +803,7 @@ export const makeAgentGateway = Effect.gen(function* () {
 
   const tools: ReadonlyArray<ToolEntry> = [
     ...companyDiligenceTools,
+    ...companyMemoryTools,
     ...readTools,
     ...diagnosticTools,
     createThreads,

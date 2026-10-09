@@ -13,6 +13,7 @@ const PROVIDER_SESSION_CAPABILITIES = [
   "thread:read",
   "thread:write",
   "company:diligence",
+  "company:memory",
   "automation:write",
   "diagnostics:read",
   "browser:control",

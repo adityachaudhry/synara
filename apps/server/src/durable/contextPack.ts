@@ -9,6 +9,7 @@
  */
 import type { OrchestrationMessageAuthor } from "@synara/contracts";
 
+import { glasswingAuthorEmail } from "../provider/glasswingAgentProfile.ts";
 import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
 
 const MAX_AGE_MS = 30 * 60_000;
@@ -17,7 +18,6 @@ const RETRY_AFTER_FAILURE_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Packs are capped well below this by Glasswing; the bound only protects the prompt. */
 const MAX_PROMPT_CHARS = 80_000;
-const EMAIL = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/u;
 
 export interface ContextPack {
   readonly packId: string;
@@ -32,10 +32,7 @@ export interface ContextPackRequest {
 
 /** The authenticated author's email (Glasswing sends it as the author label). */
 export const requesterEmailOf = (author: OrchestrationMessageAuthor | undefined): string | null =>
-  [author?.label, author?.subject]
-    .map((value) => value?.trim())
-    .find((value) => value && EMAIL.test(value))
-    ?.toLowerCase() ?? null;
+  glasswingAuthorEmail(author);
 
 const describe = (cause: unknown) =>
   (cause instanceof Error ? cause.message : String(cause)).slice(0, 300);

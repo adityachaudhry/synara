@@ -5,6 +5,8 @@ export type AgentGatewayCapability =
   | "thread:read"
   | "thread:write"
   | "company:diligence"
+  /** Record what a person states as durable about the company (glasswing_remember). */
+  | "company:memory"
   | "automation:write"
   | "diagnostics:read"
   | "browser:control"
