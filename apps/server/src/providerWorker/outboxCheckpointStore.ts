@@ -301,3 +301,6 @@ export function makeOutboxCheckpointStore(root: string): OutboxCheckpointStore {
     },
   };
 }
+
+/** Controller copies of thread Outbox files, with checkout drafts under `drafts/`; backed up off-volume. */
+export const providerCheckpointRoot = (baseDir: string) => path.join(baseDir, "provider-outbox-checkpoints");

@@ -4,8 +4,9 @@
  *
  * @module SqliteClient
  */
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { backup as sqliteBackup, DatabaseSync, type StatementSync } from "node:sqlite";
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
@@ -25,6 +26,21 @@ import { SqlError } from "effect/unstable/sql/SqlError";
 import * as Statement from "effect/unstable/sql/Statement";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
+
+/** Open file databases by absolute path, so a backup can run through the owning connection. */
+const openFileDatabases = new Map<string, DatabaseSync>();
+
+/**
+ * Copies an open database file with SQLite's online backup API, through the connection that owns
+ * it (the runtime holds `locking_mode=EXCLUSIVE`, so no second connection can read it). The copy
+ * proceeds in steps while the connection keeps serving statements; its own writes are carried into
+ * the copy. Resolves with the number of pages copied.
+ */
+export function backupOpenDatabase(filename: string, destination: string): Promise<number> {
+  const database = openFileDatabases.get(path.resolve(filename));
+  if (!database) return Promise.reject(new Error("The database is not open in this process."));
+  return sqliteBackup(database, destination, { rate: 256 });
+}
 
 function measureSqlOperation<A>(sql: string, operation: string, run: () => A): A {
   const started = performance.now();
@@ -104,9 +120,14 @@ const makeWithDatabase = (
     const makeConnection = Effect.gen(function* () {
       const scope = yield* Effect.scope;
       const db = openDatabase();
+      const fileKey = options.filename === ":memory:" ? undefined : path.resolve(options.filename);
+      if (fileKey) openFileDatabases.set(fileKey, db);
       yield* Scope.addFinalizer(
         scope,
-        Effect.sync(() => db.close()),
+        Effect.sync(() => {
+          if (fileKey && openFileDatabases.get(fileKey) === db) openFileDatabases.delete(fileKey);
+          db.close();
+        }),
       );
 
       const statementReaderCache = new WeakMap<StatementSync, boolean>();

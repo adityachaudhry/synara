@@ -21,10 +21,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { DurablePiEngine, type DurableThreadTarget } from "../../durable/DurablePiEngine.ts";
+import { startControllerBackups } from "../../durable/backup.ts";
 import { DiligenceRunner, diligenceRunner, setDiligenceRunner } from "../../durable/diligence.ts";
 import type { SandboxRunner } from "../../durable/sandboxEnv.ts";
 import { setHeadlessSessionSource } from "../../providerWorker/headlessSessions.ts";
 import { ProviderWorkerProvisioningError } from "../../providerWorker/Errors";
+import { providerCheckpointRoot } from "../../providerWorker/outboxCheckpointStore.ts";
 import { decodeProviderWorkerRuntimeBinding, type ProviderWorkerRuntimeBinding } from "../../providerWorker/runtimeBinding";
 import { ProviderWorkerProvisioner } from "../../providerWorker/Services/ProviderWorkerProvisioner";
 import { observeProviderOperation } from "../../providerOperationDiagnostics";
@@ -308,6 +310,18 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     (opened) => Effect.promise(() => opened.close()),
   );
   contextPackIdOf = (threadId) => engine.contextPackId(threadId);
+  if (serverConfig) {
+    // state.sqlite, attachments and the drafts store go off-volume beside the Harness backups.
+    yield* Effect.acquireRelease(
+      Effect.sync(() => startControllerBackups({
+        stateDbPath: serverConfig.dbPath,
+        attachmentsDir: serverConfig.attachmentsDir,
+        draftsDir: providerCheckpointRoot(serverConfig.baseDir),
+        workDir: path.join(serverConfig.stateDir, "controller-backup-tmp"),
+      })),
+      (stop) => Effect.sync(stop),
+    );
+  }
   setHeadlessSessionSource((threadId) => engine.listSessions().filter((session) => threadId === undefined || session.threadId === threadId));
   if (execInWorkspace && writeWorkspaceFile) {
     // Durable diligence runs share this Harness and the sandbox provisioner.

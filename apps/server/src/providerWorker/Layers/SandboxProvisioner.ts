@@ -32,7 +32,7 @@ import { WorkspaceRuntime } from "../../workspaceRuntime/Services/WorkspaceRunti
 import { publishOutboxArtifacts } from "../artifactPublisher.ts";
 import { ProviderWorkerProvisioningError } from "../Errors";
 import { headlessSessions } from "../headlessSessions.ts";
-import { listUnpromotedOutboxCandidates, makeOutboxCheckpointStore } from "../outboxCheckpointStore.ts";
+import { listUnpromotedOutboxCandidates, makeOutboxCheckpointStore, providerCheckpointRoot } from "../outboxCheckpointStore.ts";
 import { listProviderPersistenceCandidates, readProviderPersistenceCandidate } from "../persistenceCandidates";
 import {
   hydrateLfs,
@@ -529,9 +529,6 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
       importLegacy,
     } satisfies ProviderWorkerProvisionerShape;
   });
-
-/** Controller copies of thread Outbox files, with checkout drafts under `drafts/`; backed up off-volume. */
-export const providerCheckpointRoot = (baseDir: string) => path.join(baseDir, "provider-outbox-checkpoints");
 
 export const makeSandboxProvisionerLive = (options: Omit<SandboxProvisionerOptions, "checkpointRoot"> & { readonly checkpointRoot?: string }) =>
   Layer.effect(ProviderWorkerProvisioner, Effect.gen(function* () {
