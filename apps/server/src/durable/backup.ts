@@ -228,7 +228,12 @@ async function enoughSpace(dir: string, needed: number) {
  * on the next pass; nothing here blocks the controller.
  */
 export function startControllerBackups(paths: ControllerBackupPaths, options: { readonly firstDelayMs?: number } = {}): () => void {
-  if (!artifactApiClient()) return () => undefined;
+  try {
+    if (!artifactApiClient()) return () => undefined;
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "controller.backup.disabled", message: describe(cause) }));
+    return () => undefined;
+  }
   const uploaded = new Map<string, string>();
   let running = false;
   let stopped = false;
