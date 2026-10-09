@@ -23,7 +23,9 @@ const hostOf = (value: string) => {
   }
 };
 
-export function resolveSandboxNetworkPolicy(environment: Readonly<Record<string, string | undefined>>): SandboxNetworkPolicy {
+export function resolveSandboxNetworkPolicy(
+  environment: Readonly<Record<string, string | undefined>>,
+): SandboxNetworkPolicy {
   const override = environment.SYNARA_DAYTONA_DOMAIN_ALLOW_LIST?.trim();
   if (override?.toLowerCase() === "off") return { unrestricted: true };
   const entries = override
@@ -39,7 +41,8 @@ export function resolveSandboxNetworkPolicy(environment: Readonly<Record<string,
     const value = entry?.trim();
     if (!value) continue;
     const host = value.includes("://") ? hostOf(value) : value.toLowerCase();
-    if (!host || !HOST.test(host)) throw new Error(`Sandbox allow-list entry '${value}' is not a host name or URL.`);
+    if (!host || !HOST.test(host))
+      throw new Error(`Sandbox allow-list entry '${value}' is not a host name or URL.`);
     domains.add(host);
   }
   if (domains.size === 0) {
@@ -48,7 +51,7 @@ export function resolveSandboxNetworkPolicy(environment: Readonly<Record<string,
         "set SYNARA_DAYTONA_DOMAIN_ALLOW_LIST, or set it to 'off'.",
     );
   }
-  return { domainAllowList: [...domains].sort() };
+  return { domainAllowList: [...domains].toSorted() };
 }
 
 /** The comma-separated form Daytona takes; undefined when sandboxes are unrestricted. */
@@ -59,5 +62,6 @@ export function sandboxHostAllowed(policy: SandboxNetworkPolicy, host: string): 
   if (policy.unrestricted) return true;
   const candidate = host.toLowerCase();
   return policy.domainAllowList.some((entry) =>
-    entry.startsWith("*.") ? candidate.endsWith(entry.slice(1)) : candidate === entry);
+    entry.startsWith("*.") ? candidate.endsWith(entry.slice(1)) : candidate === entry,
+  );
 }

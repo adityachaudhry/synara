@@ -27,10 +27,9 @@ const extraLabels = (labels: Readonly<Record<string, string>> | undefined) =>
     return /^[a-z][a-z0-9_.-]{0,62}$/u.test(key) && !RESERVED_LABELS.has(key) && trimmed && trimmed.length <= 256 ? [[key, trimmed]] : [];
   }));
 
-const sameList = (left: string | undefined, right: string) => {
-  const normalize = (value: string | undefined) => (value ?? "").split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join(",");
-  return normalize(left) === normalize(right);
-};
+const normalizedList = (value: string | undefined) =>
+  (value ?? "").split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean).toSorted().join(",");
+const sameList = (left: string | undefined, right: string) => normalizedList(left) === normalizedList(right);
 
 /** Runs as root: installs staged uploads at their targets, root-owned, like `install -D -m`. */
 const INSTALL_STAGED_SCRIPT = `const fs=require("node:fs"),path=require("node:path");

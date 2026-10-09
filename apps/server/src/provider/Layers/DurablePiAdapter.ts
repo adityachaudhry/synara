@@ -208,7 +208,11 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
   };
 
   /** The thread's current context pack, once the engine has fetched one (a sandbox label only). */
-  let contextPackIdOf: (threadId: string) => string | undefined = () => undefined;
+  let contextPackIdOf: ((threadId: string) => string | undefined) | undefined;
+  const chatSandboxLabels = (threadId: string) => {
+    const packId = contextPackIdOf?.(threadId);
+    return { thread_id: threadId, ...(packId ? { pack_id: packId } : {}) };
+  };
   /** Claims a fresh sandbox for the thread, under the given generation. */
   const claimSandbox = (threadId: string, lifecycleGeneration: string, repositoryBinding: NonNullable<ProviderWorkerRuntimeBinding["repositoryCheckout"]>["binding"] | undefined, speculative = false) =>
     provisioner.start({
@@ -217,7 +221,7 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
       headless: true,
       fresh: true,
       purpose: "chat",
-      labels: { thread_id: threadId, ...(contextPackIdOf(threadId) ? { pack_id: contextPackIdOf(threadId)! } : {}) },
+      labels: chatSandboxLabels(threadId),
       ...(speculative ? { speculative: true } : {}),
       ...(repositoryBinding ? { repositoryBinding } : {}),
     }).pipe(

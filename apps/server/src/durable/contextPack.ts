@@ -32,12 +32,19 @@ export interface ContextPackRequest {
 
 /** The authenticated author's email (Glasswing sends it as the author label). */
 export const requesterEmailOf = (author: OrchestrationMessageAuthor | undefined): string | null =>
-  [author?.label, author?.subject].map((value) => value?.trim()).find((value) => value && EMAIL.test(value))?.toLowerCase() ?? null;
+  [author?.label, author?.subject]
+    .map((value) => value?.trim())
+    .find((value) => value && EMAIL.test(value))
+    ?.toLowerCase() ?? null;
 
-const describe = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause)).slice(0, 300);
+const describe = (cause: unknown) =>
+  (cause instanceof Error ? cause.message : String(cause)).slice(0, 300);
 
 export class ContextPackCache {
-  readonly #entries = new Map<string, { readonly key: string; readonly fetchedAt: number; readonly pack: ContextPack }>();
+  readonly #entries = new Map<
+    string,
+    { readonly key: string; readonly fetchedAt: number; readonly pack: ContextPack }
+  >();
   readonly #failures = new Map<string, { readonly key: string; readonly at: number }>();
   readonly #inflight = new Map<string, Promise<void>>();
 
@@ -62,7 +69,8 @@ export class ContextPackCache {
     const entry = this.#entries.get(threadId);
     if (entry?.key === key && Date.now() - entry.fetchedAt < MAX_AGE_MS) return Promise.resolve();
     const failed = this.#failures.get(threadId);
-    if (failed?.key === key && Date.now() - failed.at < RETRY_AFTER_FAILURE_MS) return Promise.resolve();
+    if (failed?.key === key && Date.now() - failed.at < RETRY_AFTER_FAILURE_MS)
+      return Promise.resolve();
     const running = this.#inflight.get(threadId);
     if (running) return running;
     const task = this.#fetch(threadId, key, request).finally(() => this.#inflight.delete(threadId));
@@ -90,15 +98,28 @@ export class ContextPackCache {
       };
       this.#entries.set(threadId, { key, fetchedAt: Date.now(), pack });
       this.#failures.delete(threadId);
-      console.info(JSON.stringify({
-        event: "durable.context-pack.loaded", threadId, packId: pack.packId, commitSha: pack.commitSha ?? null,
-        chars: prompt.length, truncated: prompt.length > MAX_PROMPT_CHARS,
-      }));
+      console.info(
+        JSON.stringify({
+          event: "durable.context-pack.loaded",
+          threadId,
+          packId: pack.packId,
+          commitSha: pack.commitSha ?? null,
+          chars: prompt.length,
+          truncated: prompt.length > MAX_PROMPT_CHARS,
+        }),
+      );
     } catch (cause) {
       this.#failures.set(threadId, { key, at: Date.now() });
       // A stale pack for the same company and requester still beats none; another requester's never shows.
       if (this.#entries.get(threadId)?.key !== key) this.#entries.delete(threadId);
-      console.warn(JSON.stringify({ event: "durable.context-pack.unavailable", threadId, companyId: request.companyId, message: describe(cause) }));
+      console.warn(
+        JSON.stringify({
+          event: "durable.context-pack.unavailable",
+          threadId,
+          companyId: request.companyId,
+          message: describe(cause),
+        }),
+      );
     }
   }
 }

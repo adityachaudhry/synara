@@ -214,7 +214,7 @@ async function directoryFingerprint(dir: string): Promise<string | undefined> {
     if (info) files.push(`${path.relative(dir, file)}\u0000${info.size}\u0000${info.mtimeMs}`);
   }
   if (files.length === 0) return undefined;
-  return createHash("sha256").update(files.sort().join("\n")).digest("hex");
+  return createHash("sha256").update(files.toSorted().join("\n")).digest("hex");
 }
 
 async function enoughSpace(dir: string, needed: number) {

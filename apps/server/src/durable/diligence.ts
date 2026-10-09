@@ -182,7 +182,7 @@ const canonicalJson = (value: unknown): string => {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).toSorted()
     .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
 };
 
@@ -806,7 +806,8 @@ export class DiligenceRunner {
   async #uploadFiles(runId: string, runner: SandboxRunner, files: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array }>) {
     if (runner.uploadMany) {
       try {
-        await runner.uploadMany(files.map((file) => ({ ...file, mode: 0o644 })));
+        // Mode 0644, like the per-file path.
+        await runner.uploadMany(files);
         return;
       } catch (cause) {
         log("run.bulk-upload-failed", { runId, files: files.length, message: String(cause).slice(0, 300) });
