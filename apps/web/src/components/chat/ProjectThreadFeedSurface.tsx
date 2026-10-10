@@ -23,12 +23,15 @@ import {
   type WorkspaceFileOpener,
 } from "../../lib/workspaceFileOpener";
 import { readNativeApi } from "../../nativeApi";
+import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   closePaneInState,
   createDefaultRightDockState,
   openPaneInState,
+  resolveSurfaceDockState,
   setActivePaneInState,
   setDockOpenInState,
+  sharedRightDockKey,
   withPinnedHostPane,
   type RightDockPane,
   type RightDockPaneKind,
@@ -67,6 +70,8 @@ import { useProjectThreadFeedContextMenu } from "./useProjectThreadFeedContextMe
 
 const FEED_EXPLORER_PANE_ID = "project-feed-explorer";
 const FEED_PINNED_PANE_ID = "project-feed-pinned";
+// A shared dock's owner for panes the feed opens for itself (a new chat's workspace files).
+const FEED_DOCK_OWNER = "project-feed";
 const FEED_CHAT_PANE_SCOPE_ID = "project-thread-feed";
 const FEED_MAIN_MIN_WIDTH = 28 * 16;
 const THREAD_FEED_REFRESH_INTERVAL_MS = 2_000;
@@ -251,12 +256,40 @@ export function ProjectThreadFeedSurface({
   const syncServerShellSnapshot = useStore((state) => state.syncServerShellSnapshot);
   const { prewarmThreadDetail } = useThreadDetailPrewarm();
   const pinnedPane = hostSidebar?.pinnedPane;
-  const [dockState, setDockState] = useState<RightDockThreadState>(() => {
+  const [localDockState, setLocalDockState] = useState<RightDockThreadState>(() => {
     const state = createProjectFeedDockState();
     if (!pinnedPane) return state;
     const pinned = withPinnedHostPane(state, FEED_PINNED_PANE_ID);
     return pinnedPane.defaultActive ? setActivePaneInState(pinned, FEED_PINNED_PANE_ID) : pinned;
   });
+  // A shared dock (hostSidebar.sharedRightDock) is the one the project's threads use,
+  // so opening a thread and coming back keeps the panel as it is. The feed's
+  // default tabs seed it the first time.
+  const sharedDockKey = hostSidebar?.sharedRightDock === true ? sharedRightDockKey(projectId) : null;
+  const storedDockState = useRightDockStore(
+    useMemo(() => selectRightDockState(sharedDockKey), [sharedDockKey]),
+  );
+  const hasStoredDock = useRightDockStore((store) =>
+    sharedDockKey ? store.dockStateByThreadId[sharedDockKey] !== undefined : false,
+  );
+  const updateStoredDockState = useRightDockStore((store) => store.updateDockState);
+  useLayoutEffect(() => {
+    if (sharedDockKey && !hasStoredDock) updateStoredDockState(sharedDockKey, () => localDockState);
+  }, [hasStoredDock, localDockState, sharedDockKey, updateStoredDockState]);
+  const dockState = useMemo(
+    () =>
+      sharedDockKey && hasStoredDock
+        ? resolveSurfaceDockState(storedDockState, FEED_DOCK_OWNER)
+        : localDockState,
+    [hasStoredDock, localDockState, sharedDockKey, storedDockState],
+  );
+  const setDockState = useCallback(
+    (transform: (state: RightDockThreadState) => RightDockThreadState) => {
+      if (sharedDockKey) updateStoredDockState(sharedDockKey, transform);
+      else setLocalDockState(transform);
+    },
+    [sharedDockKey, updateStoredDockState],
+  );
   // The host's pinned pane leads the tab strip.
   const displayDockState = pinnedPane ? withPinnedHostPane(dockState, FEED_PINNED_PANE_ID) : dockState;
   const feedContentRef = useRef<HTMLElement | null>(null);
@@ -366,9 +399,10 @@ export function ProjectThreadFeedSurface({
         fileSource,
         fileRevision: fileRevision ?? null,
         threadId,
+        ownerThreadId: sharedDockKey && fileSource !== "host" ? FEED_DOCK_OWNER : null,
       }),
     );
-  }, []);
+  }, [setDockState, sharedDockKey]);
 
   const openFeedHostFile = useCallback((filePath: string, revision?: string) => {
     openFeedFile(filePath, null, "host", revision);
@@ -393,7 +427,7 @@ export function ProjectThreadFeedSurface({
       const next = closePaneInState(state, paneId);
       return next.panes.length === 0 ? setDockOpenInState(next, false) : next;
     });
-  }, []);
+  }, [setDockState]);
 
   const renderDockPane = useCallback(
     (pane: RightDockPane): ReactNode => {
@@ -437,7 +471,7 @@ export function ProjectThreadFeedSurface({
             kind: "explorer",
           });
     });
-  }, []);
+  }, [setDockState]);
   const openFeedExplorer = useCallback(() => toggleDock(true), [toggleDock]);
 
   const addDockPane = useCallback((kind: RightDockPaneKind) => {
@@ -445,7 +479,7 @@ export function ProjectThreadFeedSurface({
     setDockState((state) =>
       openPaneInState(state, { paneId: FEED_EXPLORER_PANE_ID, kind: "explorer" }),
     );
-  }, []);
+  }, [setDockState]);
 
   const paneLabelOverrides: Record<string, string> = {};
   const paneIconOverrides: Record<string, ReactNode | undefined> = {};
@@ -513,6 +547,7 @@ export function ProjectThreadFeedSurface({
         defaultWidth={RIGHT_DOCK_DEFAULT_WIDTH}
         shouldAcceptWidth={shouldAcceptFeedDockWidth}
         motionKey={`project-feed:${projectId}`}
+        widthMemoryKey={sharedDockKey ?? undefined}
         onSelectPane={(paneId) =>
           setDockState((state) =>
             setActivePaneInState(pinnedPane ? withPinnedHostPane(state, FEED_PINNED_PANE_ID) : state, paneId),

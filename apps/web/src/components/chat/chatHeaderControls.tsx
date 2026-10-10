@@ -192,7 +192,10 @@ export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
  *  the pane's background so it covers the strip's divider and reads as joined to the
  *  pane below; inactive tabs are bare labels. Icons follow the label colour. */
 const FILE_TAB_CLASS_NAME =
-  "inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-t-lg border border-b-0 border-transparent px-3.5 font-medium text-[var(--color-text-foreground-secondary)] transition-colors hover:text-[var(--color-text-foreground)] [&_svg]:!text-inherit [&_[data-slot=central-icon]]:!text-inherit";
+  "inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-t-lg border border-b-0 border-transparent px-3 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-[var(--color-text-foreground-secondary)] transition-colors hover:text-[var(--color-text-foreground)] [&_svg]:!text-inherit [&_[data-slot=central-icon]]:!text-inherit";
+/** A closable file tab's ×: always shown, after the label. */
+const FILE_TAB_CLOSE_CLASS_NAME =
+  "-mr-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
 const FILE_TAB_ACTIVE_CLASS_NAME =
   "border-[var(--color-border)] bg-[var(--background)] text-[var(--color-text-foreground)]";
 
@@ -224,12 +227,64 @@ export function SurfaceTabChip({
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
 }) {
+  const labelNode = (
+    onSelect ? (
+      <button
+        type="button"
+        className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+        title={title}
+        aria-pressed={active}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        {leading}
+        <span className="truncate">{label}</span>
+        {trailing}
+      </button>
+    ) : (
+      // Non-selectable chips (a lone tab that cannot switch to anything) render the
+      // label as static text so keyboard/AT users don't land on a button that does
+      // nothing.
+      <span
+        className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+        title={title}
+      >
+        {leading}
+        <span className="truncate">{label}</span>
+        {trailing}
+      </span>
+    )
+  );
+  if (variant === "tab") {
+    return (
+      <div className={cn("group/dock-tab", FILE_TAB_CLASS_NAME, active && FILE_TAB_ACTIVE_CLASS_NAME, className)}>
+        <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
+        {labelNode}
+        {onClose ? (
+          <button
+            type="button"
+            className={FILE_TAB_CLOSE_CLASS_NAME}
+            aria-label={closeLabel}
+            title={closeLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+          >
+            <CentralIcon name="cross-small" className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div
       className={cn(
         "group/dock-tab",
-        variant === "tab" ? FILE_TAB_CLASS_NAME : DOCK_TAB_CHIP_CLASS_NAME,
-        active && (variant === "tab" ? FILE_TAB_ACTIVE_CLASS_NAME : CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME),
+        DOCK_TAB_CHIP_CLASS_NAME,
+        active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
         className,
       )}
     >
@@ -254,34 +309,7 @@ export function SurfaceTabChip({
       ) : (
         <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
       )}
-      {onSelect ? (
-        <button
-          type="button"
-          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
-          title={title}
-          aria-pressed={active}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelect();
-          }}
-        >
-          {leading}
-          <span className="truncate">{label}</span>
-          {trailing}
-        </button>
-      ) : (
-        // Non-selectable chips (a lone tab that cannot switch to anything) render the
-        // label as static text so keyboard/AT users don't land on a button that does
-        // nothing.
-        <span
-          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
-          title={title}
-        >
-          {leading}
-          <span className="truncate">{label}</span>
-          {trailing}
-        </span>
-      )}
+      {labelNode}
     </div>
   );
 }

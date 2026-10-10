@@ -64,6 +64,10 @@ const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
   device: 38 * 16,
 };
 
+// A width someone dragged the dock to, per widthMemoryKey: surfaces that share a
+// dock mount their own RightDock, and the next one opens at that width.
+const draggedDockWidthByKey = new Map<string, string>();
+
 interface RightDockProps {
   state: RightDockThreadState;
   viewportHeightOffsetPx?: number;
@@ -84,6 +88,8 @@ interface RightDockProps {
   onOpenChange: (open: boolean) => void;
   onAddPane: (kind: RightDockPaneKind) => void;
   motionKey?: string;
+  // Surfaces sharing a dock pass its key, so a dragged width outlives a remount.
+  widthMemoryKey?: string | undefined;
   activePaneRuntimeMode?: DockPaneRuntimeMode;
   browserRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
@@ -226,6 +232,7 @@ export function RightDock(props: RightDockProps) {
   // freely; the next open re-centers the split.
   const contentRef = useRef<HTMLDivElement | null>(null);
   const minWidth = props.minWidth;
+  const widthMemoryKey = props.widthMemoryKey;
   const activePaneKind = activePane?.kind ?? null;
   // A host may size the dock to the screen; read through a ref so a new function
   // identity does not reopen the dock at its default and undo a drag.
@@ -311,9 +318,23 @@ export function RightDock(props: RightDockProps) {
       }
     };
     apply();
+    // A shared dock reopens at the width someone dragged it to (still above the chat's floor).
+    const dragged = widthMemoryKey && preferredWidth === undefined ? draggedDockWidthByKey.get(widthMemoryKey) : undefined;
+    if (dragged) {
+      const shellWidth = shell.getBoundingClientRect().width;
+      const width = Number.parseFloat(dragged);
+      const ceiling = chatMinWidth === undefined ? width : Math.floor(shellWidth - chatMinWidth);
+      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, Math.min(width, ceiling))}px`);
+    }
+    const remember = () => {
+      if (!widthMemoryKey || preferredWidth !== undefined || shell.dataset.rightDockExpanded === "true") return;
+      const current = wrapper.style.getPropertyValue("--sidebar-width");
+      if (current && current !== applied) draggedDockWidthByKey.set(widthMemoryKey, current);
+      else draggedDockWidthByKey.delete(widthMemoryKey);
+    };
     const follow = hasHostOpenWidth && preferredWidth === undefined;
     if (!follow && chatMinWidth === undefined) {
-      return;
+      return remember;
     }
     const observer = new ResizeObserver(() => {
       if (shell.dataset.rightDockExpanded === "true") return;
@@ -331,8 +352,11 @@ export function RightDock(props: RightDockProps) {
       }
     });
     observer.observe(shell);
-    return () => observer.disconnect();
-  }, [props.state.open, minWidth, activePaneKind, hasHostOpenWidth, chatMinWidth]);
+    return () => {
+      observer.disconnect();
+      remember();
+    };
+  }, [props.state.open, minWidth, activePaneKind, hasHostOpenWidth, chatMinWidth, widthMemoryKey]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );

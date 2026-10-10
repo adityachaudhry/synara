@@ -80,6 +80,9 @@ export interface SynaraHostSidebar {
   /** "tabs": the dock's tabs are file tabs (the active one joined to its pane), not
    *  loose chips. */
   readonly rightDockTabStyle?: "chips" | "tabs";
+  /** One dock for a project's feed and threads: its tabs, active tab, open state and
+   *  dragged width carry across them; a thread's own workspace files show only there. */
+  readonly sharedRightDock?: boolean;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;

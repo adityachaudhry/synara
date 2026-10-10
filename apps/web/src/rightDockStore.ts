@@ -1,9 +1,9 @@
 // FILE: rightDockStore.ts
-// Purpose: Persist the tabbed right-dock state (open panes + active tab) per host thread.
+// Purpose: Persist the tabbed right-dock state (open panes + active tab) per host thread
+// (or per project, for a dock its surfaces share; keys from sharedRightDockKey).
 // Layer: UI state store
 // Exports: dock store hook, per-thread selector, and stable default snapshot.
 
-import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -20,6 +20,8 @@ import {
   setDockOpenInState,
   toggleSingletonPaneInState,
   updatePaneInState,
+  SHARED_RIGHT_DOCK_KEY_PREFIX,
+  withSharedActivePane,
 } from "./rightDockStore.logic";
 
 const RIGHT_DOCK_STORAGE_KEY = "synara:right-dock-state:v1";
@@ -27,18 +29,18 @@ const RIGHT_DOCK_STORAGE_KEY = "synara:right-dock-state:v1";
 interface RightDockStore {
   dockStateByThreadId: Record<string, RightDockThreadState | undefined>;
   openPane: (
-    threadId: ThreadId,
+    threadId: string,
     input: Omit<OpenPaneInput, "paneId"> & { paneId?: string },
   ) => void;
   toggleSingletonPane: (
-    threadId: ThreadId,
+    threadId: string,
     input: Omit<OpenPaneInput, "paneId"> & { paneId?: string },
   ) => void;
-  closePane: (threadId: ThreadId, paneId: string) => void;
-  setActivePane: (threadId: ThreadId, paneId: string | null) => void;
-  setDockOpen: (threadId: ThreadId, open: boolean) => void;
+  closePane: (threadId: string, paneId: string) => void;
+  setActivePane: (threadId: string, paneId: string | null) => void;
+  setDockOpen: (threadId: string, open: boolean) => void;
   updatePane: (
-    threadId: ThreadId,
+    threadId: string,
     paneId: string,
     patch: Partial<
       Pick<
@@ -54,7 +56,11 @@ interface RightDockStore {
       >
     >,
   ) => void;
-  clearThreadDockState: (threadId: ThreadId) => void;
+  clearThreadDockState: (threadId: string) => void;
+  updateDockState: (
+    threadId: string,
+    transform: (state: RightDockThreadState) => RightDockThreadState,
+  ) => void;
 }
 
 // Frozen shared snapshot: it is handed back from `selectRightDockState` for any
@@ -66,12 +72,15 @@ Object.freeze(DEFAULT_RIGHT_DOCK_STATE.panes);
 
 function commit(
   set: (fn: (store: RightDockStore) => Partial<RightDockStore>) => void,
-  threadId: ThreadId,
+  threadId: string,
   transform: (state: RightDockThreadState) => RightDockThreadState,
 ): void {
   set((store) => {
     const previous = store.dockStateByThreadId[threadId] ?? DEFAULT_RIGHT_DOCK_STATE;
-    const next = transform(previous);
+    const transformed = transform(previous);
+    const next = threadId.startsWith(SHARED_RIGHT_DOCK_KEY_PREFIX)
+      ? withSharedActivePane(previous, transformed)
+      : transformed;
     if (next === previous) {
       return {};
     }
@@ -104,6 +113,7 @@ export const useRightDockStore = create<RightDockStore>()(
         commit(set, threadId, (state) => setDockOpenInState(state, open)),
       updatePane: (threadId, paneId, patch) =>
         commit(set, threadId, (state) => updatePaneInState(state, paneId, patch)),
+      updateDockState: (threadId, transform) => commit(set, threadId, transform),
       clearThreadDockState: (threadId) =>
         set((store) => {
           if (!Object.hasOwn(store.dockStateByThreadId, threadId)) {
@@ -129,7 +139,7 @@ export const useRightDockStore = create<RightDockStore>()(
   ),
 );
 
-export function selectRightDockState(threadId: ThreadId | null) {
+export function selectRightDockState(threadId: string | null) {
   // Keep the fallback snapshot stable so React does not observe phantom store
   // changes while mounting a thread that has no persisted dock state yet.
   return (store: RightDockStore) =>

@@ -68,12 +68,17 @@ import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   resolveActivePane,
   findMissingSidechatPaneIds,
+  isSharedDockPane,
+  resolveSurfaceDockState,
+  sharedRightDockKey,
   withPinnedHostPane,
+  type OpenPaneInput,
   type RightDockPane,
   type RightDockPaneKind,
 } from "../../rightDockStore.logic";
 
 const HOST_PINNED_PANE_ID = "host-pinned";
+type DockPaneInput = Omit<OpenPaneInput, "paneId"> & { paneId?: string };
 import {
   type SplitDirection,
   type SplitDropSide,
@@ -204,26 +209,76 @@ export function SingleChatSurface(props: {
   const navigate = useNavigate();
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
-  const dockState = useRightDockStore(
-    useMemo(() => selectRightDockState(props.threadId), [props.threadId]),
+  // A shared dock (hostSidebar.sharedRightDock) is one state for the project's feed
+  // and threads, so switching between them keeps the panel as it is; the panes a
+  // thread opens for itself (its workspace files) carry the thread and show only there.
+  const sharedDockKey =
+    hostSidebar?.sharedRightDock === true && props.projectId ? sharedRightDockKey(props.projectId) : null;
+  const storedDockState = useRightDockStore(
+    useMemo(() => selectRightDockState(sharedDockKey ?? props.threadId), [sharedDockKey, props.threadId]),
   );
-  const openPane = useRightDockStore((store) => store.openPane);
-  const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
-  const closePane = useRightDockStore((store) => store.closePane);
-  const setActivePane = useRightDockStore((store) => store.setActivePane);
-  const setDockOpen = useRightDockStore((store) => store.setDockOpen);
-  const updatePane = useRightDockStore((store) => store.updatePane);
+  const dockState = useMemo(
+    () => (sharedDockKey ? resolveSurfaceDockState(storedDockState, props.threadId) : storedDockState),
+    [sharedDockKey, storedDockState, props.threadId],
+  );
+  const storeOpenPane = useRightDockStore((store) => store.openPane);
+  const storeToggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
+  const storeClosePane = useRightDockStore((store) => store.closePane);
+  const storeSetActivePane = useRightDockStore((store) => store.setActivePane);
+  const storeSetDockOpen = useRightDockStore((store) => store.setDockOpen);
+  const storeUpdatePane = useRightDockStore((store) => store.updatePane);
+  const dockKeyFor = useCallback((threadId: ThreadId): string => sharedDockKey ?? threadId, [sharedDockKey]);
+  const ownedPaneInput = useCallback(
+    (threadId: ThreadId, input: DockPaneInput): DockPaneInput =>
+      sharedDockKey && !isSharedDockPane(input) ? { ...input, ownerThreadId: threadId } : input,
+    [sharedDockKey],
+  );
+  const openPane = useCallback(
+    (threadId: ThreadId, input: DockPaneInput) =>
+      storeOpenPane(dockKeyFor(threadId), ownedPaneInput(threadId, input)),
+    [dockKeyFor, ownedPaneInput, storeOpenPane],
+  );
+  const toggleSingletonPane = useCallback(
+    (threadId: ThreadId, input: DockPaneInput) =>
+      storeToggleSingletonPane(dockKeyFor(threadId), ownedPaneInput(threadId, input)),
+    [dockKeyFor, ownedPaneInput, storeToggleSingletonPane],
+  );
+  const closePane = useCallback(
+    (threadId: ThreadId, paneId: string) => storeClosePane(dockKeyFor(threadId), paneId),
+    [dockKeyFor, storeClosePane],
+  );
+  const setActivePane = useCallback(
+    (threadId: ThreadId, paneId: string | null) => storeSetActivePane(dockKeyFor(threadId), paneId),
+    [dockKeyFor, storeSetActivePane],
+  );
+  const setDockOpen = useCallback(
+    (threadId: ThreadId, open: boolean) => storeSetDockOpen(dockKeyFor(threadId), open),
+    [dockKeyFor, storeSetDockOpen],
+  );
+  const updatePane = useCallback(
+    (threadId: ThreadId, paneId: string, patch: Parameters<typeof storeUpdatePane>[2]) =>
+      storeUpdatePane(dockKeyFor(threadId), paneId, patch),
+    [dockKeyFor, storeUpdatePane],
+  );
   const openFilesPaneOnMount = hostSidebar?.openFilesPaneOnMount === true;
   const pinnedPane = hostSidebar?.pinnedPane;
   const hasPinnedPane = pinnedPane !== undefined;
   const pinnedPaneDefaultActive = pinnedPane?.defaultActive === true;
   useLayoutEffect(() => {
     if (!openFilesPaneOnMount) return;
+    // A shared dock opens its default tabs once; after that a thread keeps the
+    // tab that was showing.
+    if (
+      sharedDockKey &&
+      useRightDockStore.getState().dockStateByThreadId[sharedDockKey]?.panes.some((pane) => pane.kind === "explorer")
+    ) {
+      return;
+    }
     // The last pane opened is the selected tab.
     if (hasPinnedPane && !pinnedPaneDefaultActive) openPane(props.threadId, { kind: "host", paneId: HOST_PINNED_PANE_ID });
     openPane(props.threadId, { kind: "explorer" });
     if (hasPinnedPane && pinnedPaneDefaultActive) openPane(props.threadId, { kind: "host", paneId: HOST_PINNED_PANE_ID });
-  }, [hasPinnedPane, openFilesPaneOnMount, openPane, pinnedPaneDefaultActive, props.threadId]);
+  }, [hasPinnedPane, openFilesPaneOnMount, openPane, pinnedPaneDefaultActive, props.threadId, sharedDockKey]);
   // The host's pinned pane leads the tab strip.
   const displayDockState = hasPinnedPane ? withPinnedHostPane(dockState, HOST_PINNED_PANE_ID) : dockState;
   const pinnedPaneId = hasPinnedPane ? displayDockState.panes[0]?.id : undefined;
@@ -1300,6 +1355,7 @@ export function SingleChatSurface(props: {
           shouldAcceptWidth={shouldAcceptDockWidth}
           launcherItems={dockLauncherItems}
           motionKey={props.threadId}
+          widthMemoryKey={sharedDockKey ?? undefined}
           activePaneRuntimeMode={
             floatingBrowserVisible && activePane?.kind === "browser"
               ? "preview"

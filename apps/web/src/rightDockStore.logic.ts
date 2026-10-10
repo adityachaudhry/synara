@@ -44,12 +44,18 @@ export interface RightDockPane {
   pullRequestRepository: string | null;
   pullRequestNumber: number | null;
   pullRequestInitialTab: PullRequestInitialTab | null;
+  // In a dock shared by a project's surfaces (hostSidebar.sharedRightDock), the
+  // surface a pane belongs to (a thread's workspace file); unowned panes show on all.
+  ownerThreadId?: string;
 }
 
 export interface RightDockThreadState {
   open: boolean;
   panes: RightDockPane[];
   activePaneId: string | null;
+  // Shared dock: the last active unowned pane, which a surface shows when the
+  // active pane belongs to another surface.
+  sharedActivePaneId?: string | null;
 }
 
 // File previews are the only multi-instance dock kind. Side chats share one
@@ -117,6 +123,7 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
       candidate.pullRequestInitialTab === "code"
         ? candidate.pullRequestInitialTab
         : null,
+    ...(typeof candidate.ownerThreadId === "string" ? { ownerThreadId: candidate.ownerThreadId } : {}),
   };
 }
 
@@ -132,27 +139,35 @@ export function sanitizeRightDockThreadState(value: unknown): RightDockThreadSta
     : [];
   const persistedActivePaneId =
     typeof candidate.activePaneId === "string" ? candidate.activePaneId : null;
-  const keptSingletonPaneIdByKind = new Map<RightDockPaneKind, string>();
+  // One singleton per kind and owner (a shared dock holds each surface's own).
+  const singletonKey = (pane: RightDockPane) => `${pane.kind}:${pane.ownerThreadId ?? ""}`;
+  const keptSingletonPaneIdByKind = new Map<string, string>();
   for (const pane of sanitizedPanes) {
     if (
       isSingletonPaneKind(pane.kind) &&
-      (pane.id === persistedActivePaneId || !keptSingletonPaneIdByKind.has(pane.kind))
+      (pane.id === persistedActivePaneId || !keptSingletonPaneIdByKind.has(singletonKey(pane)))
     ) {
-      keptSingletonPaneIdByKind.set(pane.kind, pane.id);
+      keptSingletonPaneIdByKind.set(singletonKey(pane), pane.id);
     }
   }
   const panes = sanitizedPanes.filter(
     (pane) =>
-      !isSingletonPaneKind(pane.kind) || keptSingletonPaneIdByKind.get(pane.kind) === pane.id,
+      !isSingletonPaneKind(pane.kind) || keptSingletonPaneIdByKind.get(singletonKey(pane)) === pane.id,
   );
   const activePaneId =
     persistedActivePaneId && panes.some((pane) => pane.id === persistedActivePaneId)
       ? persistedActivePaneId
       : (panes[0]?.id ?? null);
+  const sharedActivePaneId =
+    typeof candidate.sharedActivePaneId === "string" &&
+    panes.some((pane) => pane.id === candidate.sharedActivePaneId)
+      ? candidate.sharedActivePaneId
+      : null;
   return {
     open: candidate.open === true,
     panes,
     activePaneId,
+    ...(sharedActivePaneId ? { sharedActivePaneId } : {}),
   };
 }
 
@@ -177,6 +192,7 @@ export interface OpenPaneInput {
   pullRequestRepository?: string | null;
   pullRequestNumber?: number | null;
   pullRequestInitialTab?: PullRequestInitialTab | null;
+  ownerThreadId?: string | null;
 }
 
 function createPane(input: OpenPaneInput): RightDockPane {
@@ -193,6 +209,7 @@ function createPane(input: OpenPaneInput): RightDockPane {
     pullRequestRepository: input.pullRequestRepository ?? null,
     pullRequestNumber: input.pullRequestNumber ?? null,
     pullRequestInitialTab: input.pullRequestInitialTab ?? null,
+    ...(input.ownerThreadId ? { ownerThreadId: input.ownerThreadId } : {}),
   };
 }
 
@@ -240,7 +257,8 @@ function findMatchingMultiInstancePane(
         pane.filePath === filePath &&
         (pane.fileSource ?? "workspace") === (input.fileSource ?? "workspace") &&
         (pane.fileRevision ?? null) === (input.fileRevision ?? null) &&
-        pane.threadId === (input.threadId ?? null),
+        pane.threadId === (input.threadId ?? null) &&
+        (pane.ownerThreadId ?? null) === (input.ownerThreadId ?? null),
     );
   }
   return undefined;
@@ -249,8 +267,11 @@ function findMatchingMultiInstancePane(
 function findSingletonPane(
   state: RightDockThreadState,
   kind: RightDockPaneKind,
+  ownerThreadId: string | null = null,
 ): RightDockPane | undefined {
-  return state.panes.find((pane) => pane.kind === kind);
+  return state.panes.find(
+    (pane) => pane.kind === kind && (pane.ownerThreadId ?? null) === ownerThreadId,
+  );
 }
 
 // Opens (or focuses) a pane and makes the dock visible. Singleton kinds reuse
@@ -261,23 +282,24 @@ export function openPaneInState(
   input: OpenPaneInput,
 ): RightDockThreadState {
   if (isSingletonPaneKind(input.kind)) {
-    const existing = findSingletonPane(state, input.kind);
+    const existing = findSingletonPane(state, input.kind, input.ownerThreadId ?? null);
     if (existing) {
       const patch = singletonPaneReopenPatch(input);
       const nextPanes = patch
         ? state.panes.map((pane) => (pane.id === existing.id ? { ...pane, ...patch } : pane))
         : state.panes;
-      return { open: true, panes: nextPanes, activePaneId: existing.id };
+      return { ...state, open: true, panes: nextPanes, activePaneId: existing.id };
     }
   } else {
     const existing = findMatchingMultiInstancePane(state, input);
     if (existing) {
-      return { open: true, panes: state.panes, activePaneId: existing.id };
+      return { ...state, open: true, panes: state.panes, activePaneId: existing.id };
     }
   }
 
   const pane = createPane(input);
   return {
+    ...state,
     open: true,
     panes: [...state.panes, pane],
     activePaneId: pane.id,
@@ -316,6 +338,7 @@ export function closePaneInState(
     paneId,
   );
   return {
+    ...state,
     // An open dock with no panes is the launcher state. Closing the final tab
     // returns to that launcher instead of collapsing the entire dock.
     open: state.open,
@@ -397,7 +420,7 @@ export function toggleSingletonPaneInState(
   state: RightDockThreadState,
   input: OpenPaneInput,
 ): RightDockThreadState {
-  const existing = findSingletonPane(state, input.kind);
+  const existing = findSingletonPane(state, input.kind, input.ownerThreadId ?? null);
   if (existing && state.open && state.activePaneId === existing.id) {
     return { ...state, open: false };
   }
@@ -419,6 +442,50 @@ export function withPinnedHostPane(state: RightDockThreadState, paneId: string):
       };
   const host = findSingletonPane(withHost, "host")!;
   return { ...withHost, panes: [host, ...withHost.panes.filter((pane) => pane.id !== host.id)] };
+}
+
+export const SHARED_RIGHT_DOCK_KEY_PREFIX = "project-dock:";
+
+/** A shared dock's key for one project: its feed and every thread use the same state. */
+export function sharedRightDockKey(projectId: string): string {
+  return `${SHARED_RIGHT_DOCK_KEY_PREFIX}${projectId}`;
+}
+
+/** Shared dock: panes every surface shows (the host's pane, Explorer, committed files). */
+export function isSharedDockPane(input: { kind: RightDockPaneKind; fileSource?: "host" | "workspace" | undefined }): boolean {
+  return input.kind === "host" || input.kind === "explorer" || (input.kind === "file" && input.fileSource === "host");
+}
+
+/** Shared dock: keep the last active unowned pane, so another surface can show it. */
+export function withSharedActivePane(
+  previous: RightDockThreadState,
+  next: RightDockThreadState,
+): RightDockThreadState {
+  const active = next.panes.find((pane) => pane.id === next.activePaneId);
+  const sharedActivePaneId =
+    active && !active.ownerThreadId
+      ? active.id
+      : (next.sharedActivePaneId ?? previous.sharedActivePaneId ?? null);
+  return (next.sharedActivePaneId ?? null) === sharedActivePaneId ? next : { ...next, sharedActivePaneId };
+}
+
+/**
+ * A shared dock as one surface shows it: unowned panes plus that surface's own;
+ * when the active pane is another surface's, the last active unowned pane.
+ */
+export function resolveSurfaceDockState(
+  state: RightDockThreadState,
+  ownerThreadId: string,
+): RightDockThreadState {
+  const visible = (pane: RightDockPane) => !pane.ownerThreadId || pane.ownerThreadId === ownerThreadId;
+  if (state.panes.every(visible)) return state;
+  const panes = state.panes.filter(visible);
+  const activePaneId = panes.some((pane) => pane.id === state.activePaneId)
+    ? state.activePaneId
+    : panes.some((pane) => pane.id === state.sharedActivePaneId)
+      ? (state.sharedActivePaneId ?? null)
+      : (panes[0]?.id ?? null);
+  return { ...state, panes, activePaneId };
 }
 
 export function resolveActivePane(state: RightDockThreadState): RightDockPane | null {

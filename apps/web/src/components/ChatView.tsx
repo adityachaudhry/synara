@@ -284,6 +284,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
+import { useRightDockKey } from "../rightDockKey";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
@@ -4612,7 +4613,8 @@ export default function ChatView({
   );
   // The terminal's panel toggle mirrors the right dock's collapse control: it shows
   // or hides the side panel only when this thread already has a pane to show.
-  const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
+  const rightDockKey = useRightDockKey(threadId, activeProjectId);
+  const rightDockOpen = useRightDockStore((store) => selectRightDockState(rightDockKey)(store).open);
   const isMobileViewport = useIsMobile();
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
@@ -4674,16 +4676,16 @@ export default function ChatView({
     providerOptions: providerOptionsForDispatch ?? null,
   });
   const hasRightDockPanes = useRightDockStore(
-    (store) => selectRightDockState(threadId)(store).panes.length > 0,
+    (store) => selectRightDockState(rightDockKey)(store).panes.length > 0,
   );
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   const setRightDockOpen = useRightDockStore((store) => store.setDockOpen);
   const openLandingExplorer = useCallback(() => {
-    openRightDockPane(threadId, { kind: "explorer" });
-  }, [openRightDockPane, threadId]);
+    openRightDockPane(rightDockKey, { kind: "explorer" });
+  }, [openRightDockPane, rightDockKey]);
   const toggleRightDock = useCallback(() => {
-    setRightDockOpen(threadId, !rightDockOpen);
-  }, [rightDockOpen, setRightDockOpen, threadId]);
+    setRightDockOpen(rightDockKey, !rightDockOpen);
+  }, [rightDockOpen, setRightDockOpen, rightDockKey]);
   const terminalDrawerProps = useMemo(
     () => ({
       threadId,
