@@ -61,6 +61,11 @@ export interface SynaraHostSidebar {
   /** Suppress successful thread/terminal completion notifications; attention alerts remain enabled. */
   readonly suppressCompletionNotifications?: boolean;
   readonly openFilesPaneOnMount?: boolean;
+  /**
+   * The right dock's opening width for a workspace this wide (default: half). It
+   * follows window resizes until someone drags the dock. Keep the function stable.
+   */
+  readonly rightDockOpenWidth?: (shellWidthPx: number) => number;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;

@@ -225,6 +225,11 @@ export function RightDock(props: RightDockProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const minWidth = props.minWidth;
   const activePaneKind = activePane?.kind ?? null;
+  // A host may size the dock to the screen; read through a ref so a new function
+  // identity does not reopen the dock at its default and undo a drag.
+  const hostOpenWidthRef = useRef(hostSidebar?.rightDockOpenWidth);
+  hostOpenWidthRef.current = hostSidebar?.rightDockOpenWidth;
+  const hasHostOpenWidth = hostSidebar?.rightDockOpenWidth !== undefined;
   useEffect(() => {
     if (!props.state.open) {
       return;
@@ -238,11 +243,31 @@ export function RightDock(props: RightDockProps) {
     // stranded in empty space, so kinds that render a fixed-aspect object open
     // at their own comfortable size instead of the even split.
     const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
-    const openWidth = preferredWidth ?? Math.round(shell.getBoundingClientRect().width / 2);
-    if (openWidth > 0) {
-      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, openWidth)}px`);
+    let applied: string | null = null;
+    const apply = () => {
+      const shellWidth = shell.getBoundingClientRect().width;
+      const hostOpenWidth = hostOpenWidthRef.current;
+      const openWidth = preferredWidth ?? Math.round(hostOpenWidth ? hostOpenWidth(shellWidth) : shellWidth / 2);
+      if (openWidth > 0) {
+        applied = `${Math.max(minWidth, openWidth)}px`;
+        wrapper.style.setProperty("--sidebar-width", applied);
+      }
+    };
+    apply();
+    if (!hasHostOpenWidth || preferredWidth !== undefined) {
+      return;
     }
-  }, [props.state.open, minWidth, activePaneKind]);
+    // Follow the window until someone drags the dock to a width of their own.
+    const observer = new ResizeObserver(() => {
+      if (wrapper.style.getPropertyValue("--sidebar-width") !== applied) {
+        observer.disconnect();
+        return;
+      }
+      apply();
+    });
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [props.state.open, minWidth, activePaneKind, hasHostOpenWidth]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
