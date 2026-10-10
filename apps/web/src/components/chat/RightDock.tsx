@@ -305,8 +305,13 @@ export function RightDock(props: RightDockProps) {
     const elements = dockElements();
     if (!elements) return;
     const { container, shell } = elements;
+    // Only a resize of the shell: the first notice would start the slide before its frame.
+    let shellWidth = Math.floor(shell.getBoundingClientRect().width);
     const observer = new ResizeObserver(() => {
-      container.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
+      const width = Math.floor(shell.getBoundingClientRect().width);
+      if (width === shellWidth) return;
+      shellWidth = width;
+      container.style.setProperty("--sidebar-width", `${width}px`);
     });
     observer.observe(shell);
     return () => observer.disconnect();
