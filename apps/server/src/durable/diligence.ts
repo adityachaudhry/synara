@@ -215,12 +215,27 @@ export interface DiligenceThreads {
   startThreadSession(threadId: string, repository: ProjectRepositoryBinding): Promise<void>;
 }
 
+/** The bottom line of an executive read: `### Verdict` under `## Read`, capped at a few sentences. */
+function readVerdict(markdown: string | undefined): string | undefined {
+  if (!markdown) return undefined;
+  const read = markdown.split(/^## /mu).find((section) => section.startsWith("Read"));
+  const verdict = read?.split(/^### /mu).find((section) => section.startsWith("Verdict"));
+  const text = verdict?.slice("Verdict".length).split(/^#/mu)[0]?.trim();
+  if (!text) return undefined;
+  if (text.length <= 1200) return text;
+  const cut = text.slice(0, 1200);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(". ") + 1, 600))}`;
+}
+
 function closingNote(request: DiligenceRequest, state: RunState, outcome: Outcome): string {
   const deliverable = DELIVERABLES[request.mode] ?? "report";
   const link = request.reportUrl ? ` [Open the ${deliverable}](${request.reportUrl}).` : "";
   switch (outcome) {
-    case "published":
-      return `The ${request.company.name} ${deliverable} is ready.${link}`;
+    case "published": {
+      // Full diligence promises "the summary and report link" in its opening request.
+      const verdict = request.mode === "full" ? readVerdict(state.outputs["outbox/executive_investment_read.md"]) : undefined;
+      return `The ${request.company.name} ${deliverable} is ready.${link}${verdict ? `\n\n${verdict}` : ""}`;
+    }
     case "unpublished":
       return `The research is finished. The ${deliverable} appears here once it is published.`;
     case "publish-failed":
@@ -451,13 +466,17 @@ export class DiligenceRunner {
       const note = await readMessage(threadId, closeMessageId(runId)).catch(() => undefined);
       if (!note) continue;
       const stale = !state.outcome && state.status === "succeeded" && note.text.includes("has not received the results yet");
-      const moved = state.outcome !== undefined && Date.parse(note.updatedAt) - Date.parse(note.createdAt) > 60_000;
-      if (!stale && !moved) continue;
+      if (!stale && state.outcome === undefined) continue;
       const request = await this.#plan(runId);
+      if (!request) continue;
       const outcome = state.outcome ?? "published";
-      if (!request || !(await rewriteMessage?.(threadId, closeMessageId(runId), closingNote(request, state, outcome)))) continue;
+      const text = closingNote(request, state, outcome);
+      // Tracked notes follow the current wording, and keep their own time.
+      const moved = Date.parse(note.updatedAt) - Date.parse(note.createdAt) > 60_000;
+      if (!stale && !moved && note.text === text) continue;
+      if (!(await rewriteMessage?.(threadId, closeMessageId(runId), text))) continue;
       await this.#update(runId, (draft) => { draft.outcome = outcome; });
-      log("thread.note-repaired", { runId, reason: stale ? "stale" : "moved" });
+      log("thread.note-repaired", { runId, reason: stale ? "stale" : moved ? "moved" : "wording" });
     }
   }
 
