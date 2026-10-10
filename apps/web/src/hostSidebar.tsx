@@ -54,6 +54,11 @@ export interface SynaraHostSidebar {
   readonly projectThreadsOnly?: boolean;
   readonly brandIconUrl?: string;
   readonly simplifiedComposer?: boolean;
+  /** The composer shows no model or effort picker, and every send uses the project's
+   *  `defaultModelSelection` (model and options), whatever a browser remembered. */
+  readonly hideComposerModelPicker?: boolean;
+  /** The composer shows no "+" menu (attachments, fast mode, plan and debug modes). */
+  readonly hideComposerExtrasMenu?: boolean;
   readonly chatFontSizePx?: number;
   readonly currentMessageAuthor?: OrchestrationMessageAuthor;
   readonly assistantLabel?: string;

@@ -2498,7 +2498,12 @@ export default function ChatView({
   );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
+  // A host that hides the model picker fixes the model: every send uses the project's
+  // default, never an effort a browser remembered from before.
+  const hostFixedModelSelection =
+    hostSidebar?.hideComposerModelPicker === true ? hostProjectModelSelection : null;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
+    if (hostFixedModelSelection) return hostFixedModelSelection;
     if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
       return buildModelSelection(
         selectedProvider,
@@ -2514,6 +2519,7 @@ export default function ChatView({
     );
   }, [
     draftModelSelectionForSelectedProvider,
+    hostFixedModelSelection,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
@@ -11277,14 +11283,16 @@ export default function ChatView({
   const relocateComposerLeadingControls = composerFooterControlsPlan.relocateLeadingControls;
   const renderComposerLeadingControls = (options: { iconOnly: boolean }) => (
     <>
-      <ComposerExtrasMenu
-        interactionMode={interactionMode}
-        supportsFastMode={composerTraitSelection.caps.supportsFastMode}
-        fastModeEnabled={composerTraitSelection.fastModeEnabled}
-        onAddAttachments={addComposerAttachments}
-        onToggleFastMode={toggleFastMode}
-        onInteractionModeChange={handleInteractionModeChange}
-      />
+      {hostSidebar?.hideComposerExtrasMenu ? null : (
+        <ComposerExtrasMenu
+          interactionMode={interactionMode}
+          supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+          fastModeEnabled={composerTraitSelection.fastModeEnabled}
+          onAddAttachments={addComposerAttachments}
+          onToggleFastMode={toggleFastMode}
+          onInteractionModeChange={handleInteractionModeChange}
+        />
+      )}
       {!simplifiedComposer && !isVoiceRecording && !isVoiceTranscribing ? (
         <RuntimeUsageControls
           {...runtimeUsageControlsProps}
@@ -11929,7 +11937,9 @@ export default function ChatView({
                             : {})}
                         />
                       ) : null}
-                      {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
+                      {!isVoiceRecording && !isVoiceTranscribing && !hostSidebar?.hideComposerModelPicker
+                        ? composerPickerControls
+                        : null}
                       {!simplifiedComposer &&
                       showVoiceNotesControl &&
                       (isVoiceRecording || isVoiceTranscribing) ? (
