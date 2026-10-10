@@ -8,6 +8,7 @@ import {
   goForwardInAppHistory,
   resolveAppNavigationState,
 } from "../appNavigation";
+import { useReportHostRouteRendered } from "../hostReadiness";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
@@ -561,6 +562,8 @@ const SIDEBAR_GAP_CLASS =
 const SIDEBAR_INNER_CLASS = "app-sidebar-surface";
 
 function ChatRouteLayout() {
+  // The embedding host's readiness waits for the matched view to render.
+  useReportHostRouteRendered();
   const isEditorView = useLocation({
     select: (location) => (location.search as { view?: unknown }).view === "editor",
   });

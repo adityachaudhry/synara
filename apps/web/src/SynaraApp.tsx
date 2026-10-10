@@ -1,11 +1,21 @@
 import { OrchestrationShellSnapshot } from "@synara/contracts";
 import { RouterProvider } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
-import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 
 import { AppHistoryProvider, appHistory } from "./appNavigation";
 import type { SynaraHistory } from "./embeddedHistory";
 import { SynaraHostPortalProvider } from "./hostPortal";
+import { HostRouteRenderedContext } from "./hostReadiness";
 import { SynaraHostSidebarProvider, type SynaraHostSidebar } from "./hostSidebar";
 import { getAppTypographyScale } from "./lib/appTypography";
 import { createHostThemeStyle } from "./lib/hostThemeStyle";
@@ -110,12 +120,19 @@ function embeddedTypographyStyle(value: number | undefined): CSSProperties | und
 }
 
 /**
- * Tells the host page when the workspace has its threads: until then the app shows a
- * bare splash (or nothing on a thread link), which the host cannot tell from a hang.
- * The root carries `data-synara-readiness` always and `data-synara-hydrated` once ready.
+ * Tells the host page when the workspace is on screen: it has its threads and the
+ * router has rendered the view that shows them. Until then the app shows a bare splash
+ * (or nothing on a thread link), which the host cannot tell from a hang. The root
+ * carries `data-synara-readiness` always and `data-synara-hydrated` once ready.
  */
-function HostReadinessSignal({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) {
-  const hydrated = useStore((store) => store.threadsHydrated);
+function HostReadinessSignal({
+  rootRef,
+  routeRendered,
+}: {
+  rootRef: RefObject<HTMLDivElement | null>;
+  routeRendered: boolean;
+}) {
+  const hydrated = useStore((store) => store.threadsHydrated) && routeRendered;
   useEffect(() => {
     rootRef.current?.toggleAttribute("data-synara-hydrated", hydrated);
   }, [hydrated, rootRef]);
@@ -138,6 +155,8 @@ export function SynaraApp({
     ...(project ? { project } : {}),
   });
   const router = useMemo(() => getRouter(history), [history]);
+  const [routeRendered, setRouteRendered] = useState(false);
+  const reportRouteRendered = useCallback(() => setRouteRendered(true), []);
   const portalContainerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const style = {
@@ -160,10 +179,12 @@ export function SynaraApp({
         style={style}
       >
         <HostShellSnapshot snapshot={initialShellSnapshot} />
-        <HostReadinessSignal rootRef={rootRef} />
+        <HostReadinessSignal rootRef={rootRef} routeRendered={routeRendered} />
         <SynaraHostSidebarProvider value={hostSidebar ?? null}>
           <AppHistoryProvider history={history}>
-            <RouterProvider router={router} />
+            <HostRouteRenderedContext.Provider value={reportRouteRendered}>
+              <RouterProvider router={router} />
+            </HostRouteRenderedContext.Provider>
           </AppHistoryProvider>
         </SynaraHostSidebarProvider>
         <div ref={portalContainerRef} data-synara-portal-container />
