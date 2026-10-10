@@ -77,8 +77,9 @@ export interface SynaraHostSidebar {
    * panel toggle still opens and closes the dock.
    */
   readonly rightDockExpandable?: boolean;
-  /** "underline": the dock's tabs are editorial tabs (a rule under the active one), not chips. */
-  readonly rightDockTabStyle?: "chips" | "underline";
+  /** "segmented": the dock's tabs are one bordered group with the active tab filled
+   *  in the brand colour (like a host's own segmented control), not loose chips. */
+  readonly rightDockTabStyle?: "chips" | "segmented";
   readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;

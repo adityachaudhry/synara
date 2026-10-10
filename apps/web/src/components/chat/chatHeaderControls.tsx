@@ -188,11 +188,11 @@ export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
  * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
  * tab count badge); `labelClassName` lets a call site cap the label width.
  */
-/** Editorial tab: full header height, a brand rule under the active label, no fill. */
-const UNDERLINE_TAB_CLASS_NAME =
-  "relative inline-flex h-full min-w-0 shrink-0 items-center gap-1.5 px-3 font-medium text-[var(--color-text-foreground-secondary)] transition-colors hover:text-[var(--color-text-foreground)]";
-const UNDERLINE_TAB_ACTIVE_CLASS_NAME =
-  "text-[var(--color-text-foreground)] after:pointer-events-none after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-[var(--brand)]";
+/** Segmented tab (one segment of a bordered group): the active one is filled with the
+ *  brand colour; icons follow the label colour so they read on the fill. */
+const SEGMENTED_TAB_CLASS_NAME =
+  "inline-flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-[6px] px-3 font-medium text-[var(--color-text-foreground)] transition-colors hover:text-[var(--brand)] [&_svg]:!text-inherit [&_[data-slot=central-icon]]:!text-inherit";
+const SEGMENTED_TAB_ACTIVE_CLASS_NAME = "bg-[var(--brand)] !text-white hover:!text-white";
 
 export function SurfaceTabChip({
   variant = "chip",
@@ -208,8 +208,8 @@ export function SurfaceTabChip({
   onSelect,
   onClose,
 }: {
-  /** "underline" draws an editorial tab (dock tabs when the host asks for them). */
-  variant?: "chip" | "underline";
+  /** "segmented" draws one segment of a tab group (dock tabs when the host asks). */
+  variant?: "chip" | "segmented";
   icon: ReactNode;
   label: ReactNode;
   active?: boolean | undefined;
@@ -226,8 +226,8 @@ export function SurfaceTabChip({
     <div
       className={cn(
         "group/dock-tab",
-        variant === "underline" ? UNDERLINE_TAB_CLASS_NAME : DOCK_TAB_CHIP_CLASS_NAME,
-        active && (variant === "underline" ? UNDERLINE_TAB_ACTIVE_CLASS_NAME : CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME),
+        variant === "segmented" ? SEGMENTED_TAB_CLASS_NAME : DOCK_TAB_CHIP_CLASS_NAME,
+        active && (variant === "segmented" ? SEGMENTED_TAB_ACTIVE_CLASS_NAME : CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME),
         className,
       )}
     >
