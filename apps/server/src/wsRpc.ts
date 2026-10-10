@@ -176,6 +176,7 @@ import {
   GitHubProjectProvisioningError,
   makeGitHubProjectProvisioner,
 } from "./project/githubProjectProvisioning";
+import { closeUpgradedWebSocket } from "./upgradedWebSockets";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -2394,6 +2395,12 @@ export function makeWebsocketRpcRouteLayer<R>(
                 ? {}
                 : { allowedProjectIds: authenticatedSession.allowedProjectIds }),
             }),
+            {
+              // A close frame lets the client reconnect with a fresh session.
+              onExpire: Effect.sync(() => {
+                closeUpgradedWebSocket(request.source, 1000, "session expired");
+              }),
+            },
           );
         }).pipe(
           Effect.catchTags({

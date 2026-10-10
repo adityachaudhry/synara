@@ -87,9 +87,14 @@ export interface SessionCredentialServiceShape {
   readonly revokeAllExcept: (
     sessionId: AuthSessionId,
   ) => Effect.Effect<number, SessionCredentialError>;
+  /**
+   * Runs a connection for its session's lifetime. At expiry `onExpire` may end
+   * the connection cleanly; it is interrupted if still running after a grace.
+   */
   readonly runAuthenticatedConnection: <A, E, R>(
     sessionId: AuthSessionId,
     effect: Effect.Effect<A, E, R>,
+    options?: { readonly onExpire?: Effect.Effect<void> },
   ) => Effect.Effect<A, E | SessionCredentialError | SessionCapacityError, R>;
 }
 

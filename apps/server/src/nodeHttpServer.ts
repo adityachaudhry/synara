@@ -10,6 +10,7 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
 import { ServeError } from "effect/unstable/http/HttpServerError";
 import { WebSocketServer } from "ws";
 import { startStallProfiles } from "./stallProfiles.ts";
+import { trackUpgradedWebSockets } from "./upgradedWebSockets.ts";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_PROVIDER_WORKER_MESSAGE_BYTES = PROVIDER_WORKER_MAX_MESSAGE_BYTES;
@@ -242,14 +243,15 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
     maxPayload = MAX_WEBSOCKET_MESSAGE_BYTES,
   ) =>
     Effect.acquireRelease(
-      Effect.sync(
-        () =>
-          new WebSocketServer({
-            noServer: true,
-            maxPayload,
-            perMessageDeflate: perMessageDeflate ? PER_MESSAGE_DEFLATE_OPTIONS : false,
-          }),
-      ),
+      Effect.sync(() => {
+        const server = new WebSocketServer({
+          noServer: true,
+          maxPayload,
+          perMessageDeflate: perMessageDeflate ? PER_MESSAGE_DEFLATE_OPTIONS : false,
+        });
+        trackUpgradedWebSockets(server);
+        return server;
+      }),
       (server) =>
         Effect.callback<void>((resume) => {
           for (const client of server.clients) client.terminate();

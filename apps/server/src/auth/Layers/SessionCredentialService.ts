@@ -42,6 +42,9 @@ import {
   timingSafeEqualBase64Url,
 } from "../utils";
 
+// How long an expired connection may take to close itself before it is interrupted.
+const EXPIRED_CONNECTION_GRACE = Duration.seconds(5);
+
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
@@ -656,6 +659,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
   const runAuthenticatedConnection: SessionCredentialServiceShape["runAuthenticatedConnection"] = (
     sessionId,
     effect,
+    options,
   ) =>
     Effect.acquireUseRelease(
       Effect.gen(function* () {
@@ -676,6 +680,11 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           const expiresIn = Math.max(0, DateTime.toEpochMillis(lease.expiresAt) - now);
           const expiryFiber = yield* Effect.forkChild(
             Effect.sleep(Duration.millis(expiresIn)).pipe(
+              Effect.andThen(
+                options?.onExpire
+                  ? options.onExpire.pipe(Effect.andThen(Effect.sleep(EXPIRED_CONNECTION_GRACE)))
+                  : Effect.void,
+              ),
               Effect.andThen(Fiber.interrupt(connectionFiber)),
             ),
             { startImmediately: true },
