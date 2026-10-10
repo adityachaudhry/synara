@@ -304,10 +304,40 @@ export function RightDock(props: RightDockProps) {
   };
   const setDockExpandedRef = useRef(setDockExpanded);
   setDockExpandedRef.current = setDockExpanded;
-  // A closed dock, another thread or an unmount restores the split.
+  // A host may hold the expanded state; the dock's buttons then ask the host.
+  const hostExpanded = expandable ? hostSidebar?.rightDockExpanded : undefined;
+  const hostControlsExpanded = hostExpanded !== undefined;
+  const onHostExpandedChangeRef = useRef(hostSidebar?.onRightDockExpandedChange);
+  onHostExpandedChangeRef.current = hostSidebar?.onRightDockExpandedChange;
+  const requestDockExpanded = (next: boolean) => {
+    if (hostControlsExpanded) onHostExpandedChangeRef.current?.(next);
+    else setDockExpanded(next);
+  };
+  // Follow the host. The first expansion of an opening dock is applied before paint, so a
+  // workspace that opens on its panel never shows the split first; later ones slide.
+  const appliedHostExpandedRef = useRef(false);
+  const shownSplitRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!hostControlsExpanded) return;
+    const next = hostExpanded === true && props.state.open;
+    if (next === appliedHostExpandedRef.current) {
+      if (props.state.open && !next) shownSplitRef.current = true;
+      return;
+    }
+    appliedHostExpandedRef.current = next;
+    setDockExpandedRef.current(next, next && !shownSplitRef.current);
+    if (!next && props.state.open) shownSplitRef.current = true;
+  }, [hostControlsExpanded, hostExpanded, props.state.open]);
+  // A closed dock, another thread or an unmount restores the split; a host holding the
+  // state hears that a dock it had expanded closed.
+  const wasOpenRef = useRef(props.state.open);
   useEffect(() => {
-    if (!props.state.open) setDockExpandedRef.current(false);
-  }, [props.state.open]);
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = props.state.open;
+    if (props.state.open) return;
+    setDockExpandedRef.current(false);
+    if (wasOpen && hostExpanded === true) onHostExpandedChangeRef.current?.(false);
+  }, [props.state.open, hostExpanded]);
   useEffect(() => () => setDockExpandedRef.current(false, true), [props.motionKey]);
   useEffect(() => {
     if (!expanded) return;
@@ -335,8 +365,11 @@ export function RightDock(props: RightDockProps) {
     (chatMinWidth === undefined ||
       (context.wrapper.parentElement?.clientWidth ?? 0) - context.nextWidth >= chatMinWidth) &&
     props.shouldAcceptWidth(context);
+  // Whether this open has given the dock its split width yet (a dock can open expanded).
+  const splitAppliedRef = useRef(false);
   useEffect(() => {
     if (!props.state.open) {
+      splitAppliedRef.current = false;
       return;
     }
     const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
@@ -345,7 +378,8 @@ export function RightDock(props: RightDockProps) {
       return;
     }
     // An expanded dock fills the shell; its width is the expansion's until it restores.
-    if (shell.dataset.rightDockExpanded === "true") {
+    // A dock that opened expanded still takes its split width once, for when it restores.
+    if (shell.dataset.rightDockExpanded === "true" && splitAppliedRef.current) {
       return;
     }
     let applied: string | null = null;
@@ -359,6 +393,7 @@ export function RightDock(props: RightDockProps) {
       }
     };
     apply();
+    splitAppliedRef.current = true;
     // A shared dock reopens at the width someone dragged it to (still above the chat's floor).
     const dragged = widthMemoryKey && preferredWidth === undefined ? draggedDockWidthByKey.get(widthMemoryKey) : undefined;
     if (dragged) {
@@ -544,7 +579,7 @@ export function RightDock(props: RightDockProps) {
                   hostSidebar?.simplifiedComposer === true &&
                     "text-[var(--brand)] [&_svg]:!opacity-100",
                 )}
-                onClick={() => setDockExpanded(!expanded)}
+                onClick={() => requestDockExpanded(!expanded)}
               >
                 {expanded ? <PanelCollapseIcon /> : <PanelExpandIcon />}
               </IconButton>

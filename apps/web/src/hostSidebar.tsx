@@ -77,6 +77,14 @@ export interface SynaraHostSidebar {
    * panel toggle still opens and closes the dock.
    */
   readonly rightDockExpandable?: boolean;
+  /**
+   * The host holds the expanded state (with `rightDockExpandable`): the dock expands or
+   * restores to follow it, at once when it first opens (a workspace can open on its panel
+   * with no split shown first) and with the slide afterwards. The dock's own Expand and
+   * Restore buttons ask through `onRightDockExpandedChange` instead of changing it.
+   */
+  readonly rightDockExpanded?: boolean;
+  readonly onRightDockExpandedChange?: (expanded: boolean) => void;
   /** "tabs": the dock's tabs are file tabs (the active one joined to its pane), not
    *  loose chips. */
   readonly rightDockTabStyle?: "chips" | "tabs";
@@ -98,6 +106,8 @@ export interface SynaraHostSidebar {
     readonly render: () => ReactNode;
   };
   readonly threadFeedHeader?: ReactNode;
+  /** Shown above the composer on the project feed (not in threads), e.g. what needs the team. */
+  readonly threadFeedComposerAccessory?: ReactNode;
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,
   ) => Promise<SynaraHostPersistenceResult | null>;

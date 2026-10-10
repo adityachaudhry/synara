@@ -12437,6 +12437,11 @@ export default function ChatView({
                     CHAT_COLUMN_GUTTER_CLASS_NAME,
                   )}
                 >
+                  {emptyLandingContent !== undefined && hostSidebar?.threadFeedComposerAccessory ? (
+                    <div className={cn(COMPOSER_COLUMN_FRAME_CLASS_NAME, "mb-2")}>
+                      {hostSidebar.threadFeedComposerAccessory}
+                    </div>
+                  ) : null}
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
