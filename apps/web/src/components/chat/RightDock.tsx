@@ -365,8 +365,26 @@ export function RightDock(props: RightDockProps) {
     (chatMinWidth === undefined ||
       (context.wrapper.parentElement?.clientWidth ?? 0) - context.nextWidth >= chatMinWidth) &&
     props.shouldAcceptWidth(context);
-  // Whether this open has given the dock its split width yet (a dock can open expanded).
+  // Whether this open has given the dock its split width yet (a dock can open expanded),
+  // and the width it gave: the dock follows the window while it still has that width.
   const splitAppliedRef = useRef(false);
+  const appliedSplitWidthRef = useRef<string | null>(null);
+  const openSplitWidth = (shellWidth: number) => {
+    const hostOpenWidth = hostOpenWidthRef.current;
+    const openWidth = preferredWidth ?? Math.round(hostOpenWidth ? hostOpenWidth(shellWidth) : shellWidth / 2);
+    return openWidth > 0 ? `${Math.max(minWidth, openWidth)}px` : null;
+  };
+  // A double-click on the divider returns a dragged dock to its opening split.
+  const resetSplit = () => {
+    const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const shell = wrapper?.parentElement;
+    if (!wrapper || !shell || shell.dataset.rightDockExpanded === "true") return;
+    const width = openSplitWidth(shell.getBoundingClientRect().width);
+    if (!width) return;
+    appliedSplitWidthRef.current = width;
+    wrapper.style.setProperty("--sidebar-width", width);
+    if (widthMemoryKey) draggedDockWidthByKey.delete(widthMemoryKey);
+  };
   useEffect(() => {
     if (!props.state.open) {
       splitAppliedRef.current = false;
@@ -382,14 +400,11 @@ export function RightDock(props: RightDockProps) {
     if (shell.dataset.rightDockExpanded === "true" && splitAppliedRef.current) {
       return;
     }
-    let applied: string | null = null;
     const apply = () => {
-      const shellWidth = shell.getBoundingClientRect().width;
-      const hostOpenWidth = hostOpenWidthRef.current;
-      const openWidth = preferredWidth ?? Math.round(hostOpenWidth ? hostOpenWidth(shellWidth) : shellWidth / 2);
-      if (openWidth > 0) {
-        applied = `${Math.max(minWidth, openWidth)}px`;
-        wrapper.style.setProperty("--sidebar-width", applied);
+      const width = openSplitWidth(shell.getBoundingClientRect().width);
+      if (width) {
+        appliedSplitWidthRef.current = width;
+        wrapper.style.setProperty("--sidebar-width", width);
       }
     };
     apply();
@@ -405,7 +420,7 @@ export function RightDock(props: RightDockProps) {
     const remember = () => {
       if (!widthMemoryKey || preferredWidth !== undefined || shell.dataset.rightDockExpanded === "true") return;
       const current = wrapper.style.getPropertyValue("--sidebar-width");
-      if (current && current !== applied) draggedDockWidthByKey.set(widthMemoryKey, current);
+      if (current && current !== appliedSplitWidthRef.current) draggedDockWidthByKey.set(widthMemoryKey, current);
       else draggedDockWidthByKey.delete(widthMemoryKey);
     };
     const follow = hasHostOpenWidth && preferredWidth === undefined;
@@ -415,7 +430,7 @@ export function RightDock(props: RightDockProps) {
     const observer = new ResizeObserver(() => {
       if (shell.dataset.rightDockExpanded === "true") return;
       // Follow the window until someone drags the dock to a width of their own.
-      if (follow && wrapper.style.getPropertyValue("--sidebar-width") === applied) {
+      if (follow && wrapper.style.getPropertyValue("--sidebar-width") === appliedSplitWidthRef.current) {
         apply();
         return;
       }
@@ -638,7 +653,13 @@ export function RightDock(props: RightDockProps) {
             })}
           </div>
         </div>
-        <SidebarRail />
+        <SidebarRail
+          title="Drag to resize; double-click to reset"
+          onDoubleClick={(event) => {
+            event.preventDefault();
+            resetSplit();
+          }}
+        />
       </Sidebar>
     </SidebarProvider>
   );
