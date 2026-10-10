@@ -167,20 +167,23 @@ const closingNotesLayer = Layer.effectDiscard(Effect.gen(function* () {
   setDiligenceMessageRewriter(async (threadId, messageId, text) => {
     const message = await findMessage(threadId, messageId);
     if (!message) return false;
-    const now = new Date().toISOString();
+    // The note keeps its own time: clients end the turn's "Worked for" at its updatedAt.
     await Effect.runPromise(engine.dispatch({
       type: "thread.messages.import",
       commandId: CommandId.makeUnsafe(`diligence-note-${messageId}-${Date.now()}`),
       threadId: ThreadId.makeUnsafe(threadId),
-      messages: [{ messageId, role: "assistant", text, createdAt: message.createdAt, updatedAt: now }],
-      createdAt: now,
+      messages: [{ messageId, role: "assistant", text, createdAt: message.createdAt, updatedAt: message.createdAt }],
+      createdAt: new Date().toISOString(),
     } as never));
     return true;
   });
   yield* Effect.forkDetach(Effect.tryPromise(async () => {
     // The runner is set while the provider layer starts; wait for it rather than skip.
     for (let attempt = 0; attempt < 60 && !diligenceRunner(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2_000));
-    await diligenceRunner()?.repairClosingNotes(async (threadId, messageId) => (await findMessage(threadId, messageId))?.text);
+    await diligenceRunner()?.repairClosingNotes(async (threadId, messageId) => {
+      const message = await findMessage(threadId, messageId);
+      return message ? { text: message.text, createdAt: message.createdAt, updatedAt: message.updatedAt } : undefined;
+    });
   }).pipe(Effect.catch((cause) => Effect.sync(() =>
     console.warn(`[diligence] ${JSON.stringify({ event: "thread.note-repair-failed", message: String(cause) })}`)))));
 }));

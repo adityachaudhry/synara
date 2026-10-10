@@ -436,20 +436,28 @@ export class DiligenceRunner {
   }
 
   /**
-   * Corrects closing notes written before outcomes were tracked: a run delivered after
-   * its thread closed kept saying Glasswing had not received the results. Idempotent.
+   * Corrects closing notes at startup. Notes written before outcomes were tracked kept
+   * saying Glasswing had not received the results after a later delivery published the
+   * report; an early in-place rewrite moved a note's time, which stretched the run's
+   * "Worked for". Idempotent.
    */
-  async repairClosingNotes(readMessage: (threadId: string, messageId: string) => Promise<string | undefined>) {
+  async repairClosingNotes(
+    readMessage: (threadId: string, messageId: string) => Promise<{ text: string; createdAt: string; updatedAt: string } | undefined>,
+  ) {
     const threads = (await this.#harness.snapshot(RunThreads, ctx))?.threads ?? {};
     for (const [threadId, runId] of Object.entries(threads)) {
       const state = await this.#state(runId);
-      if (!state || state.outcome || !state.delivered || state.status !== "succeeded") continue;
-      const text = await readMessage(threadId, closeMessageId(runId)).catch(() => undefined);
-      if (!text?.includes("has not received the results yet")) continue;
+      if (!state?.delivered) continue;
+      const note = await readMessage(threadId, closeMessageId(runId)).catch(() => undefined);
+      if (!note) continue;
+      const stale = !state.outcome && state.status === "succeeded" && note.text.includes("has not received the results yet");
+      const moved = state.outcome !== undefined && Date.parse(note.updatedAt) - Date.parse(note.createdAt) > 60_000;
+      if (!stale && !moved) continue;
       const request = await this.#plan(runId);
-      if (!request || !(await rewriteMessage?.(threadId, closeMessageId(runId), closingNote(request, state, "published")))) continue;
-      await this.#update(runId, (draft) => { draft.outcome = "published"; });
-      log("thread.note-repaired", { runId });
+      const outcome = state.outcome ?? "published";
+      if (!request || !(await rewriteMessage?.(threadId, closeMessageId(runId), closingNote(request, state, outcome)))) continue;
+      await this.#update(runId, (draft) => { draft.outcome = outcome; });
+      log("thread.note-repaired", { runId, reason: stale ? "stale" : "moved" });
     }
   }
 
