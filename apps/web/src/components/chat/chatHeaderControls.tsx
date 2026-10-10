@@ -188,11 +188,13 @@ export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
  * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
  * tab count badge); `labelClassName` lets a call site cap the label width.
  */
-/** Segmented tab (one segment of a bordered group): the active one is filled with the
- *  brand colour; icons follow the label colour so they read on the fill. */
-const SEGMENTED_TAB_CLASS_NAME =
-  "inline-flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-[6px] px-3 font-medium text-[var(--color-text-foreground)] transition-colors hover:text-[var(--brand)] [&_svg]:!text-inherit [&_[data-slot=central-icon]]:!text-inherit";
-const SEGMENTED_TAB_ACTIVE_CLASS_NAME = "bg-[var(--brand)] !text-white hover:!text-white";
+/** File tab: the active tab is a hairline-bordered box open at the bottom, filled with
+ *  the pane's background so it covers the strip's divider and reads as joined to the
+ *  pane below; inactive tabs are bare labels. Icons follow the label colour. */
+const FILE_TAB_CLASS_NAME =
+  "inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-t-lg border border-b-0 border-transparent px-3.5 font-medium text-[var(--color-text-foreground-secondary)] transition-colors hover:text-[var(--color-text-foreground)] [&_svg]:!text-inherit [&_[data-slot=central-icon]]:!text-inherit";
+const FILE_TAB_ACTIVE_CLASS_NAME =
+  "border-[var(--color-border)] bg-[var(--background)] text-[var(--color-text-foreground)]";
 
 export function SurfaceTabChip({
   variant = "chip",
@@ -208,8 +210,8 @@ export function SurfaceTabChip({
   onSelect,
   onClose,
 }: {
-  /** "segmented" draws one segment of a tab group (dock tabs when the host asks). */
-  variant?: "chip" | "segmented";
+  /** "tab" draws a file tab (dock tabs when the host asks). */
+  variant?: "chip" | "tab";
   icon: ReactNode;
   label: ReactNode;
   active?: boolean | undefined;
@@ -226,8 +228,8 @@ export function SurfaceTabChip({
     <div
       className={cn(
         "group/dock-tab",
-        variant === "segmented" ? SEGMENTED_TAB_CLASS_NAME : DOCK_TAB_CHIP_CLASS_NAME,
-        active && (variant === "segmented" ? SEGMENTED_TAB_ACTIVE_CLASS_NAME : CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME),
+        variant === "tab" ? FILE_TAB_CLASS_NAME : DOCK_TAB_CHIP_CLASS_NAME,
+        active && (variant === "tab" ? FILE_TAB_ACTIVE_CLASS_NAME : CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME),
         className,
       )}
     >

@@ -121,7 +121,7 @@ function RightDockLauncher(props: {
 }
 
 function RightDockTab(props: {
-  variant?: "chip" | "segmented";
+  variant?: "chip" | "tab";
   pane: RightDockPane;
   label: string;
   icon?: ReactNode;
@@ -235,7 +235,7 @@ export function RightDock(props: RightDockProps) {
   // Expanded: the dock fills its shell and the chat steps aside (index.css); restoring
   // puts back the width the dock had, including one the user dragged to.
   const expandable = hostSidebar?.rightDockExpandable === true;
-  const segmentedTabs = hostSidebar?.rightDockTabStyle === "segmented";
+  const fileTabs = hostSidebar?.rightDockTabStyle === "tabs";
   const [expanded, setExpanded] = useState(false);
   const restoreWidthRef = useRef<string | null>(null);
   // The elements an expansion marked, so restoring works even after unmount detached refs.
@@ -411,20 +411,19 @@ export function RightDock(props: RightDockProps) {
             <div
               className={cn(
                 "flex min-w-0 items-center gap-1 overflow-x-auto",
-                segmentedTabs
-                  ? "gap-0.5 rounded-md border border-[var(--app-surface-divider)] bg-[var(--color-background-button-secondary)] p-0.5"
-                  : "flex-1",
+                // File tabs stand on the strip's bottom hairline, which the active one covers.
+                fileTabs ? "items-stretch gap-0.5 self-stretch pt-1.5" : "flex-1",
               )}
             >
               {props.state.panes.map((pane) => (
                 <RightDockTab
                   key={pane.id}
-                  {...(segmentedTabs ? { variant: "segmented" as const } : {})}
+                  {...(fileTabs ? { variant: "tab" as const } : {})}
                   pane={pane}
                   label={resolveRightDockPaneLabel(pane, props.paneLabelOverrides)}
                   icon={props.paneIconOverrides?.[pane.id]}
                   className={
-                    hostSidebar?.simplifiedComposer === true && !segmentedTabs
+                    hostSidebar?.simplifiedComposer === true && !fileTabs
                       ? "!bg-[var(--background)]"
                       : undefined
                   }
@@ -447,7 +446,7 @@ export function RightDock(props: RightDockProps) {
                 />
               ) : null}
             </div>
-            {segmentedTabs ? <div className="min-w-0 flex-1" /> : null}
+            {fileTabs ? <div className="min-w-0 flex-1" /> : null}
             {hostSidebar?.simplifiedComposer !== true &&
             props.state.panes.length > 0 &&
             (props.launcherItems?.length ?? 0) > 0 &&
