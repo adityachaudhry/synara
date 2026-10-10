@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import { resolveHostMessageAuthorLabel, useSynaraHostSidebar } from "../../hostSidebar";
+import { useReportHostViewRendered } from "../../hostReadiness";
 import { useAppSettings, type TimestampFormat } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { basenameOfPath } from "../../file-icons";
@@ -246,6 +247,8 @@ export function ProjectThreadFeedSurface({
   const navigate = useNavigate();
   const hostSidebar = useSynaraHostSidebar();
   const { settings } = useAppSettings();
+  // The embedding host's readiness: this view is on screen.
+  useReportHostViewRendered();
   const selectDisplayThreads = useMemo(
     () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true }),
     [],

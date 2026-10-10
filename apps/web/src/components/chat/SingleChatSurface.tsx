@@ -20,6 +20,7 @@ import {
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useSynaraHostSidebar } from "../../hostSidebar";
+import { useReportHostViewRendered } from "../../hostReadiness";
 import { readNativeApi } from "../../nativeApi";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
 import { stripDiffSearchParams } from "../../diffRouteSearch";
@@ -208,6 +209,8 @@ export function SingleChatSurface(props: {
   const hostSidebar = useSynaraHostSidebar();
   const navigate = useNavigate();
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
+  // The embedding host's readiness: this view is on screen.
+  useReportHostViewRendered();
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   // A shared dock (hostSidebar.sharedRightDock) is one state for the project's feed
   // and threads, so switching between them keeps the panel as it is; the panes a
