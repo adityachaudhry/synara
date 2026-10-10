@@ -239,34 +239,50 @@ export function RightDock(props: RightDockProps) {
   const hostOpenWidthRef = useRef(hostSidebar?.rightDockOpenWidth);
   hostOpenWidthRef.current = hostSidebar?.rightDockOpenWidth;
   const hasHostOpenWidth = hostSidebar?.rightDockOpenWidth !== undefined;
-  // Expanded: the dock fills its shell and the chat steps aside (index.css); restoring
-  // puts back the width the dock had, including one the user dragged to.
+  // Expanded: the dock's panel grows over the whole shell while its layout slot (the
+  // gap) and the chat underneath keep their widths, so neither expanding nor restoring
+  // relays out the chat: restoring slides the panel back and uncovers it (index.css
+  // keeps the panel above the chat until then).
   const expandable = hostSidebar?.rightDockExpandable === true;
   const fileTabs = hostSidebar?.rightDockTabStyle === "tabs";
   const [expanded, setExpanded] = useState(false);
-  const restoreWidthRef = useRef<string | null>(null);
   // The elements an expansion marked, so restoring works even after unmount detached refs.
-  const expandedElementsRef = useRef<{ wrapper: HTMLElement; shell: HTMLElement } | null>(null);
+  const expandedElementsRef = useRef<{ container: HTMLElement; wrapper: HTMLElement; shell: HTMLElement } | null>(null);
+  const restoreTimerRef = useRef<number | undefined>(undefined);
   const dockElements = () => {
-    const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const container = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-container']");
+    const wrapper = container?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
     const shell = wrapper?.parentElement;
-    return wrapper && shell ? { wrapper, shell } : null;
+    return container && wrapper && shell ? { container, wrapper, shell } : null;
+  };
+  const setChatInert = (wrapper: HTMLElement, shell: HTMLElement, inert: boolean) => {
+    for (const child of shell.children) {
+      if (child !== wrapper) (child as HTMLElement).inert = inert;
+    }
   };
   const setDockExpanded = (next: boolean) => {
     if (next) {
       const elements = dockElements();
       if (!elements) return;
-      const { wrapper, shell } = elements;
+      const { container, wrapper, shell } = elements;
       expandedElementsRef.current = elements;
-      restoreWidthRef.current = wrapper.style.getPropertyValue("--sidebar-width") || null;
+      window.clearTimeout(restoreTimerRef.current);
       shell.dataset.rightDockExpanded = "true";
-      wrapper.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
+      setChatInert(wrapper, shell, true);
+      container.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
     } else {
       const elements = expandedElementsRef.current;
       expandedElementsRef.current = null;
       if (elements) {
-        delete elements.shell.dataset.rightDockExpanded;
-        if (restoreWidthRef.current) elements.wrapper.style.setProperty("--sidebar-width", restoreWidthRef.current);
+        const { container, wrapper, shell } = elements;
+        container.style.removeProperty("--sidebar-width");
+        setChatInert(wrapper, shell, false);
+        // Above the chat until the panel has slid back to its width.
+        shell.dataset.rightDockExpanded = "restoring";
+        window.clearTimeout(restoreTimerRef.current);
+        restoreTimerRef.current = window.setTimeout(() => {
+          if (shell.dataset.rightDockExpanded === "restoring") delete shell.dataset.rightDockExpanded;
+        }, 400);
       }
     }
     setExpanded(next);
@@ -282,9 +298,9 @@ export function RightDock(props: RightDockProps) {
     if (!expanded) return;
     const elements = dockElements();
     if (!elements) return;
-    const { wrapper, shell } = elements;
+    const { container, shell } = elements;
     const observer = new ResizeObserver(() => {
-      wrapper.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
+      container.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
     });
     observer.observe(shell);
     return () => observer.disconnect();
@@ -362,8 +378,12 @@ export function RightDock(props: RightDockProps) {
       remember();
     };
   }, [props.state.open, minWidth, preferredWidth, hasHostOpenWidth, chatMinWidth, widthMemoryKey]);
+  // A host's dock keeps its tab laid out while collapsed (off canvas, hidden), so
+  // reopening is only the slide, not a remount and relayout of the pane.
+  const keptWhileClosedPaneId = expandable && !props.state.open ? props.state.activePaneId : null;
   const renderedPanes = props.state.panes.filter(
-    (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
+    (pane) =>
+      pane.id === activePane?.id || pane.id === keptWhileClosedPaneId || keepMountedPaneIds.has(pane.id),
   );
   // Motion allowance keyed to the current motionKey: a key change (reposition/
   // remount) derives straight back to "suppressed" in that same render, and the

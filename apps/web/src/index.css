@@ -3049,8 +3049,12 @@ diffs-container {
 }
 ::highlight(synara-team-underline-done) { text-decoration: underline #d6a10088 0.14em; }
 
-/* An expanded right dock (hostSidebar.rightDockExpandable) fills its shell: every
-   sibling of the dock's sidebar wrapper (the chat) steps aside until it is restored. */
-[data-right-dock-expanded="true"] > :not([data-slot="sidebar-wrapper"]) {
-  display: none !important;
+/* An expanded right dock (hostSidebar.rightDockExpandable) grows its panel over the
+   shell. The chat keeps its layout underneath (restoring only uncovers it), isolated
+   so its own layers stay below the panel until the panel has slid back. */
+[data-right-dock-expanded] > :not([data-slot="sidebar-wrapper"]) {
+  isolation: isolate;
+}
+[data-right-dock-expanded] > [data-slot="sidebar-wrapper"] [data-slot="sidebar-container"] {
+  z-index: 60;
 }
