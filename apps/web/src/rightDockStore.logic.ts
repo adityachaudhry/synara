@@ -19,6 +19,8 @@ export const RIGHT_DOCK_PANE_KINDS = [
   "sidechat",
   "git",
   "pullRequest",
+  // A pane the embedding host renders (hostSidebar.pinnedPane): first tab, never closed.
+  "host",
 ] as const;
 
 export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
@@ -400,6 +402,23 @@ export function toggleSingletonPaneInState(
     return { ...state, open: false };
   }
   return openPaneInState(state, input);
+}
+
+/**
+ * The dock as shown when the host pins a pane: that pane leads the tab strip
+ * (it is added if the stored state lacks it, without changing the active tab).
+ */
+export function withPinnedHostPane(state: RightDockThreadState, paneId: string): RightDockThreadState {
+  const existing = findSingletonPane(state, "host");
+  const withHost = existing
+    ? state
+    : {
+        ...openPaneInState(state, { paneId, kind: "host" }),
+        open: state.open,
+        activePaneId: state.activePaneId ?? paneId,
+      };
+  const host = findSingletonPane(withHost, "host")!;
+  return { ...withHost, panes: [host, ...withHost.panes.filter((pane) => pane.id !== host.id)] };
 }
 
 export function resolveActivePane(state: RightDockThreadState): RightDockPane | null {

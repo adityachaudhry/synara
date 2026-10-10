@@ -48,6 +48,8 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   sidechat: { label: "Side chats", Icon: MessageCircleIcon },
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
+  // Labelled and drawn by the host (hostSidebar.pinnedPane).
+  host: { label: "Panel", Icon: InfoIcon },
 };
 
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale
@@ -70,7 +72,7 @@ export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta
 // clicking a file reference in chat, while the add menu offers the richer
 // "explorer" pane (file tree + search + viewer) in its place.
 export const RIGHT_DOCK_ADD_MENU_KINDS: readonly RightDockPaneKind[] = RIGHT_DOCK_PANE_KINDS.filter(
-  (kind) => kind !== "file" && kind !== "pullRequest",
+  (kind) => kind !== "file" && kind !== "pullRequest" && kind !== "host",
 );
 
 // Empty-dock launchers prioritize the everyday workspace tools. Review only

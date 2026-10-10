@@ -64,6 +64,17 @@ export interface SynaraHostSidebar {
   readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;
+  /**
+   * A pane the host renders as the first right-dock tab, left of Explorer. It is
+   * always present and cannot be closed; `defaultActive` selects it when the dock
+   * opens on mount.
+   */
+  readonly pinnedPane?: {
+    readonly label: string;
+    readonly icon?: ReactNode;
+    readonly defaultActive?: boolean;
+    readonly render: () => ReactNode;
+  };
   readonly threadFeedHeader?: ReactNode;
   readonly saveChatContent?: (
     request: SynaraHostPersistenceRequest,

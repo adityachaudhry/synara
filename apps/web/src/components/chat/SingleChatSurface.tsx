@@ -68,9 +68,12 @@ import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   resolveActivePane,
   findMissingSidechatPaneIds,
+  withPinnedHostPane,
   type RightDockPane,
   type RightDockPaneKind,
 } from "../../rightDockStore.logic";
+
+const HOST_PINNED_PANE_ID = "host-pinned";
 import {
   type SplitDirection,
   type SplitDropSide,
@@ -211,10 +214,19 @@ export function SingleChatSurface(props: {
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const updatePane = useRightDockStore((store) => store.updatePane);
   const openFilesPaneOnMount = hostSidebar?.openFilesPaneOnMount === true;
+  const pinnedPane = hostSidebar?.pinnedPane;
+  const hasPinnedPane = pinnedPane !== undefined;
+  const pinnedPaneDefaultActive = pinnedPane?.defaultActive === true;
   useLayoutEffect(() => {
     if (!openFilesPaneOnMount) return;
+    // The last pane opened is the selected tab.
+    if (hasPinnedPane && !pinnedPaneDefaultActive) openPane(props.threadId, { kind: "host", paneId: HOST_PINNED_PANE_ID });
     openPane(props.threadId, { kind: "explorer" });
-  }, [openFilesPaneOnMount, openPane, props.threadId]);
+    if (hasPinnedPane && pinnedPaneDefaultActive) openPane(props.threadId, { kind: "host", paneId: HOST_PINNED_PANE_ID });
+  }, [hasPinnedPane, openFilesPaneOnMount, openPane, pinnedPaneDefaultActive, props.threadId]);
+  // The host's pinned pane leads the tab strip.
+  const displayDockState = hasPinnedPane ? withPinnedHostPane(dockState, HOST_PINNED_PANE_ID) : dockState;
+  const pinnedPaneId = hasPinnedPane ? displayDockState.panes[0]?.id : undefined;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
@@ -840,6 +852,10 @@ export function SingleChatSurface(props: {
       paneIconOverrides[pane.id] = hostSidebar?.renderFilePaneTabIcon?.(pane.filePath);
     }
   }
+  if (pinnedPane && pinnedPaneId) {
+    paneLabelOverrides = { ...paneLabelOverrides, [pinnedPaneId]: pinnedPane.label };
+    paneIconOverrides[pinnedPaneId] = pinnedPane.icon;
+  }
   const hasPaneIconOverrides = Object.values(paneIconOverrides).some(Boolean);
 
   const handleAddDockPane = (kind: RightDockPaneKind) => {
@@ -913,6 +929,12 @@ export function SingleChatSurface(props: {
     context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
   ): ReactNode => {
     switch (pane.kind) {
+      case "host":
+        return hostSidebar?.pinnedPane ? (
+          <div className="h-full min-h-0 w-full overflow-hidden">{hostSidebar.pinnedPane.render()}</div>
+        ) : (
+          <RightDockPanePlaceholder kind="host" />
+        );
       case "browser":
         return (
           <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
@@ -1082,6 +1104,10 @@ export function SingleChatSurface(props: {
   };
 
   const handleSelectDockPane = (paneId: string) => {
+    if (paneId === pinnedPaneId && !dockState.panes.some((pane) => pane.id === paneId)) {
+      openPane(props.threadId, { kind: "host", paneId });
+      return;
+    }
     requestImmediateDockHydration(dockState.panes.find((pane) => pane.id === paneId)?.kind);
     setActivePane(props.threadId, paneId);
   };
@@ -1265,7 +1291,7 @@ export function SingleChatSurface(props: {
           </RouteInsetSurface>
         </ChatPaneDropOverlay>
         <RightDock
-          state={dockState}
+          state={displayDockState}
           {...(hostSidebar?.viewportHeightOffsetPx
             ? { viewportHeightOffsetPx: hostSidebar.viewportHeightOffsetPx }
             : {})}

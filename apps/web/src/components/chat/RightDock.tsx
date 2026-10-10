@@ -328,7 +328,8 @@ export function RightDock(props: RightDockProps) {
                   }
                   active={pane.id === props.state.activePaneId}
                   onSelect={onSelectPane ? () => onSelectPane(pane.id) : undefined}
-                  {...(hostSidebar?.simplifiedComposer === true && pane.kind === "explorer"
+                  {...(pane.kind === "host" ||
+                  (hostSidebar?.simplifiedComposer === true && pane.kind === "explorer")
                     ? {}
                     : { onClose: () => props.onClosePane(pane.id) })}
                 />

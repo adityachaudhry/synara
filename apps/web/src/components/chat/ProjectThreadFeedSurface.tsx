@@ -29,6 +29,7 @@ import {
   openPaneInState,
   setActivePaneInState,
   setDockOpenInState,
+  withPinnedHostPane,
   type RightDockPane,
   type RightDockPaneKind,
   type RightDockThreadState,
@@ -65,6 +66,7 @@ import {
 import { useProjectThreadFeedContextMenu } from "./useProjectThreadFeedContextMenu";
 
 const FEED_EXPLORER_PANE_ID = "project-feed-explorer";
+const FEED_PINNED_PANE_ID = "project-feed-pinned";
 const FEED_CHAT_PANE_SCOPE_ID = "project-thread-feed";
 const FEED_MAIN_MIN_WIDTH = 28 * 16;
 const THREAD_FEED_REFRESH_INTERVAL_MS = 2_000;
@@ -248,7 +250,15 @@ export function ProjectThreadFeedSurface({
     useProjectThreadFeedContextMenu(displayThreads);
   const syncServerShellSnapshot = useStore((state) => state.syncServerShellSnapshot);
   const { prewarmThreadDetail } = useThreadDetailPrewarm();
-  const [dockState, setDockState] = useState<RightDockThreadState>(createProjectFeedDockState);
+  const pinnedPane = hostSidebar?.pinnedPane;
+  const [dockState, setDockState] = useState<RightDockThreadState>(() => {
+    const state = createProjectFeedDockState();
+    if (!pinnedPane) return state;
+    const pinned = withPinnedHostPane(state, FEED_PINNED_PANE_ID);
+    return pinnedPane.defaultActive ? setActivePaneInState(pinned, FEED_PINNED_PANE_ID) : pinned;
+  });
+  // The host's pinned pane leads the tab strip.
+  const displayDockState = pinnedPane ? withPinnedHostPane(dockState, FEED_PINNED_PANE_ID) : dockState;
   const feedContentRef = useRef<HTMLElement | null>(null);
   const positionedProjectIdRef = useRef<ProjectId | null>(null);
 
@@ -387,6 +397,13 @@ export function ProjectThreadFeedSurface({
 
   const renderDockPane = useCallback(
     (pane: RightDockPane): ReactNode => {
+      if (pane.kind === "host") {
+        return hostSidebar?.pinnedPane ? (
+          <div className="h-full min-h-0 w-full overflow-hidden">{hostSidebar.pinnedPane.render()}</div>
+        ) : (
+          <PanelStateMessage>This panel is unavailable.</PanelStateMessage>
+        );
+      }
       if (pane.kind === "explorer") {
         if (!hostSidebar?.filesPane) {
           return <PanelStateMessage>Explorer is unavailable.</PanelStateMessage>;
@@ -432,10 +449,13 @@ export function ProjectThreadFeedSurface({
 
   const paneLabelOverrides: Record<string, string> = {};
   const paneIconOverrides: Record<string, ReactNode | undefined> = {};
-  for (const pane of dockState.panes) {
+  for (const pane of displayDockState.panes) {
     if (pane.kind === "file" && pane.filePath) {
       paneLabelOverrides[pane.id] = basenameOfPath(pane.filePath);
       paneIconOverrides[pane.id] = hostSidebar?.renderFilePaneTabIcon?.(pane.filePath);
+    } else if (pane.kind === "host" && pinnedPane) {
+      paneLabelOverrides[pane.id] = pinnedPane.label;
+      paneIconOverrides[pane.id] = pinnedPane.icon;
     }
   }
 
@@ -485,7 +505,7 @@ export function ProjectThreadFeedSurface({
         </WorkspaceFileOpenerContext.Provider>
       </RouteInsetSurface>
       <RightDock
-        state={dockState}
+        state={displayDockState}
         {...(hostSidebar?.viewportHeightOffsetPx
           ? { viewportHeightOffsetPx: hostSidebar.viewportHeightOffsetPx }
           : {})}
@@ -494,7 +514,9 @@ export function ProjectThreadFeedSurface({
         shouldAcceptWidth={shouldAcceptFeedDockWidth}
         motionKey={`project-feed:${projectId}`}
         onSelectPane={(paneId) =>
-          setDockState((state) => setActivePaneInState(state, paneId))
+          setDockState((state) =>
+            setActivePaneInState(pinnedPane ? withPinnedHostPane(state, FEED_PINNED_PANE_ID) : state, paneId),
+          )
         }
         onClosePane={closeDockPane}
         onCollapse={() => toggleDock(false)}
