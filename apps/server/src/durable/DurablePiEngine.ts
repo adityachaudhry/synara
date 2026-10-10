@@ -740,9 +740,9 @@ export class DurablePiEngine {
       console.warn(JSON.stringify({ event: "durable.backup.failed", message: describe(cause) })));
   }
 
-  /** Takes one backup now; used by the restore drill. */
+  /** Takes one backup now, changed or not; used by the restore drill. */
   backupNow() {
-    return backupHarness(this.#options.storagePath);
+    return backupHarness(this.#options.storagePath, { force: true });
   }
 
   // ------------------------------------------------------------------ helpers

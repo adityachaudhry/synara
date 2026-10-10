@@ -3,8 +3,9 @@
  * (`POST /internal/controller-backups/grants`). Each object lands under
  * `controller-backups/<env>/<kind>/`, where `<env>` is the controller's environment:
  *
- * - `durable-harness`: the Pi Durable Harness (VACUUM INTO), 2 min after start, every 10 min and
- *   at shutdown (scheduled by the engine);
+ * - `durable-harness`: the Pi Durable Harness (VACUUM INTO on a worker thread), 2 min after start,
+ *   every 10 min when it changed (hourly when it did not), and at shutdown (scheduled by the
+ *   engine);
  * - `state`: Synara's `state.sqlite` (SQLite online backup through its own connection), hourly;
  * - `attachments`: the chat attachments directory (tar.gz), hourly when it changed;
  * - `drafts`: the controller copies of thread Outbox files and checkout drafts (tar.gz), hourly
@@ -23,6 +24,7 @@ import { pipeline } from "node:stream/promises";
 import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { Worker } from "node:worker_threads";
 import { createGzip, gunzipSync } from "node:zlib";
 
 import { controllerEnvironmentName } from "../controllerEnvironment.ts";
@@ -114,20 +116,82 @@ async function uploadBackup(kind: ControllerBackupKind, file: string, extension:
   return grant.key;
 }
 
-/** Uploads one consistent Harness snapshot. Returns the stored key, or undefined without a backup API. */
-export async function backupHarness(storagePath: string): Promise<string | undefined> {
+// A consistent copy of a SQLite database (VACUUM INTO, a read transaction on its own
+// connection), made on a worker thread: on the main thread the Harness copy froze the
+// controller for ~3.5 s every ten minutes, stalling every request in flight.
+const VACUUM_INTO_WORKER = `
+const { workerData, parentPort } = require("node:worker_threads");
+const { DatabaseSync } = require("node:sqlite");
+const database = new DatabaseSync(workerData.source);
+try {
+  database.exec("VACUUM INTO '" + workerData.target.replaceAll("'", "''") + "'");
+} finally {
+  database.close();
+}
+parentPort.postMessage("done");
+`;
+
+function vacuumInto(source: string, target: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(VACUUM_INTO_WORKER, { eval: true, workerData: { source, target } });
+    worker.once("message", () => resolve());
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) reject(new Error(`The snapshot worker exited with code ${code}.`));
+    });
+  });
+}
+
+// The Harness files as of the last successful backup (size and modification time of the
+// database and its WAL). An unchanged Harness is not copied and uploaded again (on a quiet
+// controller the ten-minute backup rewrote and re-sent the same ~95 MB) until an hour has
+// passed: Glasswing's maintenance check expects a Harness backup under two hours old.
+let lastHarnessFingerprint: string | null = null;
+let lastHarnessBackupAt = 0;
+const UNCHANGED_HARNESS_BACKUP_INTERVAL_MS = 60 * 60_000;
+
+async function harnessFingerprint(storagePath: string): Promise<string> {
+  const parts = await Promise.all(
+    ["", "-wal"].map((suffix) =>
+      stat(storagePath + suffix).then(
+        (file) => `${file.size}:${file.mtimeMs}`,
+        () => "-",
+      ),
+    ),
+  );
+  return parts.join("|");
+}
+
+/**
+ * Uploads one consistent Harness snapshot when the Harness changed since the last one, or
+ * always with `force` (the restore drill). Returns the stored key, or undefined without a
+ * backup API or when nothing changed.
+ */
+export async function backupHarness(
+  storagePath: string,
+  options: { readonly force?: boolean } = {},
+): Promise<string | undefined> {
   if (!artifactApiClient() || !existsSync(storagePath)) return undefined;
+  // Taken before the copy: a write during it changes the files, so the next pass copies again.
+  const fingerprint = await harnessFingerprint(storagePath);
+  if (
+    !options.force &&
+    fingerprint === lastHarnessFingerprint &&
+    Date.now() - lastHarnessBackupAt < UNCHANGED_HARNESS_BACKUP_INTERVAL_MS
+  ) {
+    return undefined;
+  }
   const snapshot = `${storagePath}.snapshot-${process.pid}-${Date.now()}`;
   try {
-    const database = new DatabaseSync(storagePath);
-    try {
-      database.exec(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`);
-    } finally {
-      database.close();
-    }
+    await vacuumInto(storagePath, snapshot);
     await gzipFile(snapshot, `${snapshot}.gz`);
     await rm(snapshot, { force: true });
-    return await uploadBackup(DURABLE_BACKUP_NAME, `${snapshot}.gz`, "sqlite.gz");
+    const key = await uploadBackup(DURABLE_BACKUP_NAME, `${snapshot}.gz`, "sqlite.gz");
+    if (key) {
+      lastHarnessFingerprint = fingerprint;
+      lastHarnessBackupAt = Date.now();
+    }
+    return key;
   } finally {
     await rm(snapshot, { force: true });
     await rm(`${snapshot}.gz`, { force: true });
