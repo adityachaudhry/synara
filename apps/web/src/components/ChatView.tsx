@@ -1510,7 +1510,12 @@ export default function ChatView({
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
-  const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
+  // A toggle applies to the workflow and phase (running or finished) it was made in.
+  const [workflowRunCardCompactChoice, setWorkflowRunCardCompactChoice] = useState<{
+    workflowTaskId: string;
+    settled: boolean;
+    compact: boolean;
+  } | null>(null);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
   // model name, traits label). Inputs live in a ref so the resize observer
@@ -11489,6 +11494,22 @@ export default function ChatView({
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
   const showComposerWorkflowRunCard = workflowRunState !== null;
+  // A finished workflow collapses to its header row (its agents stay one click away);
+  // a toggle made after it finished sticks, and a new run starts expanded.
+  const workflowRunCardCompact = workflowRunState
+    ? workflowRunCardCompactChoice?.workflowTaskId === workflowRunState.workflowTaskId &&
+      workflowRunCardCompactChoice.settled === workflowRunState.settled
+      ? workflowRunCardCompactChoice.compact
+      : workflowRunState.settled
+    : false;
+  const setWorkflowRunCardCompact = (compact: boolean) => {
+    if (!workflowRunState) return;
+    setWorkflowRunCardCompactChoice({
+      workflowTaskId: workflowRunState.workflowTaskId,
+      settled: workflowRunState.settled,
+      compact,
+    });
+  };
   // A durable workflow card (a diligence run) already lists its agents; the strip would repeat them.
   const showComposerSubagentStrip =
     composerSubagentStripItems.length > 0 &&

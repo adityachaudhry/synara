@@ -13,7 +13,7 @@ import { extractBearerToken } from "../agentGateway/bearerToken.ts";
 import { ExternalProjectResolver } from "../externalProjectResolver.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { diligenceRunner, diligenceThreadId, type DiligenceRequest } from "./diligence.ts";
+import { diligenceRunner, diligenceThreadId, setDiligenceMessageRewriter, type DiligenceRequest } from "./diligence.ts";
 
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
@@ -153,4 +153,36 @@ const statusRoute = HttpRouter.add("GET", "/internal/diligence/runs/:runId", Eff
   return status ? json(status) : json({ error: "unknown run" }, 404);
 }));
 
-export const diligenceRouteLayer = Layer.mergeAll(acceptRoute, cancelRoute, statusRoute);
+/**
+ * Lets the runner correct a run thread's closing note in place (an import with the same
+ * message id replaces its text and keeps its position), then repairs notes that went stale.
+ */
+const closingNotesLayer = Layer.effectDiscard(Effect.gen(function* () {
+  const engine = yield* OrchestrationEngineService;
+  const snapshots = yield* ProjectionSnapshotQuery;
+  const findMessage = async (threadId: string, messageId: string) => {
+    const thread = await Effect.runPromise(snapshots.getThreadDetailForExportById(ThreadId.makeUnsafe(threadId)));
+    return Option.isSome(thread) ? thread.value.messages.find((message) => message.id === messageId) : undefined;
+  };
+  setDiligenceMessageRewriter(async (threadId, messageId, text) => {
+    const message = await findMessage(threadId, messageId);
+    if (!message) return false;
+    const now = new Date().toISOString();
+    await Effect.runPromise(engine.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe(`diligence-note-${messageId}-${Date.now()}`),
+      threadId: ThreadId.makeUnsafe(threadId),
+      messages: [{ messageId, role: "assistant", text, createdAt: message.createdAt, updatedAt: now }],
+      createdAt: now,
+    } as never));
+    return true;
+  });
+  yield* Effect.forkDetach(Effect.tryPromise(async () => {
+    // The runner is set while the provider layer starts; wait for it rather than skip.
+    for (let attempt = 0; attempt < 60 && !diligenceRunner(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await diligenceRunner()?.repairClosingNotes(async (threadId, messageId) => (await findMessage(threadId, messageId))?.text);
+  }).pipe(Effect.catch((cause) => Effect.sync(() =>
+    console.warn(`[diligence] ${JSON.stringify({ event: "thread.note-repair-failed", message: String(cause) })}`)))));
+}));
+
+export const diligenceRouteLayer = Layer.mergeAll(acceptRoute, cancelRoute, statusRoute, closingNotesLayer);

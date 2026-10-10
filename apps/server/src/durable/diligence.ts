@@ -105,7 +105,18 @@ type RunState = {
   /** The Synara thread that shows this run, and its run-long turn. */
   threadId?: string;
   runTurnId?: string;
+  /** What the run thread's closing note says; a later delivery may change it. */
+  outcome?: Outcome;
 };
+
+type Outcome = "published" | "unpublished" | "publish-failed" | "stopped" | "failed";
+
+/** Rewrites a message already in a thread; false when it has no such message. The route layer sets it. */
+type MessageRewriter = (threadId: string, messageId: string, text: string) => Promise<boolean>;
+let rewriteMessage: MessageRewriter | undefined;
+export const setDiligenceMessageRewriter = (rewriter: MessageRewriter) => { rewriteMessage = rewriter; };
+/** The projection id of the run thread's closing note (an external message, see #closeThread). */
+const closeMessageId = (runId: string) => `assistant:external-message-${runId}-close`;
 
 // Stored as plain JSON; typed through the accessors below.
 const PlanDoc = defineDocFamily<JsonObject, null>({
@@ -151,6 +162,8 @@ const modelLabel = (model: string) => {
   return match ? `${match[1]!.charAt(0).toUpperCase()}${match[1]!.slice(1)} ${match[2]}.${match[3]}` : id;
 };
 const MODE_TITLES: Record<string, string> = { full: "full diligence", quick: "a quick read", memo: "the investment memo" };
+/** What each mode delivers, as the closing note names it. */
+const DELIVERABLES: Record<string, string> = { full: "report", quick: "quick read", memo: "investment memo" };
 /** The run thread's ID for a run; the child thread of a step is `subagent:<this>:step:<stepId>`. */
 export const diligenceThreadId = (runId: string) => `diligence-run-${runId}`;
 const childKey = (threadId: string, stepId: string) => `subagent:${threadId}:step:${stepId}`;
@@ -200,6 +213,29 @@ const MEMORY_DIR = "memory";
 export interface DiligenceThreads {
   /** Opens the run thread's own conversation, so analysts can also chat in it. */
   startThreadSession(threadId: string, repository: ProjectRepositoryBinding): Promise<void>;
+}
+
+function closingNote(request: DiligenceRequest, state: RunState, outcome: Outcome): string {
+  const deliverable = DELIVERABLES[request.mode] ?? "report";
+  const link = request.reportUrl ? ` [Open the ${deliverable}](${request.reportUrl}).` : "";
+  switch (outcome) {
+    case "published":
+      return `The ${request.company.name} ${deliverable} is ready.${link}`;
+    case "unpublished":
+      return `The research is finished. The ${deliverable} appears here once it is published.`;
+    case "publish-failed":
+      return `The research is finished, but the ${deliverable} could not be published.`;
+    case "stopped":
+      return "Diligence was stopped. Steps that finished keep their threads.";
+    case "failed": {
+      const steps = request.plan.steps;
+      const failed = steps.filter((step) => state.steps[step.id]?.status === "failed");
+      const skipped = steps.filter((step) => state.steps[step.id]?.status === "skipped");
+      return `Diligence stopped early. ${failed.map((step) => `${stepLabel(step)} failed: ${(state.steps[step.id]?.error ?? "unknown error").slice(0, 200)}`).join(" ")}` +
+        (skipped.length ? ` Not run because of it: ${skipped.map(stepLabel).join(", ")}.` : "") +
+        " Steps that finished keep their threads.";
+    }
+  }
 }
 
 export class DiligenceRunner {
@@ -364,33 +400,57 @@ export class DiligenceRunner {
     });
   }
 
+  /**
+   * The run thread's closing note says what a reader can do now. It follows Glasswing's
+   * verdict, and it is rewritten in place when a later delivery changes the outcome, so
+   * it never goes stale (2026-10-10: a delivered run still said its results had not arrived).
+   */
   async #closeThread(request: DiligenceRequest, state: RunState, recorded: string | undefined) {
     const threadId = this.#threadOf(state);
-    if (!threadId || !this.#engine.hasExternalTurn(threadId)) return;
-    const steps = request.plan.steps;
-    const failed = steps.filter((step) => state.steps[step.id]?.status === "failed");
-    const skipped = steps.filter((step) => state.steps[step.id]?.status === "skipped");
-    const report = request.reportUrl ? ` [Open the report](${request.reportUrl}).` : "";
-    const completed = steps.length === 1 ? "the step completed" : `all ${steps.length} steps completed`;
-    const published = recorded === "succeeded"
-      ? ` The report is published.${report}`
-      : recorded === undefined
-        ? " Glasswing has not received the results yet; the report will update once it does."
-        : " Glasswing could not publish the report; the run's status in Glasswing has the details.";
-    const text = state.status === "succeeded"
-      ? `Diligence finished: ${completed}.${published} ${steps.length === 1 ? "The step thread keeps its agent's research, so you can ask it a follow-up." : "Each step thread keeps its agent's research, so you can ask any of them a follow-up."}`
-      : state.status === "canceled"
-        ? "Diligence was stopped. Steps that finished keep their threads and research."
-        : `Diligence finished with problems. ${failed.map((step) => `${stepLabel(step)} failed: ${(state.steps[step.id]?.error ?? "unknown error").slice(0, 200)}`).join(" ")}` +
-          (skipped.length ? ` Skipped because an earlier step failed: ${skipped.map(stepLabel).join(", ")}.` : "") +
-          " Steps that finished keep their threads; you can message them.";
-    this.#engine.emitExternalMessage(threadId, `${request.runId}-close`, text);
-    this.#engine.emitExternal(threadId, {
-      type: "task.completed",
-      payload: { taskId: `diligence-${request.runId}`, status: state.status === "succeeded" ? "completed" : state.status === "canceled" ? "stopped" : "failed" },
-    });
-    this.#engine.endExternalTurn(threadId, state.status === "canceled" ? "interrupted" : state.status === "failed" ? "failed" : "completed",
-      state.status === "failed" ? "Some diligence steps failed." : undefined);
+    if (!threadId) return;
+    const outcome: Outcome = state.status === "canceled" ? "stopped"
+      : state.status === "failed" ? "failed"
+        : recorded === undefined ? "unpublished"
+          : recorded === "succeeded" ? "published" : "publish-failed";
+    if (state.outcome === outcome) return;
+    const text = closingNote(request, state, outcome);
+    const finish = () => {
+      this.#engine.emitExternal(threadId, {
+        type: "task.completed",
+        payload: { taskId: `diligence-${request.runId}`, status: state.status === "succeeded" ? "completed" : state.status === "canceled" ? "stopped" : "failed" },
+      });
+      this.#engine.endExternalTurn(threadId, state.status === "canceled" ? "interrupted" : state.status === "failed" ? "failed" : "completed",
+        state.status === "failed" ? "Some diligence steps failed." : undefined);
+    };
+    if (this.#engine.hasExternalTurn(threadId)) {
+      this.#engine.emitExternalMessage(threadId, `${request.runId}-close`, text);
+      finish();
+    } else if (!(state.outcome && await rewriteMessage?.(threadId, closeMessageId(request.runId), text).catch(() => false))) {
+      // No run turn to close and no earlier note to correct (a restart lost the turn).
+      this.#engine.beginExternalTurn(threadId, `diligence-close:${request.runId}`, true);
+      this.#engine.emitExternalMessage(threadId, `${request.runId}-close`, text);
+      finish();
+    }
+    await this.#update(request.runId, (draft) => { draft.outcome = outcome; });
+    log("thread.closed", { runId: request.runId, outcome });
+  }
+
+  /**
+   * Corrects closing notes written before outcomes were tracked: a run delivered after
+   * its thread closed kept saying Glasswing had not received the results. Idempotent.
+   */
+  async repairClosingNotes(readMessage: (threadId: string, messageId: string) => Promise<string | undefined>) {
+    const threads = (await this.#harness.snapshot(RunThreads, ctx))?.threads ?? {};
+    for (const [threadId, runId] of Object.entries(threads)) {
+      const state = await this.#state(runId);
+      if (!state || state.outcome || !state.delivered || state.status !== "succeeded") continue;
+      const text = await readMessage(threadId, closeMessageId(runId)).catch(() => undefined);
+      if (!text?.includes("has not received the results yet")) continue;
+      const request = await this.#plan(runId);
+      if (!request || !(await rewriteMessage?.(threadId, closeMessageId(runId), closingNote(request, state, "published")))) continue;
+      await this.#update(runId, (draft) => { draft.outcome = "published"; });
+      log("thread.note-repaired", { runId });
+    }
   }
 
   async #runFor(threadId: string) {
