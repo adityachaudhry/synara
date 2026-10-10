@@ -121,6 +121,7 @@ function RightDockLauncher(props: {
 }
 
 function RightDockTab(props: {
+  variant?: "chip" | "underline";
   pane: RightDockPane;
   label: string;
   icon?: ReactNode;
@@ -131,6 +132,7 @@ function RightDockTab(props: {
 }) {
   return (
     <SurfaceTabChip
+      {...(props.variant ? { variant: props.variant } : {})}
       active={props.active}
       title={props.label}
       label={props.label}
@@ -233,6 +235,7 @@ export function RightDock(props: RightDockProps) {
   // Expanded: the dock fills its shell and the chat steps aside (index.css); restoring
   // puts back the width the dock had, including one the user dragged to.
   const expandable = hostSidebar?.rightDockExpandable === true;
+  const underlineTabs = hostSidebar?.rightDockTabStyle === "underline";
   const [expanded, setExpanded] = useState(false);
   const restoreWidthRef = useRef<string | null>(null);
   // The elements an expansion marked, so restoring works even after unmount detached refs.
@@ -405,15 +408,21 @@ export function RightDock(props: RightDockProps) {
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-1 overflow-x-auto",
+                underlineTabs && "self-stretch",
+              )}
+            >
               {props.state.panes.map((pane) => (
                 <RightDockTab
                   key={pane.id}
+                  {...(underlineTabs ? { variant: "underline" as const } : {})}
                   pane={pane}
                   label={resolveRightDockPaneLabel(pane, props.paneLabelOverrides)}
                   icon={props.paneIconOverrides?.[pane.id]}
                   className={
-                    hostSidebar?.simplifiedComposer === true
+                    hostSidebar?.simplifiedComposer === true && !underlineTabs
                       ? "!bg-[var(--background)]"
                       : undefined
                   }
