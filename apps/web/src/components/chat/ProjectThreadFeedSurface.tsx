@@ -75,7 +75,10 @@ const FEED_PINNED_PANE_ID = "project-feed-pinned";
 const FEED_DOCK_OWNER = "project-feed";
 const FEED_CHAT_PANE_SCOPE_ID = "project-thread-feed";
 const FEED_MAIN_MIN_WIDTH = 28 * 16;
-const THREAD_FEED_REFRESH_INTERVAL_MS = 2_000;
+// The shell stream carries the feed's changes as they happen; this poll is the safety net
+// for one it missed. At 2 s every open feed rebuilt the project's shell on the controller
+// constantly; a missed change now shows within 15 s, or as soon as the window is back.
+const THREAD_FEED_REFRESH_INTERVAL_MS = 15_000;
 const FEED_CHAT_PANEL_STATE: SplitViewPanePanelState = {
   panel: null,
   diffTurnId: null,
@@ -352,17 +355,19 @@ export function ProjectThreadFeedSurface({
           }
         });
     };
-    // ponytail: shell-only polling is the smallest reliable cross-client fallback;
-    // remove it when the scoped shell stream delivers post-snapshot events consistently.
+    // Shell-only polling is the cross-client fallback for a change the scoped shell stream
+    // missed; it is slow, so returning to the window refreshes at once.
     const intervalId = window.setInterval(refresh, THREAD_FEED_REFRESH_INTERVAL_MS);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") refresh();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", refresh);
     return () => {
       disposed = true;
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", refresh);
     };
   }, [syncServerShellSnapshot]);
 

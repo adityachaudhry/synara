@@ -4207,7 +4207,10 @@ export default function ChatView({
     : !isContainerLandingProject || Boolean(resolvedThreadWorktreePath);
   const repoDiffTotals = useRepoDiffTotals({
     gitCwd: threadWorkspaceCwd,
-    isGitRepo,
+    // Counts only for a folder known to be a repository. The UI's optimistic default
+    // (a repository until the branch query says otherwise) made every mount on a
+    // non-repository workspace (an embedded company) request diff stats, fail and retry.
+    isGitRepo: branchesQuery.data?.isRepo === true,
     refetchInterval: repoDiffBadgeRefreshIntervalMs,
   });
   // The composer live strip is turn-scoped; repoDiffTotals can include unrelated
