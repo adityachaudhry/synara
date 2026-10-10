@@ -260,7 +260,7 @@ export function RightDock(props: RightDockProps) {
       if (child !== wrapper) (child as HTMLElement).inert = inert;
     }
   };
-  const setDockExpanded = (next: boolean) => {
+  const applyDockExpanded = (next: boolean) => {
     if (next) {
       const elements = dockElements();
       if (!elements) return;
@@ -285,7 +285,13 @@ export function RightDock(props: RightDockProps) {
         }, 400);
       }
     }
+  };
+  // The slide starts on the frame after React has re-rendered, so it plays from its
+  // first frame instead of losing them to the render; an unmount restores at once.
+  const setDockExpanded = (next: boolean, immediate = false) => {
     setExpanded(next);
+    if (immediate) applyDockExpanded(next);
+    else window.requestAnimationFrame(() => applyDockExpanded(next));
   };
   const setDockExpandedRef = useRef(setDockExpanded);
   setDockExpandedRef.current = setDockExpanded;
@@ -293,7 +299,7 @@ export function RightDock(props: RightDockProps) {
   useEffect(() => {
     if (!props.state.open) setDockExpandedRef.current(false);
   }, [props.state.open]);
-  useEffect(() => () => setDockExpandedRef.current(false), [props.motionKey]);
+  useEffect(() => () => setDockExpandedRef.current(false, true), [props.motionKey]);
   useEffect(() => {
     if (!expanded) return;
     const elements = dockElements();
