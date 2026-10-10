@@ -66,6 +66,11 @@ export interface SynaraHostSidebar {
    * follows window resizes until someone drags the dock. Keep the function stable.
    */
   readonly rightDockOpenWidth?: (shellWidthPx: number) => number;
+  /**
+   * The narrowest the chat may get beside the right dock: drags stop there and a
+   * narrowing window shrinks the dock (down to its own minimum) instead.
+   */
+  readonly chatMinWidthPx?: number;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;

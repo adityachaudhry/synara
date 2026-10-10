@@ -230,6 +230,11 @@ export function RightDock(props: RightDockProps) {
   const hostOpenWidthRef = useRef(hostSidebar?.rightDockOpenWidth);
   hostOpenWidthRef.current = hostSidebar?.rightDockOpenWidth;
   const hasHostOpenWidth = hostSidebar?.rightDockOpenWidth !== undefined;
+  const chatMinWidth = hostSidebar?.chatMinWidthPx;
+  const shouldAcceptWidth = (context: { nextWidth: number; wrapper: HTMLElement }) =>
+    (chatMinWidth === undefined ||
+      (context.wrapper.parentElement?.clientWidth ?? 0) - context.nextWidth >= chatMinWidth) &&
+    props.shouldAcceptWidth(context);
   useEffect(() => {
     if (!props.state.open) {
       return;
@@ -254,20 +259,27 @@ export function RightDock(props: RightDockProps) {
       }
     };
     apply();
-    if (!hasHostOpenWidth || preferredWidth !== undefined) {
+    const follow = hasHostOpenWidth && preferredWidth === undefined;
+    if (!follow && chatMinWidth === undefined) {
       return;
     }
-    // Follow the window until someone drags the dock to a width of their own.
     const observer = new ResizeObserver(() => {
-      if (wrapper.style.getPropertyValue("--sidebar-width") !== applied) {
-        observer.disconnect();
+      // Follow the window until someone drags the dock to a width of their own.
+      if (follow && wrapper.style.getPropertyValue("--sidebar-width") === applied) {
+        apply();
         return;
       }
-      apply();
+      // A narrowing window takes width from the dock, never below the chat's floor.
+      if (chatMinWidth === undefined) return;
+      const shellWidth = shell.getBoundingClientRect().width;
+      const dockWidth = wrapper.getBoundingClientRect().width;
+      if (shellWidth - dockWidth < chatMinWidth) {
+        wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, Math.floor(shellWidth - chatMinWidth))}px`);
+      }
     });
     observer.observe(shell);
     return () => observer.disconnect();
-  }, [props.state.open, minWidth, activePaneKind, hasHostOpenWidth]);
+  }, [props.state.open, minWidth, activePaneKind, hasHostOpenWidth, chatMinWidth]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
@@ -324,7 +336,7 @@ export function RightDock(props: RightDockProps) {
         }
         resizable={{
           minWidth: props.minWidth,
-          shouldAcceptWidth: props.shouldAcceptWidth,
+          shouldAcceptWidth,
         }}
       >
         <div
