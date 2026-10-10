@@ -1,5 +1,7 @@
+import { OrchestrationShellSnapshot } from "@synara/contracts";
 import { RouterProvider } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, type CSSProperties, type RefObject } from "react";
+import { Option, Schema } from "effect";
+import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type RefObject } from "react";
 
 import { AppHistoryProvider, appHistory } from "./appNavigation";
 import type { SynaraHistory } from "./embeddedHistory";
@@ -64,6 +66,28 @@ export interface SynaraAppProps extends SynaraRuntimeConfig {
   readonly hostSidebar?: SynaraHostSidebar;
   readonly hostTheme?: SynaraHostTheme;
   readonly embeddedBaseFontSizePx?: number;
+  /**
+   * The shell (projects and thread rows) as the host fetched it while it rendered the
+   * page (GET /api/orchestration/shell-snapshot with the same session), as JSON. The
+   * app shows those threads before its socket connects; it may arrive after mount.
+   */
+  readonly initialShellSnapshot?: unknown;
+}
+
+const decodeShellSnapshot = Schema.decodeUnknownOption(OrchestrationShellSnapshot);
+
+/**
+ * Applies the host's copy of the shell as soon as it is here, so the first paint has
+ * the threads. The store keeps whichever snapshot is newer, so the socket's own
+ * subscription takes over and an older copy arriving late changes nothing.
+ */
+function HostShellSnapshot({ snapshot }: { snapshot: unknown }) {
+  useLayoutEffect(() => {
+    if (snapshot === undefined || snapshot === null) return;
+    const decoded = decodeShellSnapshot(snapshot);
+    if (Option.isSome(decoded)) useStore.getState().syncServerShellSnapshot(decoded.value);
+  }, [snapshot]);
+  return null;
 }
 
 function embeddedTypographyStyle(value: number | undefined): CSSProperties | undefined {
@@ -106,6 +130,7 @@ export function SynaraApp({
   hostSidebar,
   hostTheme,
   embeddedBaseFontSizePx,
+  initialShellSnapshot,
 }: SynaraAppProps) {
   configureSynaraRuntime({
     ...(httpBaseUrl ? { httpBaseUrl } : {}),
@@ -134,6 +159,7 @@ export function SynaraApp({
         data-synara-host-themed={hostTheme ? "" : undefined}
         style={style}
       >
+        <HostShellSnapshot snapshot={initialShellSnapshot} />
         <HostReadinessSignal rootRef={rootRef} />
         <SynaraHostSidebarProvider value={hostSidebar ?? null}>
           <AppHistoryProvider history={history}>

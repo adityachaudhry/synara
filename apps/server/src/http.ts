@@ -9,6 +9,7 @@ import {
   AuthRevokePairingLinkInput,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  OrchestrationShellSnapshot,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
   ThreadId,
   type ChatAttachment,
@@ -30,6 +31,7 @@ import {
 } from "./attachmentPaths";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import { filterShellSnapshotByProjectScope, toProjectScope } from "./auth/projectScope";
 import { authorizeExternalServiceRequest } from "./auth/externalIdentity";
 import { AuthError, ServerAuth, type AuthenticatedHttpSession } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
@@ -241,6 +243,7 @@ export function makeEffectHttpRouteLayer(
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
     threadExportEffectRouteLayer,
+    shellSnapshotEffectRouteLayer,
     siteFaviconEffectRouteLayer,
     editorIconEffectRouteLayer,
     localImageEffectRouteLayer,
@@ -960,6 +963,41 @@ const threadExportEffectRouteLayer = HttpRouter.add(
       },
     );
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+// The shell (projects and thread rows) a session may see, over HTTP. An embedding
+// host fetches it while it renders the page and hands it to the app, which shows the
+// threads before its socket has connected; the socket's own shell subscription then
+// takes over (the store keeps whichever snapshot is newer).
+export const SHELL_SNAPSHOT_ROUTE_PATH = "/api/orchestration/shell-snapshot";
+const encodeShellSnapshot = Schema.encodeEffect(OrchestrationShellSnapshot);
+const shellSnapshotEffectRouteLayer = HttpRouter.add(
+  "GET",
+  SHELL_SNAPSHOT_ROUTE_PATH,
+  Effect.gen(function* () {
+    const session = yield* requireAuthenticatedRequest;
+    const snapshots = yield* ProjectionSnapshotQuery;
+    const snapshot = filterShellSnapshotByProjectScope(
+      yield* snapshots.getShellSnapshot(),
+      toProjectScope(session.allowedProjectIds),
+    );
+    return HttpServerResponse.jsonUnsafe(yield* encodeShellSnapshot(snapshot), {
+      status: 200,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }).pipe(
+    Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error))),
+    Effect.catch((error) =>
+      Effect.logWarning("Shell snapshot request failed", { error: String(error) }).pipe(
+        Effect.as(
+          HttpServerResponse.text("Shell snapshot unavailable", {
+            status: 503,
+            headers: { "Cache-Control": "no-store" },
+          }),
+        ),
+      ),
+    ),
+  ),
 );
 
 export const editorIconEffectRouteLayer = HttpRouter.add(
