@@ -155,6 +155,14 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
+   * The shell for a project-scoped session: only those projects and their threads (no
+   * spaces), read from their rows alone. An empty list reads every project.
+   */
+  readonly getShellSnapshotForProjects: (
+    projectIds: ReadonlyArray<ProjectId>,
+  ) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
+
+  /**
    * Read the active project for an exact workspace root match.
    */
   readonly getActiveProjectByWorkspaceRoot: (

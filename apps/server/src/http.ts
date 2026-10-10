@@ -977,9 +977,12 @@ const shellSnapshotEffectRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     const session = yield* requireAuthenticatedRequest;
     const snapshots = yield* ProjectionSnapshotQuery;
+    const scope = toProjectScope(session.allowedProjectIds);
     const snapshot = filterShellSnapshotByProjectScope(
-      yield* snapshots.getShellSnapshot(),
-      toProjectScope(session.allowedProjectIds),
+      yield* (scope === undefined
+        ? snapshots.getShellSnapshot()
+        : snapshots.getShellSnapshotForProjects([...scope])),
+      scope,
     );
     return HttpServerResponse.jsonUnsafe(yield* encodeShellSnapshot(snapshot), {
       status: 200,

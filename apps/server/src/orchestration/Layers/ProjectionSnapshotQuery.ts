@@ -211,7 +211,13 @@ const ThreadIdLookupInput = Schema.Struct({
 });
 const ThreadFeedSummaryLookupInput = Schema.Struct({
   threadId: Schema.NullOr(ThreadId),
+  projectIds: Schema.NullOr(Schema.Array(ProjectId)),
 });
+// Shell queries read one session's projects (a project-scoped session) or all of them (null).
+const ShellScopeInput = Schema.Struct({
+  projectIds: Schema.NullOr(Schema.Array(ProjectId)),
+});
+const ALL_PROJECTS = { projectIds: null } as const;
 const StaleInFlightThreadLookupInput = Schema.Struct({
   updatedBefore: IsoDateTime,
   limit: Schema.Number,
@@ -891,9 +897,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listProjectRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ShellScopeInput,
     Result: ProjectionProjectDbRowSchema,
-    execute: () =>
+    execute: ({ projectIds }) =>
       sql`
         SELECT
           project_id AS "projectId",
@@ -910,6 +916,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
         FROM projection_projects
+        ${projectIds === null ? sql`` : sql`WHERE project_id IN ${sql.in(projectIds)}`}
         ORDER BY created_at ASC, project_id ASC
       `,
   });
@@ -971,9 +978,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listThreadShellRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ShellScopeInput,
     Result: ProjectionThreadShellDbRowSchema,
-    execute: () =>
+    execute: ({ projectIds }) =>
       sql`
         SELECT
           thread_id AS "threadId",
@@ -1018,6 +1025,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           settled_at AS "settledAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
+        ${projectIds === null ? sql`` : sql`WHERE project_id IN ${sql.in(projectIds)}`}
         ORDER BY created_at ASC, thread_id ASC
       `,
   });
@@ -1025,7 +1033,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listThreadFeedSummaryRows = SqlSchema.findAll({
     Request: ThreadFeedSummaryLookupInput,
     Result: ProjectionThreadFeedSummaryDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, projectIds }) =>
       sql`
         WITH eligible_messages AS (
           SELECT
@@ -1050,6 +1058,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             AND role IN ('user', 'assistant')
             AND is_streaming = 0
             ${threadId === null ? sql`` : sql`AND thread_id = ${threadId}`}
+            ${
+              projectIds === null
+                ? sql``
+                : sql`AND thread_id IN (
+                    SELECT thread_id FROM projection_threads WHERE project_id IN ${sql.in(projectIds)}
+                  )`
+            }
         ),
         first_user_ranks AS (
           SELECT thread_id, MIN(message_rank) AS first_user_rank
@@ -1397,9 +1412,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listThreadSessionRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ShellScopeInput,
     Result: ProjectionThreadSessionDbRowSchema,
-    execute: () =>
+    execute: ({ projectIds }) =>
       sql`
         SELECT
           thread_id AS "threadId",
@@ -1412,6 +1427,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_error AS "lastError",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
+        ${
+          projectIds === null
+            ? sql``
+            : sql`WHERE thread_id IN (
+                SELECT thread_id FROM projection_threads WHERE project_id IN ${sql.in(projectIds)}
+              )`
+        }
         ORDER BY thread_id ASC
       `,
   });
@@ -1440,9 +1462,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listLatestTurnRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ShellScopeInput,
     Result: ProjectionLatestTurnDbRowSchema,
-    execute: () =>
+    execute: ({ projectIds }) =>
       sql`
         SELECT
           thread_id AS "threadId",
@@ -1456,6 +1478,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source_proposed_plan_id AS "sourceProposedPlanId"
         FROM projection_turns
         WHERE turn_id IS NOT NULL
+        ${
+          projectIds === null
+            ? sql``
+            : sql`AND thread_id IN (
+                SELECT thread_id FROM projection_threads WHERE project_id IN ${sql.in(projectIds)}
+              )`
+        }
         ORDER BY thread_id ASC, requested_at DESC, turn_id DESC
       `,
   });
@@ -2164,7 +2193,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listProjectRows(undefined).pipe(
+            listProjectRows(ALL_PROJECTS).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listProjects:query",
@@ -2232,7 +2261,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listThreadSessionRows(undefined).pipe(
+            listThreadSessionRows(ALL_PROJECTS).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listThreadSessions:query",
@@ -2248,7 +2277,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listLatestTurnRows(undefined).pipe(
+            listLatestTurnRows(ALL_PROJECTS).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listLatestTurns:query",
@@ -2346,7 +2375,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listProjectRows(undefined).pipe(
+            listProjectRows(ALL_PROJECTS).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getCommandReadModel:listProjects:query",
@@ -2390,7 +2419,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listThreadSessionRows(undefined).pipe(
+            listThreadSessionRows(ALL_PROJECTS).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:query",
@@ -2398,7 +2427,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listLatestTurnRows(undefined).pipe(
+            listLatestTurnRows(ALL_PROJECTS).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:query",
@@ -2468,10 +2497,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
-  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
+  // The shell for every project (null) or for a project-scoped session's projects. A scoped
+  // read touches only those projects' rows: a session embedded for one company polled and
+  // subscribed to a shell built from every thread and message on the controller.
+  const readShellSnapshot = (projectIds: ReadonlyArray<ProjectId> | null) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
+          const scope = { projectIds };
           const [
             spaceRows,
             projectRows,
@@ -2481,7 +2514,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             latestTurnRows,
             stateRows,
           ] = yield* Effect.all([
-              listSpaceRows(undefined).pipe(
+              // A scoped shell carries no spaces (filterShellSnapshotByProjectScope).
+              (projectIds === null ? listSpaceRows(undefined) : Effect.succeed([])).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listSpaces:query",
@@ -2489,7 +2523,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
-              listProjectRows(undefined).pipe(
+              listProjectRows(scope).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listProjects:query",
@@ -2503,7 +2537,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
-              listThreadShellRows(undefined).pipe(
+              listThreadShellRows(scope).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreads:query",
@@ -2517,7 +2551,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
-              listThreadFeedSummaryRows({ threadId: null }).pipe(
+              listThreadFeedSummaryRows({ threadId: null, projectIds }).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreadFeedSummaries:query",
@@ -2525,7 +2559,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
-              listThreadSessionRows(undefined).pipe(
+              listThreadSessionRows(scope).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreadSessions:query",
@@ -2533,7 +2567,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ),
                 ),
               ),
-              listLatestTurnRows(undefined).pipe(
+              listLatestTurnRows(scope).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listLatestTurns:query",
@@ -2560,7 +2594,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, sessions.updatedAt);
 
+          // The empty-shell repair concerns the whole controller, never one session's projects.
           const shellIsEmpty =
+            projectIds === null &&
             !projectRows.some((row) => row.deletedAt === null) &&
             !threadRows.some((row) => row.deletedAt === null);
           const requiresEmptyProjectShellRepair = shellIsEmpty
@@ -2612,6 +2648,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           return toPersistenceSqlError("ProjectionSnapshotQuery.getShellSnapshot:query")(error);
         }),
       );
+
+  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
+    readShellSnapshot(null);
+
+  const getShellSnapshotForProjects: ProjectionSnapshotQueryShape["getShellSnapshotForProjects"] = (
+    projectIds,
+  ) => readShellSnapshot(projectIds.length > 0 ? projectIds : null);
 
   const listStaleInFlightThreadIds: ProjectionSnapshotQueryShape["listStaleInFlightThreadIds"] = (
     input,
@@ -2916,7 +2959,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listThreadFeedSummaryRows({ threadId }).pipe(
+            listThreadFeedSummaryRows({ threadId, projectIds: null }).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getThreadShellById:getThreadFeedSummary:query",
@@ -3224,6 +3267,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCommandReadModel,
     getSnapshot,
     getShellSnapshot,
+    getShellSnapshotForProjects,
     getCounts,
     getSnapshotSequence,
     listStaleInFlightThreadIds,

@@ -57,6 +57,7 @@ import {
   filterProviderStatusesByProjectScope,
   filterReadModelByProjectScope,
   filterShellSnapshotByProjectScope,
+  type ProjectScope,
   projectScopePayloadForEvent,
 } from "./auth/projectScope";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
@@ -664,6 +665,12 @@ const makeWsRpcHandlersLayer = () =>
           );
         });
 
+      // A project-scoped session's shell is read from its projects' rows only.
+      const readShellSnapshotForScope = (scope: ProjectScope) =>
+        scope === undefined
+          ? projectionReadModelQuery.getShellSnapshot()
+          : projectionReadModelQuery.getShellSnapshotForProjects([...scope]);
+
       const scopeDomainEvents = <A extends OrchestrationEvent>(stream: Stream.Stream<A>) =>
         Stream.unwrap(
           CurrentProjectScope.pipe(
@@ -961,7 +968,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.gen(function* () {
               const scope = yield* CurrentProjectScope;
               return filterShellSnapshotByProjectScope(
-                yield* projectionReadModelQuery.getShellSnapshot(),
+                yield* readShellSnapshotForScope(scope),
                 scope,
               );
             }),
@@ -1072,7 +1079,7 @@ const makeWsRpcHandlersLayer = () =>
               snapshot: Effect.gen(function* () {
                 const scope = yield* CurrentProjectScope;
                 return filterShellSnapshotByProjectScope(
-                  yield* projectionReadModelQuery.getShellSnapshot(),
+                  yield* readShellSnapshotForScope(scope),
                   scope,
                 );
               }).pipe(
