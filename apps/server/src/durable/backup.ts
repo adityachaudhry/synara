@@ -6,7 +6,8 @@
  * - `durable-harness`: the Pi Durable Harness (VACUUM INTO on a worker thread), 2 min after start,
  *   every 10 min when it changed (hourly when it did not), and at shutdown (scheduled by the
  *   engine);
- * - `state`: Synara's `state.sqlite` (SQLite online backup through its own connection), hourly;
+ * - `state`: Synara's `state.sqlite` (SQLite online backup through its own connection, into the
+ *   container's own disk when it has room), hourly;
  * - `attachments`: the chat attachments directory (tar.gz), hourly when it changed;
  * - `drafts`: the controller copies of thread Outbox files and checkout drafts (tar.gz), hourly
  *   when they changed.
@@ -19,6 +20,7 @@ import { createReadStream, createWriteStream, existsSync, renameSync, writeFileS
 import { mkdir, readdir, rm, stat, statfs } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
+import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -286,6 +288,23 @@ async function enoughSpace(dir: string, needed: number) {
   return info.bavail * info.bsize > needed;
 }
 
+// The state snapshot goes where committing it is cheap. SQLite's online backup holds the
+// controller's connection through each step, and its last step commits (fsyncs) the whole
+// copy: on the volume that took about 2.3 s on dev (2026-10-10), and every request that read
+// `state.sqlite` meanwhile stalled the event loop. The copy is scratch, gzipped and uploaded
+// at once, so the container's own disk serves when it has room; the volume otherwise.
+const LOCAL_SNAPSHOT_DIR = path.join(os.tmpdir(), "synara-controller-backup");
+
+async function stateSnapshotDir(volumeDir: string, needed: number): Promise<string> {
+  try {
+    await mkdir(LOCAL_SNAPSHOT_DIR, { recursive: true, mode: 0o700 });
+    if (await enoughSpace(LOCAL_SNAPSHOT_DIR, needed)) return LOCAL_SNAPSHOT_DIR;
+  } catch {
+    // No usable local disk: the volume below.
+  }
+  return volumeDir;
+}
+
 /**
  * Exports `state.sqlite`, the attachments directory and the drafts store off-volume, hourly
  * (directories only when they changed). Returns a stop function. Failures are logged and retried
@@ -307,15 +326,21 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
     if (process.versions.bun !== undefined || !existsSync(paths.stateDbPath)) return;
     const { size } = await stat(paths.stateDbPath);
     // Snapshot plus its compressed copy, with headroom.
-    if (!(await enoughSpace(paths.workDir, size * 2 + 256 * 1024 * 1024))) {
+    const needed = size * 2 + 256 * 1024 * 1024;
+    const dir = await stateSnapshotDir(paths.workDir, needed);
+    if (!(await enoughSpace(dir, needed))) {
       log("controller.backup.skipped", { kind: "state", reason: "not enough free space for a snapshot", bytes: size });
       return;
     }
-    const snapshot = path.join(paths.workDir, `state-${Date.now()}.sqlite`);
+    const snapshot = path.join(dir, `state-${Date.now()}.sqlite`);
     try {
       // The same module the persistence layer loads under Node, so it sees the open connection.
       const { backupOpenDatabase } = await import("../persistence/NodeSqliteClient.ts");
+      const started = Date.now();
       await backupOpenDatabase(paths.stateDbPath, snapshot);
+      log("controller.backup.snapshot", {
+        kind: "state", bytes: size, durationMs: Date.now() - started, disk: dir === paths.workDir ? "volume" : "local",
+      });
       await gzipFile(snapshot, `${snapshot}.gz`);
       await rm(snapshot, { force: true });
       await uploadBackup("state", `${snapshot}.gz`, "sqlite.gz");
@@ -357,6 +382,7 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
 
   // Scratch files of an interrupted pass are never resumed.
   void rm(paths.workDir, { recursive: true, force: true }).catch(() => undefined);
+  void rm(LOCAL_SNAPSHOT_DIR, { recursive: true, force: true }).catch(() => undefined);
   const first = setTimeout(() => void pass(), options.firstDelayMs ?? STATE_FIRST_DELAY_MS);
   first.unref();
   const timer = setInterval(() => void pass(), STATE_INTERVAL_MS);
