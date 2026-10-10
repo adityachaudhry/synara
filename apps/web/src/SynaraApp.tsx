@@ -1,6 +1,4 @@
-import { OrchestrationShellSnapshot } from "@synara/contracts";
 import { RouterProvider } from "@tanstack/react-router";
-import { Option, Schema } from "effect";
 import {
   useCallback,
   useEffect,
@@ -16,6 +14,7 @@ import { AppHistoryProvider, appHistory } from "./appNavigation";
 import type { SynaraHistory } from "./embeddedHistory";
 import { SynaraHostPortalProvider } from "./hostPortal";
 import { HostRouteRenderedContext } from "./hostReadiness";
+import { decodeHostShellSnapshot } from "./hostShellSnapshot";
 import { SynaraHostSidebarProvider, type SynaraHostSidebar } from "./hostSidebar";
 import { getAppTypographyScale } from "./lib/appTypography";
 import { createHostThemeStyle } from "./lib/hostThemeStyle";
@@ -84,8 +83,6 @@ export interface SynaraAppProps extends SynaraRuntimeConfig {
   readonly initialShellSnapshot?: unknown;
 }
 
-const decodeShellSnapshot = Schema.decodeUnknownOption(OrchestrationShellSnapshot);
-
 /**
  * Applies the host's copy of the shell as soon as it is here, so the first paint has
  * the threads. The store keeps whichever snapshot is newer, so the socket's own
@@ -93,9 +90,8 @@ const decodeShellSnapshot = Schema.decodeUnknownOption(OrchestrationShellSnapsho
  */
 function HostShellSnapshot({ snapshot }: { snapshot: unknown }) {
   useLayoutEffect(() => {
-    if (snapshot === undefined || snapshot === null) return;
-    const decoded = decodeShellSnapshot(snapshot);
-    if (Option.isSome(decoded)) useStore.getState().syncServerShellSnapshot(decoded.value);
+    const decoded = decodeHostShellSnapshot(snapshot);
+    if (decoded) useStore.getState().syncServerShellSnapshot(decoded);
   }, [snapshot]);
   return null;
 }
