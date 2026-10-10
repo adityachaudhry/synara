@@ -91,7 +91,10 @@ export interface SynaraAppProps extends SynaraRuntimeConfig {
 function HostShellSnapshot({ snapshot }: { snapshot: unknown }) {
   useLayoutEffect(() => {
     const decoded = decodeHostShellSnapshot(snapshot);
-    if (decoded) useStore.getState().syncServerShellSnapshot(decoded);
+    if (!decoded) return;
+    const started = performance.now();
+    useStore.getState().syncServerShellSnapshot(decoded);
+    performance.measure("synara:host-shell:apply", { start: started, end: performance.now() });
   }, [snapshot]);
   return null;
 }

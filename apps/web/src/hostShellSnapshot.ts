@@ -10,20 +10,30 @@ const decode = Schema.decodeUnknownOption(OrchestrationShellSnapshot);
 /** The host's copy of the shell, decoded, or null when it is not one. */
 export function decodeHostShellSnapshot(value: unknown): OrchestrationShellSnapshot | null {
   if (value === undefined || value === null) return null;
-  return Option.getOrNull(decode(value));
+  const started = performance.now();
+  const decoded = Option.getOrNull(decode(value));
+  performance.measure("synara:host-shell:decode", { start: started, end: performance.now() });
+  return decoded;
 }
 
 /**
- * The first decode compiles the decoder for the whole shell schema (~150 ms of main
- * thread on a laptop); a preload pays it while the host page is idle rather than
- * when the workspace opens.
+ * The first decodes compile the decoder for the shell schema (~150 ms of main thread
+ * on a laptop, most of it the project and thread row schemas); a preload pays that
+ * while the host page is idle rather than when the workspace opens. One empty row of
+ * each kind, decoded collecting every issue, visits every field of every row schema.
+ * The result is discarded.
  */
 export function warmHostShellSnapshotDecoder(): void {
-  decode({
-    snapshotSequence: 0,
-    spaces: [],
-    projects: [],
-    threads: [],
-    updatedAt: "1970-01-01T00:00:00.000Z",
-  });
+  const started = performance.now();
+  decode(
+    {
+      snapshotSequence: 0,
+      spaces: [{}],
+      projects: [{}],
+      threads: [{}],
+      updatedAt: "1970-01-01T00:00:00.000Z",
+    },
+    { errors: "all" },
+  );
+  performance.measure("synara:host-shell:warm", { start: started, end: performance.now() });
 }
