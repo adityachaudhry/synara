@@ -64,6 +64,9 @@ const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
   device: 38 * 16,
 };
 
+// The offcanvas slide is 300 ms (SIDEBAR_OFFCANVAS_MOTION_CLASS); expansion settles after it.
+const RIGHT_DOCK_SLIDE_SETTLE_MS = 350;
+
 // A width someone dragged the dock to, per widthMemoryKey: surfaces that share a
 // dock mount their own RightDock, and the next one opens at that width.
 const draggedDockWidthByKey = new Map<string, string>();
@@ -268,21 +271,27 @@ export function RightDock(props: RightDockProps) {
       expandedElementsRef.current = elements;
       window.clearTimeout(restoreTimerRef.current);
       shell.dataset.rightDockExpanded = "true";
-      setChatInert(wrapper, shell, true);
       container.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
+      // The covered chat goes inert once covered: restyling the whole thread inside
+      // the slide would cost its first frames.
+      restoreTimerRef.current = window.setTimeout(() => {
+        if (shell.dataset.rightDockExpanded === "true") setChatInert(wrapper, shell, true);
+      }, RIGHT_DOCK_SLIDE_SETTLE_MS);
     } else {
       const elements = expandedElementsRef.current;
       expandedElementsRef.current = null;
       if (elements) {
         const { container, wrapper, shell } = elements;
         container.style.removeProperty("--sidebar-width");
-        setChatInert(wrapper, shell, false);
-        // Above the chat until the panel has slid back to its width.
+        // Above the chat until the panel has slid back to its width; then the chat
+        // takes input again.
         shell.dataset.rightDockExpanded = "restoring";
         window.clearTimeout(restoreTimerRef.current);
         restoreTimerRef.current = window.setTimeout(() => {
-          if (shell.dataset.rightDockExpanded === "restoring") delete shell.dataset.rightDockExpanded;
-        }, 400);
+          if (shell.dataset.rightDockExpanded !== "restoring") return;
+          delete shell.dataset.rightDockExpanded;
+          setChatInert(wrapper, shell, false);
+        }, RIGHT_DOCK_SLIDE_SETTLE_MS);
       }
     }
   };
