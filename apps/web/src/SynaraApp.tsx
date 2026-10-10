@@ -1,5 +1,5 @@
 import { RouterProvider } from "@tanstack/react-router";
-import { useMemo, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties, type RefObject } from "react";
 
 import { AppHistoryProvider, appHistory } from "./appNavigation";
 import type { SynaraHistory } from "./embeddedHistory";
@@ -8,6 +8,7 @@ import { SynaraHostSidebarProvider, type SynaraHostSidebar } from "./hostSidebar
 import { getAppTypographyScale } from "./lib/appTypography";
 import { createHostThemeStyle } from "./lib/hostThemeStyle";
 import { getRouter } from "./router";
+import { useStore } from "./store";
 import { configureSynaraRuntime, type SynaraRuntimeConfig } from "./synaraRuntimeConfig";
 
 export interface SynaraHostTheme {
@@ -84,6 +85,19 @@ function embeddedTypographyStyle(value: number | undefined): CSSProperties | und
   } as CSSProperties;
 }
 
+/**
+ * Tells the host page when the workspace has its threads: until then the app shows a
+ * bare splash (or nothing on a thread link), which the host cannot tell from a hang.
+ * The root carries `data-synara-readiness` always and `data-synara-hydrated` once ready.
+ */
+function HostReadinessSignal({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) {
+  const hydrated = useStore((store) => store.threadsHydrated);
+  useEffect(() => {
+    rootRef.current?.toggleAttribute("data-synara-hydrated", hydrated);
+  }, [hydrated, rootRef]);
+  return null;
+}
+
 export function SynaraApp({
   history = appHistory,
   httpBaseUrl,
@@ -100,6 +114,7 @@ export function SynaraApp({
   });
   const router = useMemo(() => getRouter(history), [history]);
   const portalContainerRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const style = {
     position: "relative",
     width: "100%",
@@ -112,7 +127,14 @@ export function SynaraApp({
 
   return (
     <SynaraHostPortalProvider value={portalContainerRef}>
-      <div data-synara-app-root data-synara-host-themed={hostTheme ? "" : undefined} style={style}>
+      <div
+        ref={rootRef}
+        data-synara-app-root
+        data-synara-readiness=""
+        data-synara-host-themed={hostTheme ? "" : undefined}
+        style={style}
+      >
+        <HostReadinessSignal rootRef={rootRef} />
         <SynaraHostSidebarProvider value={hostSidebar ?? null}>
           <AppHistoryProvider history={history}>
             <RouterProvider router={router} />
