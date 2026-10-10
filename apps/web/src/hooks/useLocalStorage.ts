@@ -19,15 +19,48 @@ const isomorphicLocalStorage: Storage =
         };
       })();
 
-const decode = <T, E>(schema: Schema.Codec<T, E>, value: string) =>
-  Schema.decodeSync(Schema.fromJsonString(schema))(value);
+// One JSON codec per schema. Schema.fromJsonString makes a new schema, so a codec
+// built per call compiled that schema's parser on every read: on the embedded app's
+// first render that was ~290 ms of main thread, mostly app settings read again and
+// again.
+interface JsonCodec {
+  readonly decode: (value: string) => unknown;
+  readonly encode: (value: unknown) => string;
+}
+const jsonCodecs = new WeakMap<object, JsonCodec>();
 
-const encode = <T, E>(schema: Schema.Codec<T, E>, value: T) =>
-  Schema.encodeSync(Schema.fromJsonString(schema))(value);
+function jsonCodec<T, E>(schema: Schema.Codec<T, E>): JsonCodec {
+  let codec = jsonCodecs.get(schema);
+  if (!codec) {
+    const json = Schema.fromJsonString(schema);
+    const decodeJson = Schema.decodeSync(json);
+    const encodeJson = Schema.encodeSync(json);
+    codec = {
+      decode: (value) => decodeJson(value),
+      encode: (value) => encodeJson(value as T),
+    };
+    jsonCodecs.set(schema, codec);
+  }
+  return codec;
+}
+
+// The last value decoded for a key, with the string and schema it came from: reading
+// an unchanged entry again returns it instead of parsing it again.
+const decodedByKey = new Map<string, { raw: string; schema: object; value: unknown }>();
+
+const decode = <T, E>(key: string, schema: Schema.Codec<T, E>, raw: string): T => {
+  const cached = decodedByKey.get(key);
+  if (cached && cached.raw === raw && cached.schema === schema) return cached.value as T;
+  const value = jsonCodec(schema).decode(raw) as T;
+  decodedByKey.set(key, { raw, schema, value });
+  return value;
+};
+
+const encode = <T, E>(schema: Schema.Codec<T, E>, value: T) => jsonCodec(schema).encode(value);
 
 export const getLocalStorageItem = <T, E>(key: string, schema: Schema.Codec<T, E>): T | null => {
   const item = isomorphicLocalStorage.getItem(key);
-  return item ? decode(schema, item) : null;
+  return item ? decode(key, schema, item) : null;
 };
 
 export const setLocalStorageItem = <T, E>(key: string, value: T, schema: Schema.Codec<T, E>) => {
