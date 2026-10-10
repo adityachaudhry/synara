@@ -3048,3 +3048,9 @@ diffs-container {
   text-decoration: underline color-mix(in srgb, var(--brand) 58%, transparent) 0.14em;
 }
 ::highlight(synara-team-underline-done) { text-decoration: underline #d6a10088 0.14em; }
+
+/* An expanded right dock (hostSidebar.rightDockExpandable) fills its shell: every
+   sibling of the dock's sidebar wrapper (the chat) steps aside until it is restored. */
+[data-right-dock-expanded="true"] > :not([data-slot="sidebar-wrapper"]) {
+  display: none !important;
+}

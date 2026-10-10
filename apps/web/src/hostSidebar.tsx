@@ -71,6 +71,12 @@ export interface SynaraHostSidebar {
    * narrowing window shrinks the dock (down to its own minimum) instead.
    */
   readonly chatMinWidthPx?: number;
+  /**
+   * The dock header offers "Expand panel" (the dock fills the workspace and the chat
+   * is hidden) and "Restore split" in place of "Collapse panel"; the chat header's
+   * panel toggle still opens and closes the dock.
+   */
+  readonly rightDockExpandable?: boolean;
   readonly filesPane?: ReactNode | ((openFile: (filePath: string, revision?: string) => void) => ReactNode);
   readonly renderFilePane?: (filePath: string, context: SynaraHostFilePaneContext) => ReactNode;
   readonly renderFilePaneTabIcon?: (filePath: string) => ReactNode;

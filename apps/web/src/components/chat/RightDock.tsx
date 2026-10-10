@@ -19,7 +19,7 @@ import {
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { PanelCollapseIcon, PanelExpandIcon, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -230,6 +230,55 @@ export function RightDock(props: RightDockProps) {
   const hostOpenWidthRef = useRef(hostSidebar?.rightDockOpenWidth);
   hostOpenWidthRef.current = hostSidebar?.rightDockOpenWidth;
   const hasHostOpenWidth = hostSidebar?.rightDockOpenWidth !== undefined;
+  // Expanded: the dock fills its shell and the chat steps aside (index.css); restoring
+  // puts back the width the dock had, including one the user dragged to.
+  const expandable = hostSidebar?.rightDockExpandable === true;
+  const [expanded, setExpanded] = useState(false);
+  const restoreWidthRef = useRef<string | null>(null);
+  // The elements an expansion marked, so restoring works even after unmount detached refs.
+  const expandedElementsRef = useRef<{ wrapper: HTMLElement; shell: HTMLElement } | null>(null);
+  const dockElements = () => {
+    const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const shell = wrapper?.parentElement;
+    return wrapper && shell ? { wrapper, shell } : null;
+  };
+  const setDockExpanded = (next: boolean) => {
+    if (next) {
+      const elements = dockElements();
+      if (!elements) return;
+      const { wrapper, shell } = elements;
+      expandedElementsRef.current = elements;
+      restoreWidthRef.current = wrapper.style.getPropertyValue("--sidebar-width") || null;
+      shell.dataset.rightDockExpanded = "true";
+      wrapper.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
+    } else {
+      const elements = expandedElementsRef.current;
+      expandedElementsRef.current = null;
+      if (elements) {
+        delete elements.shell.dataset.rightDockExpanded;
+        if (restoreWidthRef.current) elements.wrapper.style.setProperty("--sidebar-width", restoreWidthRef.current);
+      }
+    }
+    setExpanded(next);
+  };
+  const setDockExpandedRef = useRef(setDockExpanded);
+  setDockExpandedRef.current = setDockExpanded;
+  // A closed dock, another thread or an unmount restores the split.
+  useEffect(() => {
+    if (!props.state.open) setDockExpandedRef.current(false);
+  }, [props.state.open]);
+  useEffect(() => () => setDockExpandedRef.current(false), [props.motionKey]);
+  useEffect(() => {
+    if (!expanded) return;
+    const elements = dockElements();
+    if (!elements) return;
+    const { wrapper, shell } = elements;
+    const observer = new ResizeObserver(() => {
+      wrapper.style.setProperty("--sidebar-width", `${Math.floor(shell.getBoundingClientRect().width)}px`);
+    });
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [expanded]);
   const chatMinWidth = hostSidebar?.chatMinWidthPx;
   const shouldAcceptWidth = (context: { nextWidth: number; wrapper: HTMLElement }) =>
     (chatMinWidth === undefined ||
@@ -264,6 +313,7 @@ export function RightDock(props: RightDockProps) {
       return;
     }
     const observer = new ResizeObserver(() => {
+      if (shell.dataset.rightDockExpanded === "true") return;
       // Follow the window until someone drags the dock to a width of their own.
       if (follow && wrapper.style.getPropertyValue("--sidebar-width") === applied) {
         apply();
@@ -334,10 +384,14 @@ export function RightDock(props: RightDockProps) {
             ? { height: `calc(100svh - ${viewportHeightOffsetPx}px)` }
             : undefined
         }
-        resizable={{
-          minWidth: props.minWidth,
-          shouldAcceptWidth,
-        }}
+        resizable={
+          expanded
+            ? false
+            : {
+                minWidth: props.minWidth,
+                shouldAcceptWidth,
+              }
+        }
       >
         <div
           ref={contentRef}
@@ -398,21 +452,39 @@ export function RightDock(props: RightDockProps) {
                 <PlusIcon className="size-3.5" />
               </IconButton>
             ) : null}
-            <IconButton
-              variant="chrome"
-              size="icon-xs"
-              label="Collapse panel"
-              tooltip="Collapse panel"
-              tooltipSide="bottom"
-              className={cn(
-                DOCK_HEADER_ICON_BUTTON_CLASS,
-                hostSidebar?.simplifiedComposer === true &&
-                  "text-[var(--brand)] [&_svg]:!opacity-100",
-              )}
-              onClick={props.onCollapse}
-            >
-              <PanelRightCloseIcon />
-            </IconButton>
+            {expandable ? (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label={expanded ? "Restore split" : "Expand panel"}
+                tooltip={expanded ? "Restore split" : "Expand panel"}
+                tooltipSide="bottom"
+                className={cn(
+                  DOCK_HEADER_ICON_BUTTON_CLASS,
+                  hostSidebar?.simplifiedComposer === true &&
+                    "text-[var(--brand)] [&_svg]:!opacity-100",
+                )}
+                onClick={() => setDockExpanded(!expanded)}
+              >
+                {expanded ? <PanelCollapseIcon /> : <PanelExpandIcon />}
+              </IconButton>
+            ) : (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label="Collapse panel"
+                tooltip="Collapse panel"
+                tooltipSide="bottom"
+                className={cn(
+                  DOCK_HEADER_ICON_BUTTON_CLASS,
+                  hostSidebar?.simplifiedComposer === true &&
+                    "text-[var(--brand)] [&_svg]:!opacity-100",
+                )}
+                onClick={props.onCollapse}
+              >
+                <PanelRightCloseIcon />
+              </IconButton>
+            )}
           </div>
           <div className="relative min-h-0 flex-1">
             {activePane === null && props.launcherItems ? (
