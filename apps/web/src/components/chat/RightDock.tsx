@@ -290,6 +290,11 @@ export function RightDock(props: RightDockProps) {
     return () => observer.disconnect();
   }, [expanded]);
   const chatMinWidth = hostSidebar?.chatMinWidthPx;
+  // A phone-shaped pane has a natural width: half the shell leaves the device
+  // stranded in empty space, so kinds that render a fixed-aspect object open
+  // at their own comfortable size instead of the even split. Only a change of
+  // that width moves the split: switching between other tabs leaves it alone.
+  const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
   const shouldAcceptWidth = (context: { nextWidth: number; wrapper: HTMLElement }) =>
     (chatMinWidth === undefined ||
       (context.wrapper.parentElement?.clientWidth ?? 0) - context.nextWidth >= chatMinWidth) &&
@@ -303,10 +308,10 @@ export function RightDock(props: RightDockProps) {
     if (!wrapper || !shell) {
       return;
     }
-    // A phone-shaped pane has a natural width: half the shell leaves the device
-    // stranded in empty space, so kinds that render a fixed-aspect object open
-    // at their own comfortable size instead of the even split.
-    const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
+    // An expanded dock fills the shell; its width is the expansion's until it restores.
+    if (shell.dataset.rightDockExpanded === "true") {
+      return;
+    }
     let applied: string | null = null;
     const apply = () => {
       const shellWidth = shell.getBoundingClientRect().width;
@@ -356,7 +361,7 @@ export function RightDock(props: RightDockProps) {
       observer.disconnect();
       remember();
     };
-  }, [props.state.open, minWidth, activePaneKind, hasHostOpenWidth, chatMinWidth, widthMemoryKey]);
+  }, [props.state.open, minWidth, preferredWidth, hasHostOpenWidth, chatMinWidth, widthMemoryKey]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
