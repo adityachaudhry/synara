@@ -14,9 +14,21 @@ const useSyncExternalStoreWithSelectorAdapter = path.resolve(
   "src/lib/useSyncExternalStoreWithSelectorAdapter.ts",
 );
 
+// The views a host's workspace opens on (the chat layout, the project feed, a thread) ship
+// in the main bundle rather than as route chunks, so a first visit fetches the code it
+// paints with in one wave instead of a second one after the bundle has run. Other routes
+// stay split.
+const FIRST_PAINT_ROUTES = new Set(["/_chat", "/_chat/", "/_chat/$threadId"]);
+
 export default defineConfig(({ mode }) => ({
   plugins: [
-    tanstackRouter({ target: "react", autoCodeSplitting: true }),
+    tanstackRouter({
+      target: "react",
+      autoCodeSplitting: true,
+      codeSplittingOptions: {
+        splitBehavior: ({ routeId }) => (FIRST_PAINT_ROUTES.has(routeId) ? [] : undefined),
+      },
+    }),
     react(),
     ...(mode === "development"
       ? []

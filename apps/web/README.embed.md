@@ -2,6 +2,12 @@
 
 Reusable React entrypoint for embedding Synara. Import `@synara/react/style.css` once in the host.
 
+The app renders only in a browser. The package's `browser` export is the app; every
+other environment (a host's server rendering, a plain Node import) gets `server.js`,
+a stub with the same exports that renders nothing, so a host's server never evaluates
+the app. The views a host opens on (the chat layout, the project feed, a thread) ship
+in the main bundle; other routes load when opened.
+
 Glasswing releases are built by `publish-glasswing-embed.yml`, independently of
 the server deployment. `glasswingos/dev` publishes the dev channel;
 `glasswingos/main` publishes the production channel. Each successful package is

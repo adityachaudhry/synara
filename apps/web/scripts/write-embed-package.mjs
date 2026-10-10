@@ -19,6 +19,37 @@ const STANDALONE_PUBLIC_ASSETS = [
   "synara.png",
 ];
 
+// The app renders only in a browser: it touches `document` and `window` as its modules
+// load. Every other environment (a host's server rendering, a plain Node import) resolves
+// this stub instead, so a host can render a page that names the app's code without ever
+// evaluating it on the server.
+const SERVER_ENTRY = "server.js";
+const SERVER_EXPORTS = ["SynaraApp", "createEmbeddedAppHistory", "preloadSynaraApp"];
+const SERVER_STUB = `// @synara/react renders only in a browser; this is what other environments load.
+export function SynaraApp() {
+  return null;
+}
+export function createEmbeddedAppHistory() {
+  throw new Error("@synara/react: createEmbeddedAppHistory runs only in a browser.");
+}
+export function preloadSynaraApp() {
+  return Promise.resolve();
+}
+`;
+
+/** The names the bundle's entry exports (its final `export { a as Name, ... }`). */
+async function entryExportNames(entryPath) {
+  const source = await fs.readFile(entryPath, "utf8");
+  const statements = [...source.matchAll(/export\s*\{([^}]*)\}/g)];
+  const last = statements.at(-1);
+  if (!last) throw new Error("The embed entry has no export statement.");
+  return last[1]
+    .split(",")
+    .map((part) => part.trim().split(/\s+as\s+/).at(-1))
+    .filter(Boolean)
+    .sort();
+}
+
 function requireValue(name, value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${name} is required to write Synara package provenance.`);
@@ -90,6 +121,15 @@ export async function writeEmbedPackage(input) {
   }
   await removePrivateDeclarations(input.outputDir);
 
+  // The stub must offer exactly what the app does, or a host's server build fails on it.
+  const entryExports = await entryExportNames(path.join(input.outputDir, "index.js"));
+  if (JSON.stringify(entryExports) !== JSON.stringify([...SERVER_EXPORTS].sort())) {
+    throw new Error(
+      `The server stub exports ${SERVER_EXPORTS.join(", ")} but the app exports ${entryExports.join(", ")}.`,
+    );
+  }
+  await fs.writeFile(path.join(input.outputDir, SERVER_ENTRY), SERVER_STUB);
+
   const stylesheetPath = path.join(input.outputDir, "style.css");
   const stylesheet = await fs.readFile(stylesheetPath, "utf8");
   await fs.writeFile(stylesheetPath, await scopeEmbeddedCss(stylesheet));
@@ -102,7 +142,7 @@ export async function writeEmbedPackage(input) {
     sideEffects: ["./style.css"],
     ...(input.dependencies ? { dependencies: input.dependencies } : {}),
     exports: {
-      ".": { types: "./index.d.ts", import: "./index.js" },
+      ".": { types: "./index.d.ts", browser: "./index.js", default: `./${SERVER_ENTRY}` },
       "./style.css": "./style.css",
       "./provenance": "./synara-provenance.json",
     },
