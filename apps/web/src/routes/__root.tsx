@@ -125,7 +125,8 @@ import {
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
+import { resolveVisibleDockSidechatThreadIds, sharedRightDockKey } from "../rightDockStore.logic";
+import { useSynaraHostSidebar } from "../hostSidebar";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
@@ -1055,17 +1056,30 @@ function EventRouter() {
   // so they need a detail lease exactly like split-view panes: without one the
   // sidechat's snapshot never syncs and its transcript stays on the loading state.
   const dockStateByThreadId = useRightDockStore((store) => store.dockStateByThreadId);
-  const visibleThreadIds = useMemo(
-    () => [
+  // A host's shared dock (hostSidebar.sharedRightDock) is keyed by each host thread's project.
+  const sharedRightDock = useSynaraHostSidebar()?.sharedRightDock === true;
+  const hostThreadProjectIds = useStore((store) =>
+    sharedRightDock
+      ? hostThreadIds
+          .map((threadId) => store.sidebarThreadSummaryById[threadId]?.projectId ?? "")
+          .join("\n")
+      : "",
+  );
+  const visibleThreadIds = useMemo(() => {
+    const projectIds = hostThreadProjectIds.split("\n");
+    return [
       ...hostThreadIds,
       ...resolveVisibleDockSidechatThreadIds({
         dockRendered: routeSearch.view !== "editor",
         dockStateByThreadId,
         hostThreadIds,
+        dockKeyFor: (threadId) => {
+          const projectId = projectIds[hostThreadIds.indexOf(threadId)];
+          return projectId ? sharedRightDockKey(projectId) : threadId;
+        },
       }),
-    ],
-    [dockStateByThreadId, hostThreadIds, routeSearch.view],
-  );
+    ];
+  }, [dockStateByThreadId, hostThreadIds, hostThreadProjectIds, routeSearch.view]);
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);
   // Stabilize the lease array by content: `serverThreads` re-emits on every
