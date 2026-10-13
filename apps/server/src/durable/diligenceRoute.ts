@@ -35,9 +35,12 @@ export const authorized = (header: string | undefined, host: string | undefined)
 
 export const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
+/** What the run thread needs: everything in a run request but the plan. */
+type RunThreadRequest = Pick<DiligenceRequest, "runId" | "mode" | "company" | "repository" | "requestedBy" | "sourceThreadId">;
+
 const RUN_TITLES: Record<string, string> = { full: "Full diligence", quick: "Quick read", memo: "Investment memo" };
 /** The run thread's opening request, as the analyst would put it; the feed shows it. */
-const runRequestText = (plan: DiligenceRequest) => {
+const runRequestText = (plan: RunThreadRequest) => {
   const company = plan.company.name;
   const by = requesterName(plan.requestedBy?.label);
   const forWhom = by ? ` for ${by}` : "";
@@ -56,7 +59,7 @@ const requesterName = (label: string | undefined) => {
 };
 
 /** The run's top-level thread in the company's project; the run works without it if this fails. */
-const ensureRunThread = (plan: DiligenceRequest) => Effect.gen(function* () {
+const ensureRunThread = (plan: RunThreadRequest) => Effect.gen(function* () {
   const threadId = ThreadId.makeUnsafe(diligenceThreadId(plan.runId));
   const snapshots = yield* ProjectionSnapshotQuery;
   if (Option.isSome(yield* snapshots.getThreadShellById(threadId))) return threadId;
@@ -131,6 +134,53 @@ const acceptRoute = HttpRouter.add("POST", "/internal/diligence/runs", Effect.ge
   return result;
 }));
 
+/**
+ * Opens the run thread before the plan is ready, so the feed shows a run the moment it is
+ * asked for (Glasswing builds the plan after this; the accept call reuses the thread). With
+ * `failure`, the run could not start: the thread says so, unless the run was accepted.
+ */
+const threadRoute = HttpRouter.add("POST", "/internal/diligence/runs/:runId/thread", Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
+  const runId = runIdFrom(request.url, "/thread");
+  const body = yield* readMcpJsonBody(request, 64 * 1024);
+  if (body.kind !== "ok") return json({ error: "invalid JSON" }, 400);
+  const thread = body.body as RunThreadRequest & { readonly failure?: string };
+  if (!runId || thread?.runId !== runId || !thread.company?.id || !thread.company.name || !thread.repository?.path) {
+    return json({ error: "runId, company and repository are required" }, 400);
+  }
+  if (typeof thread.failure === "string") {
+    const runner = diligenceRunner();
+    const threadId = ThreadId.makeUnsafe(diligenceThreadId(runId));
+    const snapshots = yield* ProjectionSnapshotQuery;
+    const accepted = runner ? yield* Effect.promise(() => runner.status(runId)) : undefined;
+    if (accepted || Option.isNone(yield* snapshots.getThreadShellById(threadId))) return json({ runId, noted: false });
+    const engine = yield* OrchestrationEngineService;
+    const now = new Date().toISOString();
+    yield* engine.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe(`diligence-not-started-${runId}`),
+      threadId,
+      messages: [{
+        messageId: `assistant:external-message-${runId}-close`,
+        role: "assistant",
+        text: `${RUN_TITLES[thread.mode] ?? "Diligence"} could not start: ${thread.failure.slice(0, 500)}`,
+        createdAt: now,
+        updatedAt: now,
+      }],
+      createdAt: now,
+    } as never);
+    return json({ runId, threadId, noted: true });
+  }
+  const threadId = yield* ensureRunThread(thread).pipe(
+    Effect.catch((cause) => Effect.sync(() => {
+      console.warn(`[diligence] ${JSON.stringify({ event: "thread.create-failed", runId, message: String(cause) })}`);
+      return undefined;
+    })),
+  );
+  return threadId ? json({ runId, threadId }) : json({ error: "the run thread could not be opened" }, 500);
+}));
+
 const cancelRoute = HttpRouter.add("POST", "/internal/diligence/runs/:runId/cancel", Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   if (!authorized(request.headers.authorization, request.headers.host)) return json({ error: "unauthorized" }, 401);
@@ -188,4 +238,4 @@ const closingNotesLayer = Layer.effectDiscard(Effect.gen(function* () {
     console.warn(`[diligence] ${JSON.stringify({ event: "thread.note-repair-failed", message: String(cause) })}`)))));
 }));
 
-export const diligenceRouteLayer = Layer.mergeAll(acceptRoute, cancelRoute, statusRoute, closingNotesLayer);
+export const diligenceRouteLayer = Layer.mergeAll(acceptRoute, threadRoute, cancelRoute, statusRoute, closingNotesLayer);
