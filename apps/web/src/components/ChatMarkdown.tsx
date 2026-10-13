@@ -1145,7 +1145,9 @@ function ChatMarkdown({
     marker.segmentIndex === markerSegmentIndex ||
     (marker.segmentIndex === undefined && includeLegacyMarkers !== false)),
     [allMarkers, markerSegmentIndex, includeLegacyMarkers]);
-  const markerViewer = useSynaraHostSidebar()?.currentMessageAuthor?.subject;
+  const hostSidebar = useSynaraHostSidebar();
+  const markerViewer = hostSidebar?.currentMessageAuthor?.subject;
+  const hostOpenLink = hostSidebar?.openLink;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1245,6 +1247,20 @@ function ChatMarkdown({
               target="_blank"
               rel="noopener noreferrer"
               className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
+              // A host may show its own pages in place (a plain click; modified clicks open a tab).
+              onClick={(event) => {
+                if (
+                  restoredHref &&
+                  hostOpenLink &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  !event.shiftKey &&
+                  event.button === 0 &&
+                  hostOpenLink(restoredHref)
+                ) {
+                  event.preventDefault();
+                }
+              }}
             >
               {isExternalHttp ? (
                 <LinkChipIcon
@@ -1396,6 +1412,7 @@ function ChatMarkdown({
       cwd,
       knownAbsoluteFilePaths,
       diffThemeName,
+      hostOpenLink,
       isStreaming,
       isUserVariant,
       mentionReferences,
