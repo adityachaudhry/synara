@@ -508,11 +508,13 @@ export function findMissingSidechatPaneIds(
 
 // An active sidechat embeds a full chat, so it needs a detail lease just like a
 // split-view pane. Persisted inactive or currently unrendered docks stay out of
-// the scarce live-stream budget.
+// the scarce live-stream budget. A host thread in a shared dock (`dockKeyFor`
+// returns its project's key) sees that dock as its surface shows it.
 export function resolveVisibleDockSidechatThreadIds(input: {
   dockRendered: boolean;
   dockStateByThreadId: Record<string, RightDockThreadState | undefined>;
   hostThreadIds: readonly ThreadId[];
+  dockKeyFor?: ((threadId: ThreadId) => string) | undefined;
 }): ThreadId[] {
   if (!input.dockRendered) {
     return [];
@@ -521,10 +523,13 @@ export function resolveVisibleDockSidechatThreadIds(input: {
   const sidechatThreadIds: ThreadId[] = [];
   const seenThreadIds = new Set<ThreadId>(input.hostThreadIds);
   for (const hostThreadId of input.hostThreadIds) {
-    const dockState = input.dockStateByThreadId[hostThreadId];
-    if (!dockState) {
+    const dockKey = input.dockKeyFor?.(hostThreadId) ?? hostThreadId;
+    const storedState = input.dockStateByThreadId[dockKey];
+    if (!storedState) {
       continue;
     }
+    const dockState =
+      dockKey === hostThreadId ? storedState : resolveSurfaceDockState(storedState, hostThreadId);
     const activePane = resolveActivePane(dockState);
     if (
       activePane?.kind === "sidechat" &&

@@ -11056,21 +11056,24 @@ export default function ChatView({
     [isEditorRail, navigate],
   );
   // Child threads (diligence steps, subagents) open beside their parent in the side panel,
-  // so the run stays in view; any other thread navigates.
+  // so the run stays in view; any other thread navigates. A shared dock (the host's
+  // sharedRightDock) holds the pane under its project key, owned by this thread.
   const activeThreadIdForDock = activeThread?.id ?? null;
+  const sharedDockKey = rightDockKey === threadId ? null : rightDockKey;
   const onOpenThreadFromThread = useCallback(
     (nextThreadId: ThreadId) => {
       const summary = useStore.getState().sidebarThreadSummaryById[nextThreadId];
       if (activeThreadIdForDock && summary?.parentThreadId) {
-        useRightDockStore.getState().openPane(activeThreadIdForDock, {
+        useRightDockStore.getState().openPane(sharedDockKey ?? activeThreadIdForDock, {
           kind: "sidechat",
           threadId: nextThreadId,
+          ...(sharedDockKey ? { ownerThreadId: activeThreadIdForDock } : {}),
         });
         return;
       }
       onNavigateToThread(nextThreadId);
     },
-    [activeThreadIdForDock, onNavigateToThread],
+    [activeThreadIdForDock, onNavigateToThread, sharedDockKey],
   );
   const onOpenAutomation = useCallback(
     (automationId: string) => {
