@@ -190,6 +190,17 @@ const modelRef = (model: string) => {
 
 const log = (event: string, detail: Record<string, unknown>) => console.info(`[diligence] ${JSON.stringify({ event, ...detail })}`);
 
+/** A step turn that settled without an answer; `detail` carries the provider's error text. */
+class StepUnanswered extends Error {
+  constructor(message: string, readonly detail: string) {
+    super(message);
+  }
+}
+
+// Pi reports a refusal with Anthropic's explanation ("...reduce refusals...") and rejects a fallback
+// that arrives after output started ("unsupported mid-output model fallback").
+const REFUSAL_DETAIL = /refus|mid-output model fallback/i;
+
 /** Sorted keys, no whitespace: Python `json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. */
 const canonicalJson = (value: unknown): string => {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -695,7 +706,17 @@ export class DiligenceRunner {
         return undefined;
       });
       const submit = (content: string, requestId: string) => this.#submit(conversation, content, requestId, step.id, runId, key);
-      await submit(step.prompt, `diligence:${runId}:${step.id}`);
+      try {
+        await submit(step.prompt, `diligence:${runId}:${step.id}`);
+      } catch (cause) {
+        // A safety-classifier refusal, or Anthropic's switch to the fallback model after output had
+        // started (which Pi cannot splice), ends the turn. Anthropic then serves this conversation
+        // from the fallback model for about an hour, so one continuation usually completes the step.
+        if (!(cause instanceof StepUnanswered) || !REFUSAL_DETAIL.test(cause.detail)) throw cause;
+        log("step.refusal-continue", { runId, step: step.id, detail: cause.detail.slice(0, 300) });
+        await submit("Your previous response was interrupted before it finished. Continue the task from where you left off.",
+          `diligence:${runId}:${step.id}:continue`);
+      }
       let missing = await this.#missingOutputs(runId, request, step.outputs);
       if (missing.length) {
         // A replaced sandbox can lose files written since the last capture; the conversation still has the work.
@@ -789,7 +810,10 @@ export class DiligenceRunner {
         ? await this.#engine.runChildTurn(key, content, requestId)
         : await conversation.submit({ type: "input", content, requestId }, ctx);
       const settled = await submission.wait(ctx);
-      if (settled.status !== "done") throw new Error(`Step ${stepId} ended without an answer (${settled.reason}).`);
+      if (settled.status !== "done") {
+        const detail = typeof settled.detail === "string" ? settled.detail : settled.detail === undefined ? "" : JSON.stringify(settled.detail);
+        throw new StepUnanswered(`Step ${stepId} ended without an answer (${settled.reason}).`, detail);
+      }
     } finally {
       await stream.stop();
     }
