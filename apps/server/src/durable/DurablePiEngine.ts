@@ -15,7 +15,7 @@ import path from "node:path";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai/models";
+import { createModels, type Provider } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import {
@@ -239,6 +239,42 @@ function completeImage(bytes: Buffer, mimeType: string): boolean {
   }
 }
 
+/**
+ * Anthropic models that may fall back to another model when a safety classifier declines
+ * (server-side `fallbacks`). Off unless SYNARA_ANTHROPIC_FALLBACKS lists the targets, e.g.
+ * "claude-opus-5,claude-opus-4-8"; Anthropic rejects the field for targets it does not permit,
+ * so a wrong list fails every request on that model. Applies to claude-opus-5-5 only.
+ */
+const FALLBACK_SOURCE_MODELS = new Set(["claude-opus-5-5"]);
+
+function anthropicWithFallbacks(base: Provider<"anthropic-messages">): Provider<"anthropic-messages"> {
+  const targets = (process.env.SYNARA_ANTHROPIC_FALLBACKS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  if (!targets.length) return base;
+  const catalog = base.getModels();
+  const allowed = targets.flatMap((id) => {
+    const target = catalog.find((model) => model.id === id);
+    return target ? [{ provider: target.provider, model: target.id, cost: target.cost }] : [];
+  });
+  if (!allowed.length) return base;
+  const withFallbacks = <T extends { id: string; compat?: unknown }>(model: T): T =>
+    FALLBACK_SOURCE_MODELS.has(model.id)
+      ? { ...model, compat: { ...(model.compat as object | undefined), allowedFallbackModels: allowed } }
+      : model;
+  console.info(JSON.stringify({ event: "durable.anthropic-fallbacks", models: [...FALLBACK_SOURCE_MODELS], targets: allowed.map((target) => target.model) }));
+  return new Proxy(base, {
+    get(target, property) {
+      if (property === "getModels") return () => target.getModels().map(withFallbacks);
+      if (property === "getAllModels" && target.getAllModels) return () => target.getAllModels!().map((model) => withFallbacks(model as never));
+      if (property === "filterModels" && target.filterModels) {
+        return (models: Parameters<NonNullable<typeof target.filterModels>>[0], credential: Parameters<NonNullable<typeof target.filterModels>>[1]) =>
+          target.filterModels!(models, credential).map(withFallbacks);
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 /** Pi Durable's read tool does not return images yet; the agent reads screenshots and scans this way. */
 function readWithImages(read: ReturnType<typeof createReadTool>): ToolRegistration {
   return {
@@ -288,7 +324,7 @@ export class DurablePiEngine {
 
   async #init() {
     mkdirSync(path.dirname(this.#options.storagePath), { recursive: true });
-    if (process.env.ANTHROPIC_API_KEY) this.#models.setProvider(anthropicProvider());
+    if (process.env.ANTHROPIC_API_KEY) this.#models.setProvider(anthropicWithFallbacks(anthropicProvider()));
     if (process.env.OPENAI_API_KEY) this.#models.setProvider(openaiProvider());
 
     const today = () => new Date().toISOString().slice(0, 10);
