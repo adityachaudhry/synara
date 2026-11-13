@@ -184,6 +184,26 @@ const DEFAULT_MODEL = { provider: "anthropic", modelId: "claude-opus-5-5" } as c
 const IMAGE_TYPES: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+/** Whether an image file is whole: its format's start and end markers are both present. */
+function completeImage(bytes: Buffer, mimeType: string): boolean {
+  const ends = (tail: number[]) => bytes.length > tail.length && tail.every((byte, index) => bytes[bytes.length - tail.length + index] === byte);
+  switch (mimeType) {
+    case "image/png":
+      // IEND chunk type plus its CRC.
+      return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+        && ends([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+    case "image/jpeg":
+      return bytes[0] === 0xff && bytes[1] === 0xd8 && ends([0xff, 0xd9]);
+    case "image/gif":
+      return bytes.subarray(0, 4).toString("latin1") === "GIF8" && ends([0x3b]);
+    case "image/webp":
+      return bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP"
+        && bytes.length >= 8 && bytes.readUInt32LE(4) + 8 <= bytes.length;
+    default:
+      return bytes.length > 0;
+  }
+}
+
 /** Pi Durable's read tool does not return images yet; the agent reads screenshots and scans this way. */
 function readWithImages(read: ReturnType<typeof createReadTool>): ToolRegistration {
   return {
@@ -197,6 +217,11 @@ function readWithImages(read: ReturnType<typeof createReadTool>): ToolRegistrati
       if (!bytes.ok) throw bytes.error;
       if (bytes.value.byteLength > MAX_IMAGE_BYTES) {
         return { content: [{ type: "text", text: `${String((args as { path: string }).path)} is an image larger than 5 MB; convert or crop it with bash first.` }] };
+      }
+      // Anthropic rejects the whole request for an empty or truncated image ("Could not process image"),
+      // which ends the turn; a file still being written by pdftoppm and the like is the usual cause.
+      if (!completeImage(Buffer.from(bytes.value), mimeType)) {
+        return { content: [{ type: "text", text: `${String((args as { path: string }).path)} is empty or incomplete (it may still be being written). Make sure the command that creates it has finished, then read it again.` }] };
       }
       return { content: [{ type: "image", data: Buffer.from(bytes.value).toString("base64"), mimeType }] };
     },
