@@ -3,9 +3,9 @@
  * (`POST /internal/controller-backups/grants`). Each object lands under
  * `controller-backups/<env>/<kind>/`, where `<env>` is the controller's environment:
  *
- * - `durable-harness`: the Pi Durable Harness (VACUUM INTO on a worker thread), 2 min after start,
- *   every 10 min when it changed (hourly when it did not), and at shutdown (scheduled by the
- *   engine);
+ * - `durable-harness`: the Pi Durable Harness (VACUUM INTO in a low-priority child process, onto
+ *   the container's own disk when it has room), 2 min after start, every 10 min when it changed
+ *   (hourly when it did not), and at shutdown (scheduled by the engine);
  * - `state`: Synara's `state.sqlite` (SQLite online backup through its own connection, into the
  *   container's own disk when it has room), hourly;
  * - `attachments`: the chat attachments directory (tar.gz), hourly when it changed;
@@ -26,7 +26,6 @@ import { pipeline } from "node:stream/promises";
 import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Worker } from "node:worker_threads";
 import { createGzip, gunzipSync } from "node:zlib";
 
 import { controllerEnvironmentName } from "../controllerEnvironment.ts";
@@ -42,6 +41,7 @@ type Latest = { key: string; size_bytes: number; last_modified: string; download
 
 const PREFIX = "controller-backups";
 const UPLOAD_TIMEOUT_MS = 15 * 60_000;
+const execFileAsync = promisify(execFile);
 
 /** Error text including undici's network cause, which `fetch failed` hides. */
 export const describe = (cause: unknown): string => {
@@ -121,29 +121,53 @@ async function uploadBackup(kind: ControllerBackupKind, file: string, extension:
 }
 
 // A consistent copy of a SQLite database (VACUUM INTO, a read transaction on its own
-// connection), made on a worker thread: on the main thread the Harness copy froze the
-// controller for ~3.5 s every ten minutes, stalling every request in flight.
-const VACUUM_INTO_WORKER = `
-const { workerData, parentPort } = require("node:worker_threads");
+// connection), made in a child process at the lowest CPU and I/O priority. On the main thread
+// the Harness copy froze the controller for ~3.5 s every ten minutes. On a worker thread it
+// still did, for 35-50 s once the Harness reached 3.4 GB (production, 2026-11-20): Node's
+// `process.report.getReport()`, which the Claude Agent SDK calls synchronously to detect libc,
+// waits for every worker thread to answer, and a worker inside the native copy cannot answer
+// until the copy ends. A child process is not part of the report.
+const VACUUM_INTO_SCRIPT = `
 const { DatabaseSync } = require("node:sqlite");
-const database = new DatabaseSync(workerData.source);
+const [source, target] = process.argv.slice(-2);
+const database = new DatabaseSync(source);
 try {
-  database.exec("VACUUM INTO '" + workerData.target.replaceAll("'", "''") + "'");
+  database.exec("VACUUM INTO '" + target.replaceAll("'", "''") + "'");
 } finally {
   database.close();
 }
-parentPort.postMessage("done");
 `;
 
-function vacuumInto(source: string, target: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(VACUUM_INTO_WORKER, { eval: true, workerData: { source, target } });
-    worker.once("message", () => resolve());
-    worker.once("error", reject);
-    worker.once("exit", (code) => {
-      if (code !== 0) reject(new Error(`The snapshot worker exited with code ${code}.`));
-    });
-  });
+const IONICE = "/usr/bin/ionice";
+const NICE = "/usr/bin/nice";
+
+async function vacuumInto(source: string, target: string): Promise<void> {
+  const node = [process.execPath, "--no-warnings", "-e", VACUUM_INTO_SCRIPT, source, target];
+  const command = [
+    ...(existsSync(IONICE) ? [IONICE, "-c2", "-n7"] : []),
+    ...(existsSync(NICE) ? [NICE, "-n", "10"] : []),
+    ...node,
+  ];
+  await execFileAsync(command[0]!, command.slice(1), { timeout: UPLOAD_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+}
+
+// Snapshot scratch for the Harness. Writing the multi-GB copy and its gzip onto the volume
+// also stalled the controller's own `state.sqlite` commits behind the volume's flushes, so the
+// container's disk takes them when it has room; the volume otherwise.
+const LOCAL_HARNESS_SNAPSHOT_DIR = path.join(os.tmpdir(), "synara-harness-backup");
+
+async function harnessSnapshotPath(storagePath: string): Promise<string> {
+  const name = `${path.basename(storagePath)}.snapshot-${process.pid}-${Date.now()}`;
+  const { size } = await stat(storagePath);
+  // The copy plus its compressed copy, with headroom.
+  const needed = size * 2 + 256 * 1024 * 1024;
+  try {
+    await mkdir(LOCAL_HARNESS_SNAPSHOT_DIR, { recursive: true, mode: 0o700 });
+    if (await enoughSpace(LOCAL_HARNESS_SNAPSHOT_DIR, needed)) return path.join(LOCAL_HARNESS_SNAPSHOT_DIR, name);
+  } catch {
+    // No usable local disk: the volume below.
+  }
+  return path.join(path.dirname(storagePath), name);
 }
 
 // The Harness files as of the last successful backup (size and modification time of the
@@ -203,9 +227,14 @@ async function backupHarnessOnce(storagePath: string, options: { readonly force?
   ) {
     return undefined;
   }
-  const snapshot = `${storagePath}.snapshot-${process.pid}-${Date.now()}`;
+  const snapshot = await harnessSnapshotPath(storagePath);
   try {
+    const copyStarted = Date.now();
     await vacuumInto(storagePath, snapshot);
+    log("durable.backup.snapshot", {
+      kind: DURABLE_BACKUP_NAME, durationMs: Date.now() - copyStarted,
+      disk: snapshot.startsWith(LOCAL_HARNESS_SNAPSHOT_DIR) ? "local" : "volume",
+    });
     await gzipFile(snapshot, `${snapshot}.gz`);
     await rm(snapshot, { force: true });
     const key = await uploadBackup(DURABLE_BACKUP_NAME, `${snapshot}.gz`, "sqlite.gz", started);
@@ -286,7 +315,6 @@ export interface ControllerBackupPaths {
 
 const STATE_FIRST_DELAY_MS = 5 * 60_000;
 const STATE_INTERVAL_MS = 60 * 60_000;
-const execFileAsync = promisify(execFile);
 
 /** Paths, sizes and modification times: unchanged means the last archive is still current. */
 async function directoryFingerprint(dir: string): Promise<string | undefined> {
