@@ -992,7 +992,8 @@ export class DurablePiEngine {
       this.#conversationTargets.delete(id as ConversationId);
     }
     if (!parentThreadId) return;
-    for (const state of [...this.#threads.values()]) {
+    // Deleting the current entry while iterating a Map is safe.
+    for (const state of this.#threads.values()) {
       if (state.route?.parentThreadId !== parentThreadId || state.activeTurnId) continue;
       void this.#unwatch(state);
       this.#threads.delete(state.threadId);

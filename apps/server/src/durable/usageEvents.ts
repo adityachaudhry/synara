@@ -28,11 +28,15 @@ export function sendUsageEvent(event: UsageEvent) {
     return;
   }
   if (!api) return;
-  const post = () => api(`/internal/usage-events`, { events: [event] }, { timeoutMs: 10_000 }).then(() => undefined, (cause: unknown) => {
-    // A 2xx without a JSON body is still delivered.
-    if (cause instanceof SyntaxError) return undefined;
-    throw cause;
-  });
+  const post = () =>
+    api(`/internal/usage-events`, { events: [event] }, { timeoutMs: 10_000 }).then(
+      () => undefined,
+      (cause: unknown) => {
+        // A 2xx without a JSON body is still delivered.
+        if (cause instanceof SyntaxError) return undefined;
+        throw cause;
+      },
+    );
   void post().catch(async (cause: unknown) => {
     if (cause instanceof ArtifactApiError && cause.status === 404) {
       if (!endpointMissingLogged) {
@@ -41,12 +45,21 @@ export function sendUsageEvent(event: UsageEvent) {
       }
       return;
     }
-    if (cause instanceof ArtifactApiError && cause.status >= 400 && cause.status < 500 && cause.status !== 429) {
+    if (
+      cause instanceof ArtifactApiError &&
+      cause.status >= 400 &&
+      cause.status < 500 &&
+      cause.status !== 429
+    ) {
       logEvent("warn", "usage.event-rejected", { name: event.name, status: cause.status });
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 3_000).unref());
     await post().catch((again: unknown) =>
-      logEvent("warn", "usage.event-failed", { name: event.name, message: String(again).slice(0, 200) }));
+      logEvent("warn", "usage.event-failed", {
+        name: event.name,
+        message: String(again).slice(0, 200),
+      }),
+    );
   });
 }
