@@ -9,8 +9,16 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { renderMetrics } from "../controllerMetrics.ts";
 import { privateHost } from "./diligenceRoute.ts";
 
-export const metricsRouteLayer = HttpRouter.add("GET", "/metrics", Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  if (!privateHost(request.headers.host)) return HttpServerResponse.text("not found", { status: 404 });
-  return HttpServerResponse.text(renderMetrics(), { status: 200, contentType: "text/plain; version=0.0.4; charset=utf-8" });
-}));
+export const metricsRouteLayer = HttpRouter.add(
+  "GET",
+  "/metrics",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!privateHost(request.headers.host))
+      return HttpServerResponse.text("not found", { status: 404 });
+    return HttpServerResponse.text(renderMetrics(), {
+      status: 200,
+      contentType: "text/plain; version=0.0.4; charset=utf-8",
+    });
+  }),
+);
