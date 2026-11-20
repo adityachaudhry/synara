@@ -24,6 +24,7 @@ import * as Client from "effect/unstable/sql/SqlClient";
 import type { Connection } from "effect/unstable/sql/SqlConnection";
 import { SqlError } from "effect/unstable/sql/SqlError";
 import * as Statement from "effect/unstable/sql/Statement";
+import { logEvent, sqliteSlowStatements } from "../controllerMetrics.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
@@ -48,11 +49,14 @@ function measureSqlOperation<A>(sql: string, operation: string, run: () => A): A
     return run();
   } finally {
     const durationMs = Math.round(performance.now() - started);
-    if (durationMs >= 250) console.warn("sqlite statement slow", {
-      durationMs, operation,
-      // Hash SQL structure only; parameters and user content remain private.
-      queryHash: createHash("sha256").update(sql).digest("hex"),
-    });
+    if (durationMs >= 250) {
+      sqliteSlowStatements.inc();
+      logEvent("warn", "sqlite.statement-slow", {
+        durationMs, operation,
+        // Hash SQL structure only; parameters and user content remain private.
+        queryHash: createHash("sha256").update(sql).digest("hex"),
+      });
+    }
   }
 }
 
