@@ -29,6 +29,7 @@ import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import type { ProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBinding";
 import type { DurablePiEngine, DurableThreadTarget } from "./DurablePiEngine.ts";
 import { shellQuote, type SandboxRunner } from "./sandboxEnv.ts";
+import { sandboxEvents } from "../controllerMetrics.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const RUN_ROOT = "/workspace/run";
@@ -861,6 +862,7 @@ export class DiligenceRunner {
       const state = await this.#state(runId);
       let binding = state?.sandbox;
       if (!binding || (await this.#sandboxes.unavailable(binding))) {
+        if (binding) sandboxEvents.inc({ event: "lost" });
         const generation = (state?.sandboxGeneration ?? 0) + 1;
         binding = await this.#sandboxes.claim(`diligence-${runId}`, `diligence-${runId}-${generation}`, request.repository, {
           purpose: request.purpose === "eval" ? "eval" : "diligence", runId, packId: packIdOf(request),
@@ -872,6 +874,7 @@ export class DiligenceRunner {
           draft.sandboxGeneration = generation;
           if (!draft.sourceCommit && claimed.repositoryCheckout?.commit) draft.sourceCommit = claimed.repositoryCheckout.commit;
         });
+        if (generation > 1) sandboxEvents.inc({ event: "replaced" });
         log("sandbox.ready", { runId, sandboxId: binding.workspace.runtimeId, generation, commit: binding.repositoryCheckout?.commit });
       }
       const ready = binding;
@@ -1019,6 +1022,12 @@ export class DiligenceRunner {
     // report is published (and the workspace banners clear at the same time).
     if (state) await this.#closeThread(request, state, await this.#deliver(request, state))
       .catch((cause) => log("thread.close-failed", { runId: request.runId, message: String(cause) }));
+    // A finished run keeps nothing in memory; a follow-up message to a step attaches it again.
+    this.#captured.delete(request.runId);
+    if (state) {
+      const conversationIds = Object.values(state.steps).flatMap((record) => (record.conversationId === undefined ? [] : [record.conversationId as number]));
+      this.#engine.forgetRun(this.#threadOf(state), conversationIds);
+    }
   }
 
   /** Hands the run to Glasswing; returns the status Glasswing recorded, if it accepted it. */
@@ -1097,8 +1106,8 @@ export class DiligenceRunner {
     const api = artifactApiClient();
     if (!api) return;
     for (const [runId, events] of this.#pendingEvents) {
+      this.#pendingEvents.delete(runId);
       if (events.length === 0) continue;
-      this.#pendingEvents.set(runId, []);
       await api(`/internal/runs/${encodeURIComponent(runId)}/events`, { events: events.slice(0, 500) }).catch((cause) =>
         log("events.delivery-failed", { runId, count: events.length, message: String(cause) }));
     }

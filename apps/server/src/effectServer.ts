@@ -50,6 +50,7 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { diligenceRouteLayer } from "./durable/diligenceRoute";
 import { notesRouteLayer } from "./durable/notesRoute";
+import { metricsRouteLayer } from "./durable/metricsRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { ExternalProjectResolver } from "./externalProjectResolver";
@@ -177,6 +178,7 @@ export const createEffectServer = Effect.fn(function* (
     externalMcpRouteLayer,
     diligenceRouteLayer,
     notesRouteLayer,
+    metricsRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer

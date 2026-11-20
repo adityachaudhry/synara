@@ -30,6 +30,7 @@ import { Worker } from "node:worker_threads";
 import { createGzip, gunzipSync } from "node:zlib";
 
 import { controllerEnvironmentName } from "../controllerEnvironment.ts";
+import { backupOverlaps, recordBackup } from "../controllerMetrics.ts";
 import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
 
 export const DURABLE_BACKUP_NAME = "durable-harness";
@@ -95,7 +96,7 @@ function putFile(url: string, headers: Readonly<Record<string, string>>, file: s
  * undefined when there is no backup API or Glasswing does not yet grant environment-prefixed keys
  * (the Harness alone still uses the old key then, as before).
  */
-async function uploadBackup(kind: ControllerBackupKind, file: string, extension: Extension): Promise<string | undefined> {
+async function uploadBackup(kind: ControllerBackupKind, file: string, extension: Extension, passStarted = Date.now()): Promise<string | undefined> {
   const api = artifactApiClient();
   if (!api) return undefined;
   const started = Date.now();
@@ -112,8 +113,9 @@ async function uploadBackup(kind: ControllerBackupKind, file: string, extension:
     return undefined;
   }
   await putFile(grant.upload_url, grant.headers, file, size);
+  recordBackup(kind, Date.now() - passStarted, size);
   log(kind === DURABLE_BACKUP_NAME ? "durable.backup.uploaded" : "controller.backup.uploaded", {
-    kind, key: grant.key, bytes: size, durationMs: Date.now() - started,
+    kind, key: grant.key, bytes: size, durationMs: Date.now() - started, totalMs: Date.now() - passStarted,
   });
   return grant.key;
 }
@@ -150,6 +152,9 @@ function vacuumInto(source: string, target: string): Promise<void> {
 // passed: Glasswing's maintenance check expects a Harness backup under two hours old.
 let lastHarnessFingerprint: string | null = null;
 let lastHarnessBackupAt = 0;
+// One Harness backup at a time: at ~1.7 GB compressed a copy and upload took up to 8 minutes, so the
+// ten-minute timer started a second copy while the first was still uploading (2026-11-19).
+let harnessBackupRunning = false;
 const UNCHANGED_HARNESS_BACKUP_INTERVAL_MS = 60 * 60_000;
 
 async function harnessFingerprint(storagePath: string): Promise<string> {
@@ -174,6 +179,21 @@ export async function backupHarness(
   options: { readonly force?: boolean } = {},
 ): Promise<string | undefined> {
   if (!artifactApiClient() || !existsSync(storagePath)) return undefined;
+  if (harnessBackupRunning) {
+    backupOverlaps.inc({ kind: DURABLE_BACKUP_NAME });
+    log("durable.backup.skipped", { reason: "the previous Harness backup is still running", forced: options.force === true });
+    return undefined;
+  }
+  harnessBackupRunning = true;
+  try {
+    return await backupHarnessOnce(storagePath, options);
+  } finally {
+    harnessBackupRunning = false;
+  }
+}
+
+async function backupHarnessOnce(storagePath: string, options: { readonly force?: boolean }): Promise<string | undefined> {
+  const started = Date.now();
   // Taken before the copy: a write during it changes the files, so the next pass copies again.
   const fingerprint = await harnessFingerprint(storagePath);
   if (
@@ -188,7 +208,7 @@ export async function backupHarness(
     await vacuumInto(storagePath, snapshot);
     await gzipFile(snapshot, `${snapshot}.gz`);
     await rm(snapshot, { force: true });
-    const key = await uploadBackup(DURABLE_BACKUP_NAME, `${snapshot}.gz`, "sqlite.gz");
+    const key = await uploadBackup(DURABLE_BACKUP_NAME, `${snapshot}.gz`, "sqlite.gz", started);
     if (key) {
       lastHarnessFingerprint = fingerprint;
       lastHarnessBackupAt = Date.now();
@@ -333,6 +353,7 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
       return;
     }
     const snapshot = path.join(dir, `state-${Date.now()}.sqlite`);
+    const passStarted = Date.now();
     try {
       // The same module the persistence layer loads under Node, so it sees the open connection.
       const { backupOpenDatabase } = await import("../persistence/NodeSqliteClient.ts");
@@ -343,7 +364,7 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
       });
       await gzipFile(snapshot, `${snapshot}.gz`);
       await rm(snapshot, { force: true });
-      await uploadBackup("state", `${snapshot}.gz`, "sqlite.gz");
+      await uploadBackup("state", `${snapshot}.gz`, "sqlite.gz", passStarted);
     } finally {
       await rm(snapshot, { force: true });
       await rm(`${snapshot}.gz`, { force: true });
@@ -354,16 +375,21 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
     const fingerprint = await directoryFingerprint(dir);
     if (!fingerprint || uploaded.get(kind) === fingerprint) return;
     const archive = path.join(paths.workDir, `${kind}-${Date.now()}.tar.gz`);
+    const passStarted = Date.now();
     try {
       await execFileAsync("tar", ["-czf", archive, "-C", path.dirname(dir), path.basename(dir)], { timeout: 15 * 60_000 });
-      if (await uploadBackup(kind, archive, "tar.gz")) uploaded.set(kind, fingerprint);
+      if (await uploadBackup(kind, archive, "tar.gz", passStarted)) uploaded.set(kind, fingerprint);
     } finally {
       await rm(archive, { force: true });
     }
   };
 
   const pass = async () => {
-    if (running || stopped) return;
+    if (stopped) return;
+    if (running) {
+      backupOverlaps.inc({ kind: "controller-state" });
+      return;
+    }
     running = true;
     try {
       await mkdir(paths.workDir, { recursive: true, mode: 0o700 });

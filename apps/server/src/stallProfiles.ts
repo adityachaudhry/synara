@@ -1,5 +1,7 @@
 import { Session } from "node:inspector/promises";
 
+import { logEvent } from "./controllerMetrics.ts";
+
 /** Keep the minute preceding a stall; attach no debugger port or user values. */
 export function startStallProfiles() {
   if (process.env.SYNARA_STALL_PROFILING !== "1") return { capture: (_delayMs: number) => {}, stop: () => {} };
@@ -45,17 +47,17 @@ export function startStallProfiles() {
           }
           return { sampledMs: Math.round(us / 1_000), stack };
         });
-        console.warn("server stall profile", JSON.stringify({
+        logEvent("warn", "server.stall-profile", {
           intervalMs: Math.round(now - started), timerDelayMs: delayMs || Math.round(now - started - 60_000),
           maxSamplingGapMs: Math.round(maxSamplingGapUs / 1_000), top,
-        }));
+        });
       }
       if (active) {
         await session.post("Profiler.start");
         started = performance.now();
       }
     } catch (error) {
-      if (active) console.warn("server stall profiling stopped", { message: error instanceof Error ? error.message : "Inspector unavailable" });
+      if (active) logEvent("warn", "server.stall-profiling-stopped", { message: error instanceof Error ? error.message : "Inspector unavailable" });
       stop();
     } finally {
       rotating = false;
@@ -72,7 +74,7 @@ export function startStallProfiles() {
       started = performance.now();
       timer = setInterval(() => void rotate(), 60_000).unref();
     } catch (error) {
-      if (active) console.warn("server stall profiling unavailable", { message: error instanceof Error ? error.message : "Inspector unavailable" });
+      if (active) logEvent("warn", "server.stall-profiling-unavailable", { message: error instanceof Error ? error.message : "Inspector unavailable" });
       stop();
     }
   })();

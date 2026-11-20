@@ -9,6 +9,7 @@ import { Effect, Scope } from "effect";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import { ServeError } from "effect/unstable/http/HttpServerError";
 import { WebSocketServer } from "ws";
+import { logEvent } from "./controllerMetrics.ts";
 import { startStallProfiles } from "./stallProfiles.ts";
 import { trackUpgradedWebSockets } from "./upgradedWebSockets.ts";
 
@@ -166,7 +167,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
       ? Math.round(schedulingWait - previousSchedulingWait) : undefined;
     previousSchedulingWait = schedulingWait;
     if (loopDelay.max > 500_000_000 || timerDelayMs > 500) {
-      console.warn("server event loop delayed", {
+      logEvent("warn", "server.event-loop-delayed", {
         maxDelayMs: Math.round(loopDelay.max / 1_000_000),
         // Histogram callbacks can land after this timer. CPU belongs to this
         // timer interval, not necessarily to the histogram's largest delay.
@@ -192,7 +193,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
       if (recorded) return;
       recorded = true;
       const durationMs = Math.round(performance.now() - started);
-      if (durationMs >= 500 || (edgeToHandlerMs ?? 0) >= 500) console.warn("workspace setup request slow", {
+      if (durationMs >= 500 || (edgeToHandlerMs ?? 0) >= 500) logEvent("warn", "workspace.setup-request-slow", {
         route, durationMs, edgeToHandlerMs, status: response.statusCode,
         aborted: !response.writableFinished,
         requestId: request.headers["x-railway-request-id"],
