@@ -202,6 +202,11 @@ class StepUnanswered extends Error {
 // that arrives after output started ("unsupported mid-output model fallback").
 const REFUSAL_DETAIL = /refus|mid-output model fallback/i;
 
+/** Models a refused Anthropic turn moves to, in order: the list Pi also sends as server-side fallbacks. */
+const REFUSAL_FALLBACK_MODELS = (process.env.SYNARA_ANTHROPIC_FALLBACKS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+
+const CONTINUE_PROMPT = "Your previous response was interrupted before it finished. Continue the task from where you left off.";
+
 /** Sorted keys, no whitespace: Python `json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. */
 const canonicalJson = (value: unknown): string => {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -706,18 +711,33 @@ export class DiligenceRunner {
         log("thread.step-failed", { runId, step: step.id, message: String(cause) });
         return undefined;
       });
-      const submit = (content: string, requestId: string) => this.#submit(conversation, content, requestId, step.id, runId, key);
-      try {
-        await submit(step.prompt, `diligence:${runId}:${step.id}`);
-      } catch (cause) {
-        // A safety-classifier refusal, or Anthropic's switch to the fallback model after output had
-        // started (which Pi cannot splice), ends the turn. Anthropic then serves this conversation
-        // from the fallback model for about an hour, so one continuation usually completes the step.
-        if (!(cause instanceof StepUnanswered) || !REFUSAL_DETAIL.test(cause.detail)) throw cause;
-        log("step.refusal-continue", { runId, step: step.id, detail: cause.detail.slice(0, 300) });
-        await submit("Your previous response was interrupted before it finished. Continue the task from where you left off.",
-          `diligence:${runId}:${step.id}:continue`);
-      }
+      // A safety-classifier refusal, or a server-side fallback Pi cannot splice because output had
+      // started, ends the turn. Pi drops the refused turn, so a retry on the same model resends the
+      // same material and is refused again: the step moves to the next model in
+      // SYNARA_ANTHROPIC_FALLBACKS and continues there. Request IDs stay deterministic for resume.
+      let model = modelRef(step.model);
+      const submit = async (content: string, requestId: string) => {
+        const tried = new Set([model.modelId]);
+        let input = content;
+        let id = requestId;
+        for (;;) {
+          try {
+            return await this.#submit(conversation, input, id, step.id, runId, key);
+          } catch (cause) {
+            const next = REFUSAL_FALLBACK_MODELS.find((candidate) => !tried.has(candidate));
+            const refused = cause instanceof StepUnanswered && REFUSAL_DETAIL.test(cause.detail);
+            if (!refused || model.provider !== "anthropic" || next === undefined) throw cause;
+            tried.add(next);
+            log("step.refusal-fallback", { runId, step: step.id, from: model.modelId, to: next, detail: cause.detail.slice(0, 300) });
+            this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
+            model = modelRef(next);
+            await conversation.configure({ model }, ctx);
+            input = CONTINUE_PROMPT;
+            id = `${requestId}:fallback:${next}`;
+          }
+        }
+      };
+      await submit(step.prompt, `diligence:${runId}:${step.id}`);
       let missing = await this.#missingOutputs(runId, request, step.outputs);
       if (missing.length) {
         // A replaced sandbox can lose files written since the last capture; the conversation still has the work.
@@ -734,8 +754,9 @@ export class DiligenceRunner {
         const repairable = gate.findings.filter((finding) => !gate!.generative.includes(finding)).slice(0, request.plan.repair.maxFindings ?? 12);
         if (repairable.length > 0) {
           await this.#update(runId, (draft) => { draft.steps[step.id]!.phase = "repair"; });
+          model = modelRef(request.plan.repair.model);
           await conversation.configure({
-            model: modelRef(request.plan.repair.model),
+            model,
             ...(request.plan.repair.thinking ? { thinkingLevel: request.plan.repair.thinking as never } : {}),
           }, ctx);
           const prompt = request.plan.repair.prompt
