@@ -50,6 +50,7 @@ import { S3_LFS_AGENT_UID, S3_LFS_MOUNT_ROOT, S3_LFS_PASSWORD_PATH, s3LfsCredent
 import { ProviderWorkerProvisioner, type ProviderWorkerProvisionerShape, type ProviderWorkerProvisionInput } from "../Services/ProviderWorkerProvisioner";
 import { isWorkspaceFilePathAllowed, readProviderWorkspaceFile } from "../workspaceFiles.ts";
 import { WORKER_TOOLCHAIN_CHECK_COMMAND, WORKER_TOOLCHAIN_INSTALL_COMMAND } from "../workerToolchain.ts";
+import { sandboxEvents } from "../../controllerMetrics.ts";
 
 const DEFAULT_CWD = "/workspace";
 const HOME_DIR = "/workspace/.synara-provider-worker";
@@ -231,6 +232,7 @@ export const makeSandboxProvisioner = (options: SandboxProvisionerOptions) =>
           ...(repository && checkout ? { repositoryCheckout: { binding: repository, ...checkout } } : {}),
         };
         yield* restoreFiles(binding);
+        sandboxEvents.inc({ event: "claimed" });
         // A text prefix keeps the JSON intact in the message for operation readers.
         console.info("[sandbox] " + JSON.stringify({
           event: "provider.operation.finished", operation: "sandbox.claimed",

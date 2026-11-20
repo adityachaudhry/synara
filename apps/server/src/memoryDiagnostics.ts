@@ -6,6 +6,7 @@
 import * as V8 from "node:v8";
 
 import type { RuntimeMode } from "./config";
+import { durableEngineCounts, logEvent } from "./controllerMetrics";
 
 const MB = 1024 * 1024;
 const DEFAULT_MEMORY_DIAGNOSTIC_INTERVAL_MS = 5 * 60 * 1000;
@@ -85,15 +86,34 @@ function isServerMemoryDiagnosticsDisabled(): boolean {
   });
 }
 
-// Starts low-volume heap/RSS logging for packaged desktop backend crash reports.
+/** A Glasswing controller (it talks to Glasswing's internal API), or explicitly enabled. */
+function isControllerMemoryDiagnosticsEnabled(): boolean {
+  const explicit = process.env.SYNARA_SERVER_MEMORY_DIAGNOSTICS?.trim().toLowerCase();
+  return Boolean(process.env.SYNARA_ARTIFACT_API_URL?.trim()) || explicit === "1" || explicit === "true" || explicit === "on";
+}
+
+// Starts low-volume heap/RSS logging: desktop backends for crash reports, and controllers, where
+// it is one JSON line every five minutes with the durable engine's open watches.
 export function startServerMemoryDiagnostics(input: {
   readonly mode: RuntimeMode;
   readonly intervalMs?: number;
   readonly logger?: ServerMemoryDiagnosticsLogger;
   readonly warningHeapUsedRatio?: number;
 }): (() => void) | null {
-  if (input.mode !== "desktop" || isServerMemoryDiagnosticsDisabled()) {
-    return null;
+  if (isServerMemoryDiagnosticsDisabled()) return null;
+  if (input.mode !== "desktop") {
+    if (!isControllerMemoryDiagnosticsEnabled()) return null;
+    const warningRatio = input.warningHeapUsedRatio ?? DEFAULT_WARNING_HEAP_USED_RATIO;
+    const logControllerMemory = (reason: "startup" | "interval") => {
+      const snapshot = readServerMemoryDiagnosticSnapshot();
+      logEvent(shouldWarnServerMemory(snapshot, warningRatio) ? "warn" : "info", "server.memory", {
+        reason, ...toServerMemoryDiagnosticLogPayload(snapshot), ...durableEngineCounts(),
+      });
+    };
+    logControllerMemory("startup");
+    const timer = setInterval(() => logControllerMemory("interval"), input.intervalMs ?? DEFAULT_MEMORY_DIAGNOSTIC_INTERVAL_MS);
+    timer.unref();
+    return () => clearInterval(timer);
   }
 
   const intervalMs = input.intervalMs ?? DEFAULT_MEMORY_DIAGNOSTIC_INTERVAL_MS;

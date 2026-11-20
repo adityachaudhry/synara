@@ -34,8 +34,10 @@ import {
   defineExtension,
   defineTool,
   Harness,
+  LiveDoc,
   section,
   ToolResultEntry,
+  UsageDoc,
   UserEntry,
   watchEvents,
 } from "@earendil-works/pi-durable";
@@ -71,6 +73,9 @@ import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
 import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
 import { ContextPackCache, requesterEmailOf } from "./contextPack.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
+import { glasswingAuthorEmail } from "../provider/glasswingAgentProfile.ts";
+import { logEvent, recordTurn, setDurableEngineGauges, type ThreadKind } from "../controllerMetrics.ts";
+import { sendUsageEvent } from "./usageEvents.ts";
 
 const PROVIDER = "pi" as const;
 const ctx = BACKGROUND_CONTEXT;
@@ -133,7 +138,15 @@ interface ThreadState {
   /** Text and thinking of the in-flight assistant message, by content index, and how much was emitted. */
   partial: Map<number, { kind: "text" | "thinking"; text: string; emitted: number }>;
   gatewayToken?: string | undefined;
+  /**
+   * The open event watch. A watch keeps the conversation's whole active context in memory (a Pi
+   * Durable view), so it is open only while a turn runs: 2026-11-19 the production controller ran out
+   * of heap holding a view of every conversation since its start.
+   */
+  watch?: { readonly stop: () => Promise<unknown> } | undefined;
   watching: boolean;
+  /** Measurements of the running turn, for metrics and Glasswing usage events. */
+  turnInfo?: TurnInfo | undefined;
   stopped: boolean;
   lastUsage?: ThreadTokenUsageSnapshot | undefined;
   turnStartedAt?: number | undefined;
@@ -147,6 +160,28 @@ interface ThreadState {
    */
   unfenced?: boolean | undefined;
 }
+
+interface UsageTotals {
+  readonly costUsd: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+interface TurnInfo {
+  readonly startedAt: number;
+  readonly author?: OrchestrationMessageAuthor | undefined;
+  readonly usageBefore?: UsageTotals | undefined;
+  firstTextAt?: number | undefined;
+  readonly tools: Record<string, number>;
+}
+
+/** How a thread shows in metrics and usage events. */
+const threadKindOf = (state: { readonly threadId: string; readonly route?: unknown }): ThreadKind =>
+  state.route ? "diligence_step"
+    : state.threadId.startsWith("diligence-run-") ? "run"
+      : state.threadId.startsWith("glasswing-note-") ? "note_reply" : "chat";
+
+const APP_VERSION = process.env.SYNARA_COMMIT?.trim() || "development";
 
 export interface DurableStartInput {
   readonly threadId: ThreadId;
@@ -324,9 +359,13 @@ export class DurablePiEngine {
       const state = this.#state(threadId, conversationId, entry.generation, entry.cwd);
       if (entry.route) state.route = entry.route;
       if (entry.unfenced) state.unfenced = true;
-      const inputs = (await this.#watch(state))?.run?.inputs ?? [];
+      // The live document alone says whether a turn was running; watching every thread here would
+      // load every conversation's context into memory.
+      const live = (await this.#harness.snapshot(LiveDoc, conversationId, ctx)) as { run?: { inputs?: SubmissionId[] } } | undefined;
+      const inputs = live?.run?.inputs ?? [];
       if (inputs.length > 0) {
         // Restart during a turn: re-attach to the running work before the scheduler continues it.
+        await this.#watch(state);
         const submission = await this.#harness.submission(inputs[0]!, ctx);
         const record = submission ? await submission.status(ctx) : undefined;
         const turnId = TurnId.makeUnsafe(record?.requestId ?? crypto.randomUUID());
@@ -345,6 +384,10 @@ export class DurablePiEngine {
     setTimeout(backup, 2 * 60_000).unref();
     this.#backupTimer = setInterval(backup, 10 * 60_000);
     this.#backupTimer.unref();
+    setDurableEngineGauges({
+      openWatches: () => this.openWatchCount(),
+      activeConversations: () => [...this.#threads.values()].filter((thread) => thread.activeTurnId).length,
+    });
     console.info(JSON.stringify({
       event: "durable.engine.ready",
       threads: this.#threads.size,
@@ -530,7 +573,8 @@ export class DurablePiEngine {
     const conversation = await this.#conversation(state);
     await conversation.configure({ cwd: input.cwd }, ctx);
     await this.#applyModel(state, conversation, input.modelSelection);
-    await this.#watch(state);
+    // Turns open their own watch; an idle session holds none.
+    if (state.activeTurnId) await this.#watch(state);
     const session = this.#session(state, input.runtimeMode);
     this.#emit(state, { type: "session.started", payload: { message: "Durable Pi session ready", resume: session.resumeCursor } });
     this.#emit(state, { type: "thread.started", payload: { providerThreadId: `durable-${state.conversationId}` } });
@@ -620,8 +664,10 @@ export class DurablePiEngine {
     await this.#refreshContextPack(state, input.author);
     const content = await this.#content(input);
     const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+    const usageBefore = await this.#usageTotals(state).catch(() => undefined);
     state.activeTurnId = turnId;
     state.turnStartedAt = Date.now();
+    state.turnInfo = { startedAt: state.turnStartedAt, author: input.author, usageBefore, tools: {} };
     state.turns.push(turnId);
     await this.#watch(state);
     this.#emitTurnStarted(state);
@@ -650,6 +696,7 @@ export class DurablePiEngine {
     if (!state) return;
     if (state.activeTurnId) await (await this.#conversation(state)).abort(ctx);
     state.stopped = true;
+    if (!state.activeTurnId) void this.#unwatch(state);
     this.#emit(state, { type: "thread.state.changed", payload: { state: "closed" } });
     this.#emit(state, { type: "session.exited", payload: { reason: "stopped", exitKind: "graceful" } });
   }
@@ -680,7 +727,7 @@ export class DurablePiEngine {
       const index = await tx.doc(ThreadIndex);
       index.threads[input.key] = { conversationId: input.conversationId as number, generation: state.lifecycleGeneration, cwd: input.cwd, route: input.route };
     }, ctx);
-    await this.#watch(state);
+    // `runChildTurn` opens the watch when the step's turn starts.
   }
 
   /**
@@ -696,6 +743,7 @@ export class DurablePiEngine {
     if (state.activeTurnId !== turnId) {
       state.activeTurnId = turnId;
       state.turnStartedAt = Date.now();
+      state.turnInfo = { startedAt: state.turnStartedAt, tools: {} };
       state.turns.push(turnId);
       await this.#watch(state);
       this.#emitTurnStarted(state);
@@ -860,16 +908,75 @@ export class DurablePiEngine {
   }
 
   async #watch(state: ThreadState) {
-    if (state.watching) return undefined;
+    if (state.watching) return;
     state.watching = true;
-    const stream = await watchEvents(this.#harness, state.conversationId, ctx);
+    let stream: Awaited<ReturnType<typeof watchEvents>>;
+    try {
+      stream = await watchEvents(this.#harness, state.conversationId, ctx);
+    } catch (cause) {
+      state.watching = false;
+      throw cause;
+    }
+    state.watch = stream;
     stream.start(async (events) => {
       for (const event of events) this.#onEvent(state, event);
     });
     void stream.closed.then(() => {
+      if (state.watch !== stream) return;
+      state.watch = undefined;
       state.watching = false;
     });
-    return stream.snapshot;
+  }
+
+  /** Closes the thread's watch, which drops its conversation view from memory. */
+  async #unwatch(state: ThreadState) {
+    const stream = state.watch;
+    if (!stream) return;
+    state.watch = undefined;
+    state.watching = false;
+    await stream.stop().catch((cause: unknown) =>
+      logEvent("warn", "durable.watch.stop-failed", { threadId: state.threadId, message: String(cause).slice(0, 300) }));
+  }
+
+  /** Open event watches; each holds one conversation view in memory. */
+  openWatchCount() {
+    let count = 0;
+    for (const state of this.#threads.values()) if (state.watch) count++;
+    return count;
+  }
+
+  /**
+   * Forgets a finished diligence run's step threads and step tool routes. A follow-up message to a
+   * step attaches it again (`attachChild`, `registerConversationTarget`).
+   */
+  forgetRun(parentThreadId: string | undefined, conversationIds: ReadonlyArray<number>) {
+    for (const id of conversationIds) {
+      const thread = this.#byConversation.get(id as ConversationId);
+      if (thread?.activeTurnId) continue;
+      this.#conversationTargets.delete(id as ConversationId);
+    }
+    if (!parentThreadId) return;
+    for (const state of [...this.#threads.values()]) {
+      if (state.route?.parentThreadId !== parentThreadId || state.activeTurnId) continue;
+      void this.#unwatch(state);
+      this.#threads.delete(state.threadId);
+      if (this.#byConversation.get(state.conversationId) === state) this.#byConversation.delete(state.conversationId);
+    }
+  }
+
+  async #usageTotals(state: ThreadState): Promise<UsageTotals> {
+    const usage = (await this.#harness.snapshot(UsageDoc, state.conversationId, ctx)) as
+      | { models?: Record<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } }> }
+      | undefined;
+    let costUsd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const model of Object.values(usage?.models ?? {})) {
+      costUsd += model.cost?.total ?? 0;
+      inputTokens += (model.input ?? 0) + (model.cacheRead ?? 0) + (model.cacheWrite ?? 0);
+      outputTokens += model.output ?? 0;
+    }
+    return { costUsd, inputTokens, outputTokens };
   }
 
   #onEvent(state: ThreadState, event: AgentEvent) {
@@ -907,6 +1014,7 @@ export class DurablePiEngine {
           itemType: toolItemType(event.toolName),
         };
         state.tools.delete(event.toolCallId);
+        if (state.turnInfo) state.turnInfo.tools[event.toolName] = (state.turnInfo.tools[event.toolName] ?? 0) + 1;
         const message = event.entry?.model?.[0] as { content?: unknown; isError?: boolean } | undefined;
         const result = toolResultForDisplay({ content: message?.content ?? [], details: event.entry?.data });
         const isError = message?.isError === true || event.entry === undefined;
@@ -985,6 +1093,7 @@ export class DurablePiEngine {
       const delta = block.text.slice(block.emitted);
       block.emitted = block.text.length;
       if (block.kind === "text") {
+        if (state.turnInfo && state.turnInfo.firstTextAt === undefined) state.turnInfo.firstTextAt = Date.now();
         if (!state.assistantItemId) {
           state.assistantItemId = RuntimeItemId.makeUnsafe(`pi-assistant-${crypto.randomUUID()}`);
           this.#emit(state, { type: "item.started", itemId: state.assistantItemId, payload: { itemType: "assistant_message", status: "inProgress", title: "Assistant" } });
@@ -1057,9 +1166,11 @@ export class DurablePiEngine {
         lastCachedInputTokens: state.lastUsage?.cachedInputTokens,
         lastOutputTokens: state.lastUsage?.outputTokens,
       }));
+      const turnInfo = state.turnInfo;
       state.activeTurnId = undefined;
       state.assistantItemId = undefined;
       state.reasoningItemId = undefined;
+      state.turnInfo = undefined;
       state.tools.clear();
       this.#emit(state, {
         type: "turn.completed",
@@ -1071,7 +1182,52 @@ export class DurablePiEngine {
               ? { state: "interrupted", stopReason: "aborted", errorMessage: "Interrupted by user." }
               : { state: "failed", stopReason: "error", errorMessage },
       });
+      // The view goes with the watch; the next turn opens a new one.
+      await this.#unwatch(state);
+      const threadKind = threadKindOf(state);
+      const durationMs = turnInfo ? Date.now() - turnInfo.startedAt : undefined;
+      const firstTokenMs = turnInfo?.firstTextAt !== undefined ? turnInfo.firstTextAt - turnInfo.startedAt : undefined;
+      recordTurn({ status, threadKind, durationMs, firstTokenMs });
+      if (turnInfo && threadKind !== "diligence_step") void this.#reportTurn(state, { turnId, status, threadKind, durationMs: durationMs ?? 0, firstTokenMs, turnInfo });
     })();
+  }
+
+  /** A person's turn in a Glasswing company workspace, as a `chat.turn` usage event. */
+  async #reportTurn(state: ThreadState, input: { turnId: TurnId; status: string; threadKind: ThreadKind; durationMs: number; firstTokenMs: number | undefined; turnInfo: TurnInfo }) {
+    try {
+      const email = glasswingAuthorEmail(input.turnInfo.author);
+      if (!email || !input.turnInfo.author) return;
+      const companyId = await this.#companyOf(state.threadId);
+      if (!companyId) return;
+      const after = await this.#usageTotals(state).catch(() => undefined);
+      const before = input.turnInfo.usageBefore;
+      const delta = (pick: (totals: UsageTotals) => number) => (after && before ? Math.max(0, pick(after) - pick(before)) : null);
+      const cost = delta((totals) => totals.costUsd);
+      sendUsageEvent({
+        dedupe_key: `synara:chat.turn:${input.turnId}`,
+        name: "chat.turn",
+        occurred_at: new Date().toISOString(),
+        actor_email: email,
+        actor_subject: input.turnInfo.author.subject,
+        company_id: companyId,
+        thread_id: state.threadId,
+        app_version: APP_VERSION,
+        props: {
+          thread_kind: input.threadKind,
+          turn_id: input.turnId,
+          status: input.status,
+          duration_ms: input.durationMs,
+          first_token_ms: input.firstTokenMs ?? null,
+          model: state.model ?? null,
+          cost_usd: cost === null ? null : Math.round(cost * 1_000_000) / 1_000_000,
+          input_tokens: delta((totals) => totals.inputTokens),
+          output_tokens: delta((totals) => totals.outputTokens),
+          tools: input.turnInfo.tools,
+        },
+      });
+    } catch (cause) {
+      logEvent("warn", "usage.turn-report-failed", { threadId: state.threadId, message: String(cause).slice(0, 300) });
+    }
   }
 
   async #lastAssistant(state: ThreadState): Promise<AssistantMessage | undefined> {

@@ -18,7 +18,7 @@ import { diligenceRunner, diligenceThreadId, setDiligenceMessageRewriter, type D
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
 /** Only the Railway private network (or a local stack) may reach these routes, even with the token. */
-const privateHost = (host: string | undefined) => {
+export const privateHost = (host: string | undefined) => {
   const name = (host ?? "").toLowerCase().replace(/:\d+$/u, "");
   return name.endsWith(".railway.internal") || name === "localhost" || name === "127.0.0.1" || name === "[::1]";
 };

@@ -38,6 +38,7 @@ import { extractResumeSessionFile } from "../piSessionFiles.ts";
 import { providerAttachmentStoragePath } from "../providerAttachmentPaths";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
+import { sandboxEvents } from "../../controllerMetrics.ts";
 
 export const DISTRIBUTED_PI_RUNTIME_PAYLOAD_KEY = "distributedPiRuntime";
 export const DISTRIBUTED_PI_ADAPTER_KEY = "pi:railway-sandbox";
@@ -284,9 +285,13 @@ export const makeDurablePiAdapter = (capacity?: SandboxCapacity) => Effect.gen(f
     if (replacing.has(threadId)) binding = await replacing.get(threadId)!;
     else if (await Effect.runPromise(unavailable(binding))) {
       const lost = binding;
+      sandboxEvents.inc({ event: "lost" });
       const started = Effect.runPromise(Effect.logWarning("sandbox lost during a turn; claiming a replacement", { threadId, sandboxId: lost.workspace.runtimeId }).pipe(
         Effect.andThen(claimSandbox(threadId, lost.fence.lifecycleGeneration, lost.repositoryCheckout?.binding ?? lost.repositoryUnavailable?.binding)),
-      )).finally(() => replacing.delete(threadId));
+      )).then((replacement) => {
+        sandboxEvents.inc({ event: "replaced" });
+        return replacement;
+      }).finally(() => replacing.delete(threadId));
       replacing.set(threadId, started);
       binding = await started;
     }
