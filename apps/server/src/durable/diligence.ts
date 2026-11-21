@@ -425,7 +425,7 @@ export class DiligenceRunner {
 
   /** A step moved models: its workflow-card row names the new one, and its thread says why. */
   async #showModel(runId: string, step: DiligenceStep, from: ModelRef, to: ModelRef, reason: string, key: string | undefined, card: boolean) {
-    if (key) this.#engine.noteReroute(key, refText(from), refText(to), `${reason}.`);
+    if (key) this.#engine.noteReroute(key, refText(from), refText(to), reason);
     const threadId = card ? this.#threadOf(await this.#state(runId)) : undefined;
     if (!threadId) return;
     const label = stepLabel(step);
@@ -769,9 +769,8 @@ export class DiligenceRunner {
         replaced ??= from;
         await useModel(to);
         logFallback(feature, from, to, failure);
-        const reason = `${describeFailure(failure)}; continuing on ${refText(to)}`;
-        this.#event(runId, "log", { line: `${step.id}: ${reason}` });
-        await this.#showModel(runId, step, from, to, reason, key, working);
+        this.#event(runId, "log", { line: `${step.id}: ${describeFailure(failure)}; continuing on ${refText(to)}` });
+        await this.#showModel(runId, step, from, to, describeFailure(failure), key, working);
         return true;
       };
       // A safety-classifier refusal, or a server-side fallback Pi cannot splice because output had
@@ -811,7 +810,7 @@ export class DiligenceRunner {
             this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
             const from = model;
             await useModel(modelRef(next));
-            await this.#showModel(runId, step, from, model, `${from.modelId} declined; continuing on ${next}`, key, working);
+            await this.#showModel(runId, step, from, model, `${from.modelId} declined the request`, key, working);
             // While Anthropic is unusable, the refusal chain's next model is too.
             const stillOpen = anthropicCircuit.current();
             if (stillOpen) await toOpenAi(stillOpen);
