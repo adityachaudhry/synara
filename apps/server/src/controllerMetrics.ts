@@ -185,6 +185,15 @@ export const backupOverlaps = new Counter(
   "synara_backup_overlaps_total",
   "Backups skipped because the previous one of the same kind was still running.",
 );
+export const llmFallbacks = new Counter(
+  "synara_llm_fallbacks_total",
+  "Turns moved from Anthropic to OpenAI, by reason and feature (chat, diligence).",
+);
+export const llmCircuitOpen = new Gauge(
+  "synara_llm_circuit_open",
+  "1 while an Anthropic auth or billing failure sends new turns straight to OpenAI.",
+);
+llmCircuitOpen.set({}, 0);
 
 export type ThreadKind = "chat" | "run" | "note_reply" | "diligence_step";
 
@@ -249,6 +258,8 @@ export function renderMetrics(): string {
     backupDuration,
     backupBytes,
     backupOverlaps,
+    llmFallbacks,
+    llmCircuitOpen,
   ])
     series.render(out);
   return `${out.join("\n")}\n`;
