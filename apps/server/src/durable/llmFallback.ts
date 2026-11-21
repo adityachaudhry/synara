@@ -134,10 +134,11 @@ class Circuit {
     llmCircuitOpen.set({}, 1);
     logEvent("warn", "llm.circuit_open", {
       system: SYSTEM,
+      provider: "anthropic",
       feature,
       reason: failure.reason,
       status: failure.status,
-      minutes: CIRCUIT_MS / 60_000,
+      until: new Date(this.#open.until).toISOString().replace(/\.\d{3}Z$/u, "Z"),
     });
     clearTimeout(this.#timer);
     this.#timer = setTimeout(() => {
@@ -146,6 +147,7 @@ class Circuit {
       llmCircuitOpen.set({}, 0);
       logEvent("info", "llm.circuit_closed", {
         system: SYSTEM,
+        provider: "anthropic",
         reason: closed?.reason ?? null,
         status: closed?.status ?? null,
       });
@@ -197,8 +199,19 @@ export const CONTINUE_PROMPT =
 const SIMULATED_AUTH_FAILURE =
   '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key (simulated by LLM_FORCE_ANTHROPIC_FAILURE)"}}';
 
-/** Dev-only switch: every Anthropic request fails as a dead key would, before any network call. */
-export const anthropicFailureForced = () => process.env.LLM_FORCE_ANTHROPIC_FAILURE?.trim() === "1";
+const PRODUCTION =
+  (
+    process.env.SYNARA_ENVIRONMENT?.trim() ||
+    process.env.RAILWAY_ENVIRONMENT_NAME?.trim() ||
+    ""
+  ).toLowerCase() === "production";
+
+/**
+ * Dev-only switch: every Anthropic request fails as a dead key would, before any network call.
+ * Ignored in production.
+ */
+export const anthropicFailureForced = () =>
+  process.env.LLM_FORCE_ANTHROPIC_FAILURE?.trim() === "1" && !PRODUCTION;
 
 function simulatedAuthFailure(model: Model<Api>) {
   const stream = createAssistantMessageEventStream();
