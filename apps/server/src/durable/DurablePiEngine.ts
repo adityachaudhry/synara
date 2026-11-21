@@ -727,7 +727,7 @@ export class DurablePiEngine {
     logFallback(this.#feature(state), from, to, failure);
     this.#emit(state, {
       type: "model.rerouted",
-      payload: { fromModel: refText(from), toModel: refText(to), reason: `${describeFailure(failure)}; continuing on ${refText(to)}.` },
+      payload: { fromModel: refText(from), toModel: refText(to), reason: describeFailure(failure) },
     });
     return true;
   }
