@@ -11,7 +11,9 @@
  * - An auth or billing failure opens a 15-minute circuit: new turns start on OpenAI without asking
  *   Anthropic, then Anthropic is tried again. Transient failures fall back for that turn only.
  * - Every fallback logs one `llm.fallback` line at warning level, without content; the circuit logs
- *   `llm.circuit_open` and `llm.circuit_closed`. The ops watch greps for them.
+ *   `llm.circuit_open` (warn) and `llm.circuit_closed` (info). Each line carries `event`, `level` and
+ *   `message` (the event name): Railway files a JSON line by `level` and keeps `event` as an
+ *   attribute, which the ops watch searches (`@event:llm.fallback`).
  * - `LLM_FORCE_ANTHROPIC_FAILURE=1` (dev only) answers every Anthropic request with a simulated 401
  *   before any call is made.
  */
@@ -133,6 +135,7 @@ class Circuit {
     this.#open = { ...failure, until: Date.now() + CIRCUIT_MS };
     llmCircuitOpen.set({}, 1);
     logEvent("warn", "llm.circuit_open", {
+      message: "llm.circuit_open",
       system: SYSTEM,
       provider: "anthropic",
       feature,
@@ -146,6 +149,7 @@ class Circuit {
       this.#open = undefined;
       llmCircuitOpen.set({}, 0);
       logEvent("info", "llm.circuit_closed", {
+        message: "llm.circuit_closed",
         system: SYSTEM,
         provider: "anthropic",
         reason: closed?.reason ?? null,
@@ -170,6 +174,7 @@ export function logFallback(
     feature: feature.startsWith("diligence:") ? "diligence" : feature,
   });
   logEvent("warn", "llm.fallback", {
+    message: "llm.fallback",
     system: SYSTEM,
     feature,
     from_model: refText(from),
