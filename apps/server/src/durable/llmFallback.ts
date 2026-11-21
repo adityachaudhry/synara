@@ -282,9 +282,13 @@ export function withFallbackModels<P extends object>(base: P): P {
     (ref) => ref.provider === provider.id,
   );
   if (!wanted.length) return base;
+  // Every request looks its model up; a catalog list is extended once.
+  const extended = new WeakMap<object, unknown[]>();
   const extend = <T extends { readonly id: string; readonly type?: string }>(
     models: readonly T[],
   ): T[] => {
+    const cached = extended.get(models);
+    if (cached) return cached as T[];
     const out = [...models];
     for (const ref of wanted) {
       if (out.some((model) => model.id === ref.modelId)) continue;
@@ -296,6 +300,7 @@ export function withFallbackModels<P extends object>(base: P): P {
         : undefined;
       if (template) out.push({ ...template, id: ref.modelId, name: openAiName(ref.modelId) });
     }
+    extended.set(models, out);
     return out;
   };
   return new Proxy(base, {
