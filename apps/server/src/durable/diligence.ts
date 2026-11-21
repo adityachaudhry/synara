@@ -30,6 +30,17 @@ import type { ProviderWorkerRuntimeBinding } from "../providerWorker/runtimeBind
 import type { DurablePiEngine, DurableThreadTarget } from "./DurablePiEngine.ts";
 import { shellQuote, type SandboxRunner } from "./sandboxEnv.ts";
 import { sandboxEvents } from "../controllerMetrics.ts";
+import {
+  anthropicCircuit,
+  classifyAnthropicFailure,
+  CONTINUE_PROMPT,
+  describeFailure,
+  fallbackModelFor,
+  logFallback,
+  refText,
+  type ModelRef,
+  type ProviderFailure,
+} from "./llmFallback.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const RUN_ROOT = "/workspace/run";
@@ -89,6 +100,8 @@ type StepRecord = {
   turns?: number;
   gate?: { findings: string[]; generative: string[] };
   error?: string;
+  /** The model the step last ran on (`provider/model`), when a fallback moved it off the plan's model. */
+  model?: string;
   /** The step's agent was announced in the run thread. */
   shown?: boolean;
 };
@@ -156,11 +169,13 @@ export const stepLabel = (step: DiligenceStep) =>
 const stepPhase = (step: DiligenceStep) =>
   step.phase ?? (["diligence-intake", "company-snapshot"].includes(step.id) ? PHASES[0]
     : ["executive-investment-read", "memo-compose", "quick-tearsheet", "feedback-review"].includes(step.id) ? PHASES[2] : PHASES[1]);
-/** "anthropic/claude-opus-5-5" → "Opus 5.5", for the workflow card. */
+/** "anthropic/claude-opus-5-5" → "Opus 5.5" and "openai/gpt-6.2-sol" → "GPT-6.2 Sol", for the workflow card. */
 const modelLabel = (model: string) => {
   const id = (model.split("/").pop() ?? model).replace(/^claude-/u, "");
   const match = id.match(/^([a-z]+)-(\d+)-(\d+)$/u);
-  return match ? `${match[1]!.charAt(0).toUpperCase()}${match[1]!.slice(1)} ${match[2]}.${match[3]}` : id;
+  if (match) return `${match[1]!.charAt(0).toUpperCase()}${match[1]!.slice(1)} ${match[2]}.${match[3]}`;
+  const gpt = id.match(/^gpt-([\d.]+)-([a-z]+)$/u);
+  return gpt ? `GPT-${gpt[1]} ${gpt[2]!.charAt(0).toUpperCase()}${gpt[2]!.slice(1)}` : id;
 };
 const MODE_TITLES: Record<string, string> = { full: "full diligence", quick: "a quick read", memo: "the investment memo" };
 /** What each mode delivers, as the closing note names it. */
@@ -204,8 +219,6 @@ const REFUSAL_DETAIL = /refus|mid-output model fallback/i;
 
 /** Models a refused Anthropic turn moves to, in order: the list Pi also sends as server-side fallbacks. */
 const REFUSAL_FALLBACK_MODELS = (process.env.SYNARA_ANTHROPIC_FALLBACKS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-
-const CONTINUE_PROMPT = "Your previous response was interrupted before it finished. Continue the task from where you left off.";
 
 /** Sorted keys, no whitespace: Python `json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. */
 const canonicalJson = (value: unknown): string => {
@@ -410,6 +423,24 @@ export class DiligenceRunner {
     return key;
   }
 
+  /** A step moved models: its workflow-card row names the new one, and its thread says why. */
+  async #showModel(runId: string, step: DiligenceStep, from: ModelRef, to: ModelRef, reason: string, key: string | undefined, card: boolean) {
+    if (key) this.#engine.noteReroute(key, refText(from), refText(to), `${reason}.`);
+    const threadId = card ? this.#threadOf(await this.#state(runId)) : undefined;
+    if (!threadId) return;
+    const label = stepLabel(step);
+    this.#engine.emitExternal(threadId, {
+      type: "item.updated",
+      itemId: `diligence-agent-${runId}-${step.id}`,
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: label,
+        data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: label, model: modelLabel(refText(to)) } },
+      },
+    });
+  }
+
   async #stepSettled(runId: string, step: DiligenceStep, status: "completed" | "failed" | "stopped") {
     const state = await this.#state(runId);
     const threadId = this.#threadOf(state);
@@ -427,7 +458,7 @@ export class DiligenceRunner {
         itemType: "collab_agent_tool_call",
         status: status === "completed" ? "completed" : "failed",
         title: stepLabel(step),
-        data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: stepLabel(step), status } },
+        data: { item: { receiverThreadId: `step:${step.id}`, agentNickname: stepLabel(step), status, model: modelLabel(state?.steps[step.id]?.model ?? step.model) } },
       },
     });
   }
@@ -679,7 +710,7 @@ export class DiligenceRunner {
           draft.steps[id]!.phase = "work";
           draft.steps[id]!.startedAt = new Date().toISOString();
         });
-        this.#event(runId, "step", { skill: id, state: "running" });
+        this.#event(runId, "step", { skill: id, state: "running", model: steps.get(id)!.model });
         inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => inFlight.delete(id)));
       }
       const after = await this.#state(runId);
@@ -705,18 +736,57 @@ export class DiligenceRunner {
 
   async #runStep(request: DiligenceRequest, step: DiligenceStep) {
     const runId = request.runId;
+    // The model the step's work ran on (a fallback changes it), for its step events and the completion.
+    let ranOn = step.model;
     try {
+      ranOn = (await this.#state(runId))?.steps[step.id]?.model ?? step.model;
       const conversation = await this.#conversationFor(request, step);
       const key = await this.#showStep(request, step, conversation.id).catch((cause) => {
         log("thread.step-failed", { runId, step: step.id, message: String(cause) });
         return undefined;
       });
+      const feature = `diligence:${step.id}`;
+      // Starts from the plan's model even after a restart, so a resumed step replays the same
+      // decisions and finds its earlier requests by their IDs.
+      let model = modelRef(step.model);
+      // The Anthropic model a provider fallback replaced: the step's next turn tries it again.
+      let replaced: ModelRef | undefined;
+      // The work turns name the step's model; the repair turn runs on the plan's repair model.
+      let working = true;
+      const useModel = async (next: ModelRef) => {
+        model = next;
+        await conversation.configure({ model }, ctx);
+        if (!working) return;
+        ranOn = refText(model);
+        await this.#update(runId, (draft) => { draft.steps[step.id]!.model = ranOn; });
+      };
+      // Anthropic unusable (auth, billing, or a transient failure Pi's retries did not clear): the
+      // turn continues on the OpenAI model that stands in for it, and the switch is flagged.
+      const toOpenAi = async (failure: ProviderFailure) => {
+        const from = model;
+        const to = fallbackModelFor(from);
+        if (!to || !this.#engine.models.getModel(to.provider, to.modelId)) return false;
+        replaced ??= from;
+        await useModel(to);
+        logFallback(feature, from, to, failure);
+        const reason = `${describeFailure(failure)}; continuing on ${refText(to)}`;
+        this.#event(runId, "log", { line: `${step.id}: ${reason}` });
+        await this.#showModel(runId, step, from, to, reason, key, working);
+        return true;
+      };
       // A safety-classifier refusal, or a server-side fallback Pi cannot splice because output had
       // started, ends the turn. Pi drops the refused turn, so a retry on the same model resends the
       // same material and is refused again: the step moves to the next model in
       // SYNARA_ANTHROPIC_FALLBACKS and continues there. Request IDs stay deterministic for resume.
-      let model = modelRef(step.model);
       const submit = async (content: string, requestId: string) => {
+        const open = anthropicCircuit.current();
+        // An open circuit keeps the step where it is; otherwise the next turn tries Anthropic again.
+        if (replaced && !open) {
+          const back = replaced;
+          replaced = undefined;
+          await useModel(back);
+        }
+        if (open && model.provider === "anthropic") await toOpenAi(open);
         const tried = new Set([model.modelId]);
         let input = content;
         let id = requestId;
@@ -724,14 +794,27 @@ export class DiligenceRunner {
           try {
             return await this.#submit(conversation, input, id, step.id, runId, key);
           } catch (cause) {
+            if (!(cause instanceof StepUnanswered)) throw cause;
+            const failure = model.provider === "anthropic" ? classifyAnthropicFailure(cause.detail) : undefined;
+            if (failure) {
+              anthropicCircuit.trip(failure, feature);
+              if (!(await toOpenAi(failure))) throw cause;
+              input = CONTINUE_PROMPT;
+              id = `${requestId}:fallback:openai`;
+              continue;
+            }
             const next = REFUSAL_FALLBACK_MODELS.find((candidate) => !tried.has(candidate));
-            const refused = cause instanceof StepUnanswered && REFUSAL_DETAIL.test(cause.detail);
+            const refused = REFUSAL_DETAIL.test(cause.detail);
             if (!refused || model.provider !== "anthropic" || next === undefined) throw cause;
             tried.add(next);
             log("step.refusal-fallback", { runId, step: step.id, from: model.modelId, to: next, detail: cause.detail.slice(0, 300) });
             this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
-            model = modelRef(next);
-            await conversation.configure({ model }, ctx);
+            const from = model;
+            await useModel(modelRef(next));
+            await this.#showModel(runId, step, from, model, `${from.modelId} declined; continuing on ${next}`, key, working);
+            // While Anthropic is unusable, the refusal chain's next model is too.
+            const stillOpen = anthropicCircuit.current();
+            if (stillOpen) await toOpenAi(stillOpen);
             input = CONTINUE_PROMPT;
             id = `${requestId}:fallback:${next}`;
           }
@@ -755,6 +838,8 @@ export class DiligenceRunner {
         if (repairable.length > 0) {
           await this.#update(runId, (draft) => { draft.steps[step.id]!.phase = "repair"; });
           model = modelRef(request.plan.repair.model);
+          replaced = undefined;
+          working = false;
           await conversation.configure({
             model,
             ...(request.plan.repair.thinking ? { thinkingLevel: request.plan.repair.thinking as never } : {}),
@@ -779,7 +864,7 @@ export class DiligenceRunner {
         if (gate) record.gate = gate;
         Object.assign(draft.outputs, outputs);
       });
-      this.#event(runId, "step", { skill: step.id, state: "done", turns: usage.turns, cost_usd: usage.costUsd, duration_seconds: await this.#duration(runId, step.id) });
+      this.#event(runId, "step", { skill: step.id, state: "done", model: ranOn, turns: usage.turns, cost_usd: usage.costUsd, duration_seconds: await this.#duration(runId, step.id) });
       log("step.done", { runId, step: step.id, costUsd: usage.costUsd, turns: usage.turns, gateFindings: gate?.findings.length ?? 0 });
       await this.#stepSettled(runId, step, "completed");
     } catch (cause) {
@@ -789,7 +874,7 @@ export class DiligenceRunner {
         draft.steps[step.id]!.error = message.slice(0, 2000);
         draft.steps[step.id]!.finishedAt = new Date().toISOString();
       });
-      this.#event(runId, "step", { skill: step.id, state: "failed" });
+      this.#event(runId, "step", { skill: step.id, state: "failed", model: ranOn });
       this.#event(runId, "log", { line: `${step.id} failed: ${message.slice(0, 300)}` });
       log("step.failed", { runId, step: step.id, message: message.slice(0, 500) });
       await this.#stepSettled(runId, step, "failed").catch(() => undefined);
@@ -1066,6 +1151,7 @@ export class DiligenceRunner {
       recipe_version: request.plan.recipeVersion,
       steps: steps.map(({ step, record, duration }) => ({
         skill: step.id,
+        model: record.model ?? step.model,
         status: record.status,
         cost_usd: record.costUsd ?? null,
         turns: record.turns ?? null,
@@ -1086,7 +1172,7 @@ export class DiligenceRunner {
       ...(packIdOf(request) ? { packId: packIdOf(request) } : {}),
       files: { ...state.outputs, ".observability/pipeline.json": JSON.stringify(pipeline, null, 2) },
       steps: steps.map(({ step, record, duration }) => ({
-        id: step.id, state: record.status, costUsd: record.costUsd ?? 0, turns: record.turns ?? 0,
+        id: step.id, state: record.status, model: record.model ?? step.model, costUsd: record.costUsd ?? 0, turns: record.turns ?? 0,
         durationSeconds: duration ?? 0, ...(record.gate ? { gate: record.gate } : {}),
       })),
     };
