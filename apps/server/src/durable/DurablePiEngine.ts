@@ -76,6 +76,22 @@ import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import { glasswingAuthorEmail } from "../provider/glasswingAgentProfile.ts";
 import { logEvent, recordTurn, setDurableEngineGauges, type ThreadKind } from "../controllerMetrics.ts";
 import { sendUsageEvent } from "./usageEvents.ts";
+import {
+  anthropicCircuit,
+  anthropicFailureForced,
+  classifyAnthropicFailure,
+  CONTINUE_PROMPT,
+  describeFailure,
+  FALLBACK_OPUS_MODEL,
+  FALLBACK_SONNET_MODEL,
+  fallbackModelFor,
+  logFallback,
+  refText,
+  withFallbackModels,
+  withForcedAnthropicFailure,
+  type ModelRef,
+  type ProviderFailure,
+} from "./llmFallback.ts";
 
 const PROVIDER = "pi" as const;
 const ctx = BACKGROUND_CONTEXT;
@@ -147,6 +163,10 @@ interface ThreadState {
   watching: boolean;
   /** Measurements of the running turn, for metrics and Glasswing usage events. */
   turnInfo?: TurnInfo | undefined;
+  /** The Anthropic model a provider fallback replaced; the thread's next turn returns to it. */
+  restoreModel?: ModelRef | undefined;
+  /** The model the running turn moved to, when a provider fallback moved it. */
+  turnModel?: string | undefined;
   stopped: boolean;
   lastUsage?: ThreadTokenUsageSnapshot | undefined;
   turnStartedAt?: number | undefined;
@@ -324,8 +344,9 @@ export class DurablePiEngine {
 
   async #init() {
     mkdirSync(path.dirname(this.#options.storagePath), { recursive: true });
-    if (process.env.ANTHROPIC_API_KEY) this.#models.setProvider(anthropicWithFallbacks(anthropicProvider()));
-    if (process.env.OPENAI_API_KEY) this.#models.setProvider(openaiProvider());
+    if (process.env.ANTHROPIC_API_KEY) this.#models.setProvider(withForcedAnthropicFailure(anthropicWithFallbacks(anthropicProvider())));
+    // OpenAI is the fallback when Anthropic is unusable (llmFallback.ts), and a model of its own.
+    if (process.env.OPENAI_API_KEY) this.#models.setProvider(withFallbackModels(openaiProvider()));
 
     const today = () => new Date().toISOString().slice(0, 10);
     // Tools and research are shared by chat threads and diligence runs; the chat profile is chat-only.
@@ -404,10 +425,12 @@ export class DurablePiEngine {
         await this.#watch(state);
         const submission = await this.#harness.submission(inputs[0]!, ctx);
         const record = submission ? await submission.status(ctx) : undefined;
-        const turnId = TurnId.makeUnsafe(record?.requestId ?? crypto.randomUUID());
+        // A chat turn's fallback request is `<turnId>:fallback`; the turn keeps its own ID.
+        const turnId = TurnId.makeUnsafe((record?.requestId ?? crypto.randomUUID()).replace(/:fallback$/u, ""));
         state.activeTurnId = turnId;
         state.turns.push(turnId);
-        if (submission) this.#settleWhenDone(state, turnId, submission.id);
+        // Diligence steps fall back in the runner; every other turn falls back here.
+        if (submission) this.#settleWhenDone(state, turnId, submission.id, !record?.requestId?.startsWith("diligence:"));
         resumingDurableThreads.add(threadId);
         console.info(JSON.stringify({ event: "durable.turn.resumed", threadId, turnId }));
       }
@@ -430,6 +453,14 @@ export class DurablePiEngine {
       resumed: [...this.#threads.values()].filter((thread) => thread.activeTurnId).length,
       tools: this.#registry.snapshot().tools().map((entry) => entry.tool.name),
     }));
+    const fallbackTargets = [FALLBACK_OPUS_MODEL, FALLBACK_SONNET_MODEL];
+    logEvent(fallbackTargets.every((ref) => this.#models.getModel(ref.provider, ref.modelId)) ? "info" : "warn", "llm.fallback.config", {
+      system: "synara-controller",
+      opus: refText(FALLBACK_OPUS_MODEL),
+      sonnet: refText(FALLBACK_SONNET_MODEL),
+      available: fallbackTargets.filter((ref) => this.#models.getModel(ref.provider, ref.modelId)).map(refText),
+      force_anthropic_failure: anthropicFailureForced(),
+    });
   }
 
   toolsExtension!: Extension;
@@ -651,14 +682,75 @@ export class DurablePiEngine {
     return { messages: messages.length };
   }
 
+  /** Configures the selected model; true when there was a selection to apply. */
   async #applyModel(state: ThreadState, conversation: Conversation, selection: DurableStartInput["modelSelection"]) {
-    if (selection?.provider !== "pi") return;
+    if (selection?.provider !== "pi") return false;
     const model = modelRefOf(selection.model);
-    if (!model) return;
+    if (!model) return false;
     if (!this.#models.getModel(model.provider, model.modelId)) throw new Error(`Pi model '${selection.model}' is not available.`);
     const thinkingLevel = thinkingLevelOf(selection.options);
     await conversation.configure({ model, ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}) }, ctx);
     state.model = `${model.provider}/${model.modelId}`;
+    return true;
+  }
+
+  /** How fallbacks name this thread's work: chat, or the diligence step a step thread shows. */
+  #feature(state: ThreadState) {
+    return state.route ? `diligence:${state.route.providerThreadId.replace(/^step:/u, "")}` : "chat";
+  }
+
+  /**
+   * A new turn starts on the thread's own model: one a fallback replaced comes back. While Anthropic
+   * auth or billing failures hold the circuit open, an Anthropic model goes straight to OpenAI.
+   */
+  async #routeTurn(state: ThreadState, conversation: Conversation, selected: boolean) {
+    state.turnModel = undefined;
+    if (state.restoreModel) {
+      if (!selected) await conversation.configure({ model: state.restoreModel }, ctx);
+      state.restoreModel = undefined;
+    }
+    const open = anthropicCircuit.current();
+    if (open) await this.#fallBack(state, conversation, (await conversation.agent(ctx)).model, open);
+  }
+
+  /** Moves the conversation from its Anthropic model to the OpenAI fallback and flags it. */
+  async #fallBack(state: ThreadState, conversation: Conversation, from: ModelRef | undefined, failure: ProviderFailure) {
+    const to = fallbackModelFor(from);
+    if (!from || !to) return false;
+    if (!this.#models.getModel(to.provider, to.modelId)) {
+      logEvent("warn", "llm.fallback.unavailable", { system: "synara-controller", feature: this.#feature(state), from_model: refText(from), to_model: refText(to), reason: failure.reason });
+      return false;
+    }
+    await conversation.configure({ model: to }, ctx);
+    state.restoreModel ??= from;
+    state.turnModel = refText(to);
+    logFallback(this.#feature(state), from, to, failure);
+    this.#emit(state, {
+      type: "model.rerouted",
+      payload: { fromModel: refText(from), toModel: refText(to), reason: describeFailure(failure) },
+    });
+    return true;
+  }
+
+  /**
+   * After an Anthropic turn failed in a way another provider can fix, the turn continues on OpenAI:
+   * returns the continuation's submission, or undefined when the failure stands.
+   */
+  async #fallbackAfterFailure(state: ThreadState, turnId: TurnId, detail: string | undefined) {
+    const failure = classifyAnthropicFailure(detail);
+    if (!failure) return undefined;
+    const conversation = await this.#conversation(state);
+    const from = (await conversation.agent(ctx)).model;
+    if (from?.provider !== "anthropic") return undefined;
+    anthropicCircuit.trip(failure, this.#feature(state));
+    if (!(await this.#fallBack(state, conversation, from, failure))) return undefined;
+    return (await conversation.submit({ type: "input", content: CONTINUE_PROMPT, requestId: `${turnId}:fallback` }, ctx)).id;
+  }
+
+  /** A diligence step moved models (the runner moves its own steps); shows it in the step's thread. */
+  noteReroute(key: string, fromModel: string, toModel: string, reason: string) {
+    const state = this.#threads.get(key);
+    if (state) this.#emit(state, { type: "model.rerouted", payload: { fromModel, toModel, reason } });
   }
 
   async #content(input: DurableTurnInput): Promise<string | Array<TextContent | ImageContent>> {
@@ -691,7 +783,7 @@ export class DurablePiEngine {
     const state = this.#require(input.threadId);
     if (state.activeTurnId) throw new Error("A Pi turn is already active for this thread.");
     const conversation = await this.#conversation(state);
-    await this.#applyModel(state, conversation, input.modelSelection);
+    const selected = await this.#applyModel(state, conversation, input.modelSelection);
     if (input.gatewayBearerToken) {
       state.gatewayToken = input.gatewayBearerToken;
       await this.#installGatewayTools(input.gatewayBearerToken);
@@ -707,8 +799,10 @@ export class DurablePiEngine {
     state.turns.push(turnId);
     await this.#watch(state);
     this.#emitTurnStarted(state);
+    await this.#routeTurn(state, conversation, selected).catch((cause: unknown) =>
+      logEvent("warn", "llm.route-failed", { threadId: state.threadId, message: String(cause).slice(0, 300) }));
     const submission = await conversation.submit({ type: "input", content, requestId: turnId, whenBusy: "reject" }, ctx);
-    this.#settleWhenDone(state, turnId, submission.id);
+    this.#settleWhenDone(state, turnId, submission.id, true);
     return { threadId: input.threadId, turnId, resumeCursor: this.#cursor(state) };
   }
 
@@ -785,7 +879,8 @@ export class DurablePiEngine {
       this.#emitTurnStarted(state);
     }
     const submission = await conversation.submit({ type: "input", content, requestId }, ctx);
-    this.#settleWhenDone(state, turnId, submission.id);
+    // The diligence runner falls back for its own steps.
+    this.#settleWhenDone(state, turnId, submission.id, false);
     return submission;
   }
 
@@ -1163,20 +1258,36 @@ export class DurablePiEngine {
     };
   }
 
-  #settleWhenDone(state: ThreadState, turnId: TurnId, submissionId: SubmissionId) {
+  #settleWhenDone(state: ThreadState, turnId: TurnId, submissionId: SubmissionId, fallback: boolean) {
     void (async () => {
       let status: "completed" | "failed" | "interrupted" = "completed";
       let errorMessage: string | undefined;
       try {
-        const submission = await this.#harness.submission(submissionId, ctx);
-        const settled = submission ? await submission.wait(ctx) : undefined;
-        if (settled?.status === "unanswered") {
+        let current = submissionId;
+        for (;;) {
+          const submission = await this.#harness.submission(current, ctx);
+          const settled = submission ? await submission.wait(ctx) : undefined;
+          if (settled?.status !== "unanswered") break;
           const last = await this.#lastAssistant(state);
-          if (settled.reason === "aborted" || last?.stopReason === "aborted") status = "interrupted";
-          else {
-            status = "failed";
-            errorMessage = last?.errorMessage ?? `Durable turn ended without an answer (${settled.reason}).`;
+          if (settled.reason === "aborted" || last?.stopReason === "aborted") {
+            status = "interrupted";
+            break;
           }
+          const detail = typeof settled.detail === "string" ? settled.detail : last?.errorMessage;
+          // An unusable Anthropic moves the turn to OpenAI; it settles when the continuation does.
+          const next = fallback && settled.reason === "model_error" && state.activeTurnId === turnId
+            ? await this.#fallbackAfterFailure(state, turnId, detail).catch((cause: unknown) => {
+              logEvent("warn", "llm.fallback-failed", { threadId: state.threadId, message: String(cause).slice(0, 300) });
+              return undefined;
+            })
+            : undefined;
+          if (next) {
+            current = next;
+            continue;
+          }
+          status = "failed";
+          errorMessage = last?.errorMessage ?? `Durable turn ended without an answer (${settled.reason}).`;
+          break;
         }
       } catch (cause) {
         status = "failed";
@@ -1192,13 +1303,14 @@ export class DurablePiEngine {
       if (status === "failed" && errorMessage) {
         this.#emit(state, { type: "runtime.error", turnId: null, payload: { message: errorMessage, class: "provider_error", detail: { source: "pi.durable" } } });
       }
+      const turnModel = state.turnModel ?? state.model;
       console.info(JSON.stringify({
         event: "durable.turn.completed",
         threadId: state.threadId,
         turnId,
         status,
         durationMs: state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined,
-        model: state.model,
+        model: turnModel,
         lastInputTokens: state.lastUsage?.inputTokens,
         lastCachedInputTokens: state.lastUsage?.cachedInputTokens,
         lastOutputTokens: state.lastUsage?.outputTokens,
@@ -1208,6 +1320,7 @@ export class DurablePiEngine {
       state.assistantItemId = undefined;
       state.reasoningItemId = undefined;
       state.turnInfo = undefined;
+      state.turnModel = undefined;
       state.tools.clear();
       this.#emit(state, {
         type: "turn.completed",
@@ -1225,12 +1338,12 @@ export class DurablePiEngine {
       const durationMs = turnInfo ? Date.now() - turnInfo.startedAt : undefined;
       const firstTokenMs = turnInfo?.firstTextAt !== undefined ? turnInfo.firstTextAt - turnInfo.startedAt : undefined;
       recordTurn({ status, threadKind, durationMs, firstTokenMs });
-      if (turnInfo && threadKind !== "diligence_step") void this.#reportTurn(state, { turnId, status, threadKind, durationMs: durationMs ?? 0, firstTokenMs, turnInfo });
+      if (turnInfo && threadKind !== "diligence_step") void this.#reportTurn(state, { turnId, status, threadKind, durationMs: durationMs ?? 0, firstTokenMs, turnInfo, model: turnModel });
     })();
   }
 
   /** A person's turn in a Glasswing company workspace, as a `chat.turn` usage event. */
-  async #reportTurn(state: ThreadState, input: { turnId: TurnId; status: string; threadKind: ThreadKind; durationMs: number; firstTokenMs: number | undefined; turnInfo: TurnInfo }) {
+  async #reportTurn(state: ThreadState, input: { turnId: TurnId; status: string; threadKind: ThreadKind; durationMs: number; firstTokenMs: number | undefined; turnInfo: TurnInfo; model: string | undefined }) {
     try {
       const email = glasswingAuthorEmail(input.turnInfo.author);
       if (!email || !input.turnInfo.author) return;
@@ -1255,7 +1368,7 @@ export class DurablePiEngine {
           status: input.status,
           duration_ms: input.durationMs,
           first_token_ms: input.firstTokenMs ?? null,
-          model: state.model ?? null,
+          model: input.model ?? null,
           cost_usd: cost === null ? null : Math.round(cost * 1_000_000) / 1_000_000,
           input_tokens: delta((totals) => totals.inputTokens),
           output_tokens: delta((totals) => totals.outputTokens),
