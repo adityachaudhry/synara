@@ -14,9 +14,11 @@ export const ServerLoggerLive = Effect.gen(function* () {
 
   const fileLogger = Logger.formatSimple.pipe(Logger.toFile(serverLogPath));
 
-  // On Railway every output line becomes its own log entry: one JSON object per line keeps a
-  // structured log (and its fields) together. Local and desktop runs keep the readable format.
-  const consoleLogger = process.env.RAILWAY_ENVIRONMENT_NAME ? Logger.consoleJson : Logger.defaultLogger;
+  // In a deployed environment (Railway, Azure Container Apps) every output line becomes its own log
+  // entry: one JSON object per line keeps a structured log (and its fields) together. Local and
+  // desktop runs keep the readable format.
+  const deployed = process.env.SYNARA_ENVIRONMENT?.trim() || process.env.RAILWAY_ENVIRONMENT_NAME;
+  const consoleLogger = deployed ? Logger.consoleJson : Logger.defaultLogger;
   return Logger.layer([consoleLogger, fileLogger], {
     mergeWithExisting: false,
   });

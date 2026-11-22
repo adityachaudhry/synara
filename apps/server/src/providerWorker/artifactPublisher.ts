@@ -8,6 +8,7 @@ import {
 import type { WorkspaceRuntimeShape } from "../workspaceRuntime/Services/WorkspaceRuntime.ts";
 import type { ProviderWorkerRuntimeBinding } from "./runtimeBinding.ts";
 import { resolveSandboxNetworkPolicy, sandboxHostAllowed } from "../workspaceRuntime/sandboxNetwork.ts";
+import { privateExactHosts } from "../privateNetworkHosts.ts";
 import { privateWorkerHosts } from "./privateNetwork.ts";
 
 interface ArtifactRecord {
@@ -49,12 +50,13 @@ export function artifactApiClient() {
       !(
         url.protocol === "http:" &&
         (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
-          // Grants originate in the Railway controller, independently of the worker's network.
-          privateWorkerHosts(process.env).includes(url.hostname.toLowerCase()))
+          // Grants originate in the controller, independently of the worker's network.
+          privateWorkerHosts(process.env).includes(url.hostname.toLowerCase()) ||
+          privateExactHosts(process.env).includes(url.hostname.toLowerCase()))
       ))
   ) {
     throw new Error(
-      "Artifact API origin must be HTTPS, loopback, or an explicit Railway private service.",
+      "Artifact API origin must be HTTPS, loopback, or an explicit private service.",
     );
   }
   return async <T>(route: string, body?: unknown, options?: { readonly timeoutMs?: number }): Promise<T> => {

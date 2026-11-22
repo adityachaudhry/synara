@@ -1,5 +1,6 @@
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, readlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import { hostname } from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -15,6 +16,10 @@ type DatabaseLifecycleLockOwner = {
   readonly createdAt: string;
   readonly runtimeId?: string;
   readonly processInstanceId?: string;
+  /** The owner's host (container) name: a pid only identifies a process on that host. */
+  readonly host?: string;
+  /** The owner's pid namespace (`pid:[inode]`): a pid only identifies a process inside it. */
+  readonly pidNamespace?: string;
 };
 
 export type DatabaseLifecycleLock = {
@@ -117,7 +122,14 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
       (typeof owner.processInstanceId !== "string" ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
           owner.processInstanceId,
-        )))
+        ))) ||
+    (owner.host !== undefined &&
+      (typeof owner.host !== "string" ||
+        owner.host.length === 0 ||
+        owner.host.length > 255 ||
+        owner.host.trim() !== owner.host)) ||
+    (owner.pidNamespace !== undefined &&
+      (typeof owner.pidNamespace !== "string" || !/^pid:\[\d+\]$/u.test(owner.pidNamespace)))
   ) {
     throw new Error("lock owner metadata is invalid");
   }
@@ -133,6 +145,59 @@ function railwayRuntimeId(): string | undefined {
 const PROCESS_STARTED_AT_MS = Date.now() - process.uptime() * 1_000;
 const PROCESS_INSTANCE_ID = randomUUID();
 
+function currentHost(): string | undefined {
+  const name = hostname().trim();
+  return name.length > 0 && name.length <= 255 ? name : undefined;
+}
+
+function currentPidNamespace(): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const link = readlinkSync("/proc/self/ns/pid");
+    return /^pid:\[\d+\]$/u.test(link) ? link : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const PROCESS_HOST = currentHost();
+const PROCESS_PID_NAMESPACE = currentPidNamespace();
+
+/** What a new owner records about the process that holds the lock. */
+function currentOwnerIdentity(): Pick<
+  DatabaseLifecycleLockOwner,
+  "runtimeId" | "processInstanceId" | "host" | "pidNamespace"
+> {
+  const runtimeId = railwayRuntimeId();
+  return {
+    processInstanceId: PROCESS_INSTANCE_ID,
+    ...(runtimeId === undefined ? {} : { runtimeId }),
+    ...(PROCESS_HOST === undefined ? {} : { host: PROCESS_HOST }),
+    ...(PROCESS_PID_NAMESPACE === undefined ? {} : { pidNamespace: PROCESS_PID_NAMESPACE }),
+  };
+}
+
+/**
+ * docker-entrypoint.sh sets this once it holds the exclusive writer lock (SYNARA_WRITER_LOCK) on
+ * the data volume. No other controller process can then be using this data from another host,
+ * container or pid namespace, so an owner recorded there is a leftover, whatever its pid says here.
+ */
+function writerLockHeld(): boolean {
+  return process.env.SYNARA_WRITER_LOCK_HELD?.trim() === "1";
+}
+
+/** Whether a pid probe can say anything about this owner: same host and pid namespace as us. */
+function ownerSharesProcessSpace(owner: DatabaseLifecycleLockOwner): boolean {
+  if (PROCESS_HOST === undefined || owner.host !== PROCESS_HOST) return false;
+  if (PROCESS_PID_NAMESPACE !== undefined && owner.pidNamespace !== PROCESS_PID_NAMESPACE) {
+    return false;
+  }
+  return true;
+}
+
+const ownerHostSuffix = (owner: DatabaseLifecycleLockOwner) =>
+  owner.host === undefined ? "" : ` on ${owner.host}`;
+
 function ownerProcessState(owner: DatabaseLifecycleLockOwner): "live" | "dead" | "unknown" {
   const currentRuntimeId = railwayRuntimeId();
   const ownerCreatedAtMs = Date.parse(owner.createdAt);
@@ -143,6 +208,7 @@ function ownerProcessState(owner: DatabaseLifecycleLockOwner): "live" | "dead" |
       return "dead";
     }
   }
+  if (writerLockHeld() && !ownerSharesProcessSpace(owner)) return "dead";
   if (currentRuntimeId !== undefined) {
     if (owner.runtimeId !== undefined && owner.runtimeId !== currentRuntimeId) return "dead";
   }
@@ -238,8 +304,7 @@ async function acquireReaperGuard(dbPath: string, lockPath: string): Promise<Rea
       pid: process.pid,
       token: randomUUID(),
       createdAt: new Date().toISOString(),
-      processInstanceId: PROCESS_INSTANCE_ID,
-      ...(railwayRuntimeId() === undefined ? {} : { runtimeId: railwayRuntimeId() }),
+      ...currentOwnerIdentity(),
     };
     if (await tryPublishOwnedDirectory(reaperPath, owner)) {
       return { path: reaperPath, owner, retiredPaths };
@@ -261,7 +326,7 @@ async function acquireReaperGuard(dbPath: string, lockPath: string): Promise<Rea
       throw new DatabaseLifecycleLockedError(
         dbPath,
         lockPath,
-        `stale-lock recovery owner pid ${existingOwner.pid} is ${state}`,
+        `stale-lock recovery owner pid ${existingOwner.pid}${ownerHostSuffix(existingOwner)} is ${state}`,
       );
     }
     if (attempt > 0) {
@@ -358,8 +423,7 @@ async function acquire(dbPath: string): Promise<DatabaseLifecycleLock> {
       pid: process.pid,
       token: randomUUID(),
       createdAt: new Date().toISOString(),
-      processInstanceId: PROCESS_INSTANCE_ID,
-      ...(railwayRuntimeId() === undefined ? {} : { runtimeId: railwayRuntimeId() }),
+      ...currentOwnerIdentity(),
     };
     const published = await tryPublishOwnedDirectory(lockPath, owner);
 
@@ -380,7 +444,7 @@ async function acquire(dbPath: string): Promise<DatabaseLifecycleLock> {
         throw new DatabaseLifecycleLockedError(
           canonicalDbPath,
           lockPath,
-          `owner pid ${existingOwner.pid} is ${state}`,
+          `owner pid ${existingOwner.pid}${ownerHostSuffix(existingOwner)} is ${state}`,
         );
       }
       if (attempt > 0) {

@@ -1,0 +1,31 @@
+name: Controller revision swap on Azure
+description: >-
+  Stop-then-start revision swap of the controller's container app. The controller keeps its data on
+  an NFS share under a one-writer lock (docker-entrypoint.sh, SYNARA_WRITER_LOCK), so two revisions
+  never run the server at once: see swap.sh.
+inputs:
+  resource-group:
+    required: true
+    description: Resource group of the container app
+  container-app:
+    required: false
+    default: synara-controller
+    description: Container app name
+  image:
+    required: true
+    description: Image to run, preferably by digest
+  env-file:
+    required: false
+    default: ''
+    description: Optional file of KEY=value lines to set on the new revision besides SYNARA_COMMIT
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RESOURCE_GROUP: ${{ inputs.resource-group }}
+        CONTAINER_APP: ${{ inputs.container-app }}
+        IMAGE: ${{ inputs.image }}
+        ENV_FILE: ${{ inputs.env-file }}
+        COMMIT: ${{ github.sha }}
+      run: bash "$GITHUB_ACTION_PATH/swap.sh"
