@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { azureControllerTarget, readAzureControllerVariables } from "./azureController.mjs";
 
 const ids = JSON.parse(readFileSync(".daytona-obsolete-pools.json", "utf8"));
 if (ids.length) {
   const require = createRequire(`${process.cwd()}/apps/server/package.json`);
   const { Daytona, DaytonaNotFoundError } = await import(require.resolve("@daytona/sdk"));
-  const vars = JSON.parse(execFileSync("railway", ["variable", "list", "--json", "-p", process.env.WORKER_PROJECT, "-e", process.env.WORKER_ENVIRONMENT, "-s", process.env.WORKER_SERVICE], { encoding: "utf8" }));
+  const vars = process.env.WORKER_TARGET === "azure"
+    ? readAzureControllerVariables(azureControllerTarget())
+    : JSON.parse(execFileSync("railway", ["variable", "list", "--json", "-p", process.env.WORKER_PROJECT, "-e", process.env.WORKER_ENVIRONMENT, "-s", process.env.WORKER_SERVICE], { encoding: "utf8" }));
   assert.equal(vars.SYNARA_DAYTONA_EXCLUSIVE_POOL_OWNER, "1");
   let version;
   const deadline = Date.now() + 60_000;

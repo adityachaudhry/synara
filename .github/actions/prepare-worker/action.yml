@@ -1,15 +1,25 @@
 name: Prepare worker disk
-description: Build the Daytona sandbox image for the target Railway environment.
+description: >-
+  Build the Daytona sandbox image for the target environment. On Railway the matching settings are
+  set on the controller service; on Azure they are written to .controller-env-updates for the deploy
+  to set on the new container app revision (one revision, one restart).
 inputs:
+  target:
+    required: false
+    default: railway
+    description: Where the controller runs, railway or azure
   project:
-    required: true
-    description: Railway project
+    required: false
+    description: Railway project (railway)
   service:
     required: true
-    description: Railway controller service
+    description: Railway controller service, or the container app name on Azure
   environment:
     required: true
-    description: Railway environment
+    description: Railway environment, or the environment name on Azure
+  resource-group:
+    required: false
+    description: Resource group of the controller's container app (azure)
 runs:
   using: composite
   steps:
@@ -19,16 +29,20 @@ runs:
     - uses: actions/setup-node@v4
       with:
         node-version: '24'
-    - shell: bash
+    - if: inputs.target != 'azure'
+      shell: bash
       run: npm install --global @railway/cli
     - shell: bash
       run: bun install --frozen-lockfile --filter @synara/cli
     - name: Prepare the worker disk from this commit
       shell: bash
       env:
+        WORKER_TARGET: ${{ inputs.target }}
         WORKER_PROJECT: ${{ inputs.project }}
         WORKER_SERVICE: ${{ inputs.service }}
         WORKER_ENVIRONMENT: ${{ inputs.environment }}
+        WORKER_RESOURCE_GROUP: ${{ inputs.resource-group }}
+        WORKER_CONTAINER_APP: ${{ inputs.service }}
       run: |
         bun -e '
           import { execFileSync } from "node:child_process";
@@ -36,11 +50,15 @@ runs:
           import { createRequire } from "node:module";
           import { prepareDaytonaWorkerTemplate } from "./apps/server/src/providerWorker/prepareDaytonaTemplate.ts";
           import { availableDaytonaContainerTargets } from "./apps/server/src/workspaceRuntime/daytonaRegions.ts";
+          import { CONTROLLER_ENV_UPDATES_FILE, azureControllerTarget, readAzureControllerVariables } from "./.github/actions/prepare-worker/azureController.mjs";
           const require = createRequire(`${process.cwd()}/apps/server/package.json`);
           const { Daytona } = await import(require.resolve("@daytona/sdk"));
+          const azure = process.env.WORKER_TARGET === "azure";
           const target = ["--service", process.env.WORKER_SERVICE, "--project", process.env.WORKER_PROJECT, "--environment", process.env.WORKER_ENVIRONMENT];
           const railwayToken = process.env.RAILWAY_TOKEN;
-          const variables = JSON.parse(execFileSync("railway", ["variables", ...target, "--json"], { encoding: "utf8" }));
+          const variables = azure
+            ? readAzureControllerVariables(azureControllerTarget())
+            : JSON.parse(execFileSync("railway", ["variables", ...target, "--json"], { encoding: "utf8" }));
           Object.assign(process.env, variables);
           const daytona = variables.SYNARA_WORKSPACE_RUNTIME === "daytona";
           const preferredTarget = variables.SYNARA_DAYTONA_TARGET || "us";
@@ -97,7 +115,9 @@ runs:
             }
           }
           // Publish the matching regional release together only after every preparation check passes.
-          execFileSync("railway", ["variable", "set", ...target, ...updates, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
+          // Azure has no staged variables: the deploy sets these on the new revision with the image.
+          if (azure) writeFileSync(CONTROLLER_ENV_UPDATES_FILE, `${updates.join("\n")}\n`);
+          else execFileSync("railway", ["variable", "set", ...target, ...updates, "--skip-deploys"], { env: { ...process.env, RAILWAY_TOKEN: railwayToken }, stdio: "pipe" });
           writeFileSync(".daytona-obsolete-pools.json", JSON.stringify(obsoletePools));
           console.log(JSON.stringify({ snapshot: prepared.key, imageSha256: prepared.sha256, reused: prepared.reused }));
         '

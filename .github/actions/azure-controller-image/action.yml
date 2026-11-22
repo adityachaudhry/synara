@@ -1,0 +1,53 @@
+name: Controller image for Azure
+description: >-
+  Build the root Dockerfile and push it to Azure Container Registry as <repository>:<commit>.
+  Needs an Azure sign-in (azure/login) with AcrPush on the registry.
+inputs:
+  registry:
+    required: false
+    default: crglasswing
+    description: Azure Container Registry name
+  repository:
+    required: false
+    default: synara/controller
+    description: Image repository in the registry
+outputs:
+  image:
+    description: The pushed image by digest, <registry>.azurecr.io/<repository>@sha256:...
+    value: ${{ steps.result.outputs.image }}
+  tag:
+    description: The pushed image by tag, <registry>.azurecr.io/<repository>:<commit>
+    value: ${{ steps.result.outputs.tag }}
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+    - name: Sign in to the registry
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: az acr login --name "$REGISTRY"
+    - id: build
+      uses: docker/build-push-action@v6
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: 'false'
+      with:
+        context: .
+        file: Dockerfile
+        platforms: linux/amd64
+        push: true
+        provenance: false
+        tags: ${{ inputs.registry }}.azurecr.io/${{ inputs.repository }}:${{ github.sha }}
+        cache-from: type=gha,scope=synara-controller
+        cache-to: type=gha,scope=synara-controller,mode=max
+    - id: result
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REPOSITORY: ${{ inputs.repository }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+      run: |
+        test -n "$DIGEST"
+        echo "tag=$REGISTRY.azurecr.io/$REPOSITORY:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+        echo "image=$REGISTRY.azurecr.io/$REPOSITORY@$DIGEST" >> "$GITHUB_OUTPUT"
+        echo "Pushed $REGISTRY.azurecr.io/$REPOSITORY:$GITHUB_SHA ($DIGEST)"

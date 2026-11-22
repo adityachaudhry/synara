@@ -18,13 +18,28 @@ on:
       - 'railway.json'
       - '.github/workflows/deploy-glasswing-dev.yml'
       - '.github/actions/prepare-worker/**'
+      - '.github/actions/azure-controller-image/**'
+      - '.github/actions/azure-revision-swap/**'
   workflow_dispatch:
+    inputs:
+      azure_build_only:
+        description: Only build and push the controller image to Azure Container Registry (no deploy, no Railway, no worker preparation)
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-glasswing-dev
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  id-token: write # Azure sign-in through OIDC
+
 env:
+  # Where this environment's controller runs: railway (default) or azure.
+  DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET_DEV || 'railway' }}
+  AZURE_RESOURCE_GROUP: rg-glasswing-dev
+  AZURE_CONTAINER_APP: synara-controller
   RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID_DEV || '2fb578c6-304e-4a97-abd4-38b3897d9030' }}
   RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
@@ -33,22 +48,82 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm install --global @railway/cli
+      - name: Check the deploy target
+        if: ${{ !inputs.azure_build_only }}
+        run: |
+          case "$DEPLOY_TARGET" in
+            railway | azure) echo "Deploy target: $DEPLOY_TARGET" ;;
+            *) echo "::error::DEPLOY_TARGET_DEV must be railway or azure, not '$DEPLOY_TARGET'"; exit 1 ;;
+          esac
+
+      # Railway
+      - if: env.DEPLOY_TARGET == 'railway' && !inputs.azure_build_only
+        run: npm install --global @railway/cli
       - name: Record the deployed source revision
+        if: env.DEPLOY_TARGET == 'railway' && !inputs.azure_build_only
         run: railway variable set "SYNARA_COMMIT=$GITHUB_SHA" --service synara-gitea-dev --project "$RAILWAY_PROJECT_ID" --environment dev --skip-deploys
-      - uses: ./.github/actions/prepare-worker
+      - if: env.DEPLOY_TARGET == 'railway' && !inputs.azure_build_only
+        uses: ./.github/actions/prepare-worker
         with:
           project: ${{ env.RAILWAY_PROJECT_ID }}
           service: synara-gitea-dev
           environment: dev
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      - run: railway up --service synara-gitea-dev --project "$RAILWAY_PROJECT_ID" --environment dev --ci
+      - if: env.DEPLOY_TARGET == 'railway' && !inputs.azure_build_only
+        run: railway up --service synara-gitea-dev --project "$RAILWAY_PROJECT_ID" --environment dev --ci
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       - name: Retire obsolete unclaimed warm pools
+        if: env.DEPLOY_TARGET == 'railway' && !inputs.azure_build_only
         run: node .github/actions/prepare-worker/cleanup.mjs
         env:
           WORKER_PROJECT: ${{ env.RAILWAY_PROJECT_ID }}
           WORKER_SERVICE: synara-gitea-dev
           WORKER_ENVIRONMENT: dev
+
+      # Azure Container Apps
+      - name: Sign in to Azure
+        if: env.DEPLOY_TARGET == 'azure' || inputs.azure_build_only
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_DEV }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push the controller image
+        id: image
+        if: env.DEPLOY_TARGET == 'azure' || inputs.azure_build_only
+        uses: ./.github/actions/azure-controller-image
+      - name: Find the controller's container app
+        id: app
+        if: env.DEPLOY_TARGET == 'azure' && !inputs.azure_build_only
+        run: |
+          found=$(az containerapp list --resource-group "$AZURE_RESOURCE_GROUP" --query "[?name=='$AZURE_CONTAINER_APP'].name" --output tsv)
+          if [ -n "$found" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Container app $AZURE_CONTAINER_APP does not exist in $AZURE_RESOURCE_GROUP yet: the image is pushed (${{ steps.image.outputs.tag }}) and nothing is deployed."
+          fi
+      - if: steps.app.outputs.exists == 'true'
+        uses: ./.github/actions/prepare-worker
+        with:
+          target: azure
+          service: ${{ env.AZURE_CONTAINER_APP }}
+          environment: dev
+          resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+      - name: Swap the controller revision
+        if: steps.app.outputs.exists == 'true'
+        uses: ./.github/actions/azure-revision-swap
+        with:
+          resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+          container-app: ${{ env.AZURE_CONTAINER_APP }}
+          image: ${{ steps.image.outputs.image }}
+          env-file: .controller-env-updates
+      - name: Retire obsolete unclaimed warm pools
+        if: steps.app.outputs.exists == 'true'
+        run: node .github/actions/prepare-worker/cleanup.mjs
+        env:
+          WORKER_TARGET: azure
+          WORKER_RESOURCE_GROUP: ${{ env.AZURE_RESOURCE_GROUP }}
+          WORKER_CONTAINER_APP: ${{ env.AZURE_CONTAINER_APP }}
