@@ -35,9 +35,16 @@ export function harnessLockingMode(
   throw new Error(`SYNARA_HARNESS_LOCKING_MODE must be "exclusive" or unset, not "${raw}".`);
 }
 
-// pi-durable's openNodeSqliteDatabase settings (1.0.4), repeated for the exclusive open.
+// pi-durable's openNodeSqliteDatabase settings (1.0.4), repeated for the exclusive open, except the
+// two below. On NFS every page read that misses SQLite's cache and every checkpoint's fsync goes over
+// the network while the event loop waits: on Azure Files a 2 MB default cache and a checkpoint every
+// 1,000 pages stalled the controller's loop 1.4 s (p50) during diligence runs, against none on local
+// disk. A 256 MiB cache (the persistence database's ceiling) keeps the hot Harness pages in memory, and
+// checkpointing every 10,000 pages coalesces rewrites of the same pages into far fewer fsyncs.
+// Durability is unchanged: WAL with synchronous=NORMAL either way.
 const BUSY_TIMEOUT_MS = 5_000;
-const WAL_AUTO_CHECKPOINT_PAGES = 1_000;
+const WAL_AUTO_CHECKPOINT_PAGES = 10_000;
+const CACHE_SIZE_KIB = 262_144;
 
 /** The open exclusive connections by database path; normal mode registers none. */
 const exclusiveConnections = new Map<string, DatabaseSync>();
@@ -74,6 +81,8 @@ export async function openHarnessStorage(storagePath: string): Promise<SqliteSto
     }
     database.exec("PRAGMA synchronous = NORMAL");
     database.exec(`PRAGMA wal_autocheckpoint = ${WAL_AUTO_CHECKPOINT_PAGES}`);
+    // Negative: KiB, an on-demand ceiling for this one connection, not an upfront allocation.
+    database.exec(`PRAGMA cache_size = -${CACHE_SIZE_KIB}`);
     // Take and keep the lock now, so a process that still holds the file fails startup here
     // (after the busy timeout) instead of failing a turn later.
     database.exec("BEGIN EXCLUSIVE");
@@ -85,7 +94,13 @@ export async function openHarnessStorage(storagePath: string): Promise<SqliteSto
   const storage = await SqliteStorage.open(new NodeSqliteDatabase(database));
   exclusiveConnections.set(path.resolve(storagePath), database);
   console.info(
-    JSON.stringify({ event: "durable.harness.opened", lockingMode: "exclusive", walIndex: "heap" }),
+    JSON.stringify({
+      event: "durable.harness.opened",
+      lockingMode: "exclusive",
+      walIndex: "heap",
+      cacheKiB: CACHE_SIZE_KIB,
+      walAutoCheckpointPages: WAL_AUTO_CHECKPOINT_PAGES,
+    }),
   );
   return storage;
 }
