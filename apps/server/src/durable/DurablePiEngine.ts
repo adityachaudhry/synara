@@ -42,7 +42,6 @@ import {
   watchEvents,
 } from "@earendil-works/pi-durable";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import {
   EventId,
   ProviderItemId,
@@ -71,6 +70,7 @@ import { configurePiWebAccess, createCrunchbaseTools, createWebAccessTools } fro
 import { createPerplexityTools } from "./perplexityTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
 import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
+import { openHarnessStorage } from "./harnessStorage.ts";
 import { ContextPackCache, requesterEmailOf } from "./contextPack.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
 import { glasswingAuthorEmail } from "../provider/glasswingAgentProfile.ts";
@@ -391,7 +391,8 @@ export class DurablePiEngine {
     // A lost volume (or a forced drill) restores the newest off-volume snapshot before opening.
     await restoreHarnessIfNeeded(this.#options.storagePath, process.env.SYNARA_DURABLE_RESTORE === "1");
     this.#harness = await Harness.open(
-      await openNodeSqliteStorage(this.#options.storagePath),
+      // pi-durable's own open unless SYNARA_HARNESS_LOCKING_MODE=exclusive (harnessStorage.ts).
+      await openHarnessStorage(this.#options.storagePath),
       {
         models: this.#models,
         registry: this.#registry,

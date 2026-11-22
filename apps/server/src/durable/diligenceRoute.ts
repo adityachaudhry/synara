@@ -1,5 +1,5 @@
 /**
- * Internal diligence endpoints for the Glasswing API (Railway private network).
+ * Internal diligence endpoints for the Glasswing API (private network).
  * Authentication: the shared artifact service token, as Synara uses toward Glasswing.
  */
 import { timingSafeEqual } from "node:crypto";
@@ -11,17 +11,18 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { readMcpJsonBody } from "../agentGateway/httpRoute.ts";
 import { extractBearerToken } from "../agentGateway/bearerToken.ts";
 import { ExternalProjectResolver } from "../externalProjectResolver.ts";
+import { isPrivateRequestHost } from "../privateNetworkHosts.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { diligenceRunner, diligenceThreadId, setDiligenceMessageRewriter, type DiligenceRequest } from "./diligence.ts";
 
 const MAX_PLAN_BYTES = 16 * 1024 * 1024;
 
-/** Only the Railway private network (or a local stack) may reach these routes, even with the token. */
-export const privateHost = (host: string | undefined) => {
-  const name = (host ?? "").toLowerCase().replace(/:\d+$/u, "");
-  return name.endsWith(".railway.internal") || name === "localhost" || name === "127.0.0.1" || name === "[::1]";
-};
+/**
+ * Only the private network (or a local stack) may reach these routes, even with the token.
+ * Private names: `SYNARA_PRIVATE_HOST_SUFFIXES` / `SYNARA_PRIVATE_HOSTS` (privateNetworkHosts.ts).
+ */
+export const privateHost = (host: string | undefined) => isPrivateRequestHost(host);
 
 export const authorized = (header: string | undefined, host: string | undefined) => {
   if (!privateHost(host)) return false;
