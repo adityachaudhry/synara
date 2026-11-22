@@ -3,9 +3,10 @@
  * (`POST /internal/controller-backups/grants`). Each object lands under
  * `controller-backups/<env>/<kind>/`, where `<env>` is the controller's environment:
  *
- * - `durable-harness`: the Pi Durable Harness (VACUUM INTO in a low-priority child process, onto
- *   the container's own disk when it has room), 2 min after start, every 10 min when it changed
- *   (hourly when it did not), and at shutdown (scheduled by the engine);
+ * - `durable-harness`: the Pi Durable Harness (VACUUM INTO in a low-priority child process, or an
+ *   online backup through the controller's own connection when the Harness is open in exclusive
+ *   locking mode; onto the container's own disk when it has room), 2 min after start, every 10 min
+ *   when it changed (hourly when it did not), and at shutdown (scheduled by the engine);
  * - `state`: Synara's `state.sqlite` (SQLite online backup through its own connection, into the
  *   container's own disk when it has room), hourly;
  * - `attachments`: the chat attachments directory (tar.gz), hourly when it changed;
@@ -23,7 +24,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { DatabaseSync } from "node:sqlite";
+import { backup as sqliteBackup, DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createGzip, gunzipSync } from "node:zlib";
@@ -31,6 +32,7 @@ import { createGzip, gunzipSync } from "node:zlib";
 import { controllerEnvironmentName } from "../controllerEnvironment.ts";
 import { backupOverlaps, recordBackup } from "../controllerMetrics.ts";
 import { artifactApiClient } from "../providerWorker/artifactPublisher.ts";
+import { exclusiveHarnessConnection } from "./harnessStorage.ts";
 
 export const DURABLE_BACKUP_NAME = "durable-harness";
 
@@ -151,6 +153,26 @@ async function vacuumInto(source: string, target: string): Promise<void> {
   await execFileAsync(command[0]!, command.slice(1), { timeout: UPLOAD_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
 }
 
+// SYNARA_HARNESS_LOCKING_MODE=exclusive (harnessStorage.ts): no other process can open the
+// Harness while the controller holds it, so the VACUUM INTO child cannot run. The copy goes
+// through the controller's own connection instead, with node:sqlite's online backup: each step
+// copies a few pages on the libuv thread pool (not a worker thread, so the report hazard above
+// does not apply) and hands the connection back to the event loop between steps; writes made
+// meanwhile on the same connection are carried into the copy. state.sqlite is backed up the same
+// way (backupOpenDatabase). The copy is then switched to rollback-journal mode, so the uploaded
+// file has the same shape as a VACUUM INTO copy for restore.
+const HARNESS_BACKUP_PAGES_PER_STEP = 256;
+
+async function onlineBackup(database: DatabaseSync, target: string): Promise<void> {
+  await sqliteBackup(database, target, { rate: HARNESS_BACKUP_PAGES_PER_STEP });
+  const copy = new DatabaseSync(target);
+  try {
+    copy.exec("PRAGMA journal_mode = DELETE");
+  } finally {
+    copy.close();
+  }
+}
+
 // Snapshot scratch for the Harness. Writing the multi-GB copy and its gzip onto the volume
 // also stalled the controller's own `state.sqlite` commits behind the volume's flushes, so the
 // container's disk takes them when it has room; the volume otherwise.
@@ -230,10 +252,14 @@ async function backupHarnessOnce(storagePath: string, options: { readonly force?
   const snapshot = await harnessSnapshotPath(storagePath);
   try {
     const copyStarted = Date.now();
-    await vacuumInto(storagePath, snapshot);
+    // After close (the shutdown backup) the lock is released, and VACUUM INTO serves again.
+    const exclusive = exclusiveHarnessConnection(storagePath);
+    if (exclusive) await onlineBackup(exclusive, snapshot);
+    else await vacuumInto(storagePath, snapshot);
     log("durable.backup.snapshot", {
       kind: DURABLE_BACKUP_NAME, durationMs: Date.now() - copyStarted,
       disk: snapshot.startsWith(LOCAL_HARNESS_SNAPSHOT_DIR) ? "local" : "volume",
+      ...(exclusive ? { method: "online-backup" } : {}),
     });
     await gzipFile(snapshot, `${snapshot}.gz`);
     await rm(snapshot, { force: true });

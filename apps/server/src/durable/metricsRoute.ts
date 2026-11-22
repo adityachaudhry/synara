@@ -1,6 +1,6 @@
 /**
  * `GET /metrics`: controller health in the Prometheus text format, for Glasswing's Prometheus on the
- * Railway private network. Only private hosts may read it (no token: a failed scrape must mean the
+ * private network. Only private hosts may read it (no token: a failed scrape must mean the
  * controller is down, not that a credential drifted).
  */
 import { Effect } from "effect";

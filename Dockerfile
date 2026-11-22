@@ -37,7 +37,7 @@ RUN bun run --cwd apps/server build
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 RUN apt-get update \
   && apt-get install --yes --no-install-recommends \
-    bash ca-certificates curl git openssh-client procps ripgrep socat tini \
+    bash ca-certificates curl git openssh-client procps ripgrep socat tini util-linux \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=production-deps --chown=node:node /app/node_modules ./node_modules
