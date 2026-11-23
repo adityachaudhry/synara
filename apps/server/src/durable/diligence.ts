@@ -206,6 +206,62 @@ const modelRef = (model: string) => {
 
 const log = (event: string, detail: Record<string, unknown>) => console.info(`[diligence] ${JSON.stringify({ event, ...detail })}`);
 
+const positiveInteger = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value?.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+/**
+ * A cap on step conversations running at once across all runs, on top of each plan's
+ * `maxConcurrency`: every step shares the controller's one event loop with chat, which this never
+ * limits. Steps that wait get their slot in the order they asked. A step keeps its slot through its
+ * gate, repair, recovery and retry turns, until it settles.
+ */
+class StepSlots {
+  readonly #held = new Set<string>();
+  /** Waiting keys in arrival order, each with what to call when its slot comes. */
+  readonly #queue = new Map<string, () => void>();
+
+  constructor(readonly limit: number) {}
+
+  get active() {
+    return this.#held.size;
+  }
+
+  holds(key: string) {
+    return this.#held.has(key);
+  }
+
+  /** A step that was already running when the controller restarted: it counts even above the cap. */
+  hold(key: string) {
+    this.#queue.delete(key);
+    this.#held.add(key);
+  }
+
+  /** True when `key` holds a slot; otherwise it keeps its place in line and `granted` runs when its turn comes. */
+  request(key: string, granted: () => void) {
+    if (!this.#held.has(key) && !this.#queue.has(key)) this.#queue.set(key, granted);
+    this.#grant();
+    return this.#held.has(key);
+  }
+
+  /** Frees the slot, or the place in line. */
+  release(key: string) {
+    this.#queue.delete(key);
+    this.#held.delete(key);
+    this.#grant();
+  }
+
+  #grant() {
+    for (const [key, granted] of this.#queue) {
+      if (this.#held.size >= this.limit) return;
+      this.#queue.delete(key);
+      this.#held.add(key);
+      granted();
+    }
+  }
+}
+
 /** A step turn that settled without an answer; `detail` carries the provider's error text. */
 class StepUnanswered extends Error {
   constructor(message: string, readonly detail: string) {
@@ -295,6 +351,7 @@ export class DiligenceRunner {
   readonly #captured = new Map<string, Map<string, string>>();
   readonly #pendingEvents = new Map<string, Array<{ kind: string; data: Record<string, unknown> }>>();
   #flushTimer: ReturnType<typeof setInterval> | undefined;
+  readonly #slots = new StepSlots(positiveInteger(process.env.SYNARA_DILIGENCE_MAX_ACTIVE_STEPS, 18));
 
   constructor(engine: DurablePiEngine, sandboxes: DiligenceSandboxes) {
     this.#engine = engine;
@@ -302,6 +359,7 @@ export class DiligenceRunner {
     this.#extensions = [engine.toolsExtension, engine.researchExtension];
     this.#flushTimer = setInterval(() => void this.#flushEvents(), 2000);
     this.#flushTimer.unref();
+    log("runner.config", { maxActiveSteps: this.#slots.limit });
   }
 
   get #harness() {
@@ -656,76 +714,126 @@ export class DiligenceRunner {
     const steps = new Map(request.plan.steps.map((step) => [step.id, step]));
     const limit = Math.max(1, request.plan.maxConcurrency ?? 6);
     const inFlight = new Map<string, Promise<void>>();
+    const slot = (id: string) => `${runId}:${id}`;
+    // This run's ready steps waiting for the process-wide cap, with when each began to wait.
+    const waiting = new Map<string, number>();
+    const stopWaiting = () => {
+      for (const id of waiting.keys()) this.#slots.release(slot(id));
+      waiting.clear();
+    };
+    const launch = (id: string) => inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => {
+      inFlight.delete(id);
+      this.#slots.release(slot(id));
+    }));
     let lastCapture = Date.now();
-    for (;;) {
-      try {
-        if (Date.now() - lastCapture > CAPTURE_INTERVAL_MS && inFlight.size > 0) {
-          lastCapture = Date.now();
-          await this.#captureOutbox(request);
+    try {
+      for (;;) {
+        try {
+          if (Date.now() - lastCapture > CAPTURE_INTERVAL_MS && inFlight.size > 0) {
+            lastCapture = Date.now();
+            await this.#captureOutbox(request);
+          }
+        } catch (cause) {
+          log("run.capture-failed", { runId, message: String(cause).slice(0, 300) });
         }
-      } catch (cause) {
-        log("run.capture-failed", { runId, message: String(cause).slice(0, 300) });
-      }
-      const state = await this.#state(runId);
-      if (!state) return;
-      if (state.status !== "running") break;
-      // Running steps (including after a restart) are re-attached by their request IDs.
-      for (const [id, record] of Object.entries(state.steps)) {
-        if (record.status === "running" && !inFlight.has(id) && !state.cancelRequested) {
-          inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => inFlight.delete(id)));
+        const state = await this.#state(runId);
+        if (!state) return;
+        if (state.status !== "running") break;
+        // Running steps (including after a restart) are re-attached by their request IDs, and count
+        // toward the process-wide cap even when that puts it over.
+        for (const [id, record] of Object.entries(state.steps)) {
+          if (record.status === "running" && !inFlight.has(id) && !state.cancelRequested) {
+            this.#slots.hold(slot(id));
+            launch(id);
+          }
         }
-      }
-      if (state.cancelRequested) {
-        await Promise.allSettled(inFlight.values());
-        await this.#finish(request, "canceled");
-        return;
-      }
-      const ready: string[] = [];
-      for (const [id, record] of Object.entries(state.steps)) {
-        if (record.status !== "pending") continue;
-        const step = steps.get(id)!;
-        const blocked = step.after.some((dep) => ["failed", "skipped"].includes(state.steps[dep]?.status ?? ""));
-        if (blocked) {
-          await this.#update(runId, (draft) => { draft.steps[id]!.status = "skipped"; draft.steps[id]!.error = "upstream step failed"; });
-          this.#event(runId, "step", { skill: id, state: "skipped" });
-          continue;
+        if (state.cancelRequested) {
+          stopWaiting();
+          await Promise.allSettled(inFlight.values());
+          await this.#finish(request, "canceled");
+          return;
         }
-        let satisfied = true;
-        for (const dep of step.after) {
-          if (state.steps[dep]?.status === "done") continue;
-          const releases = (step.release ?? []).filter((release) => release.step === dep);
-          if (state.steps[dep]?.status === "running" && releases.length > 0 &&
-            (await this.#filesExist(runId, request, releases.map((release) => release.file)).catch(() => false))) {
+        const ready: string[] = [];
+        for (const [id, record] of Object.entries(state.steps)) {
+          if (record.status !== "pending") continue;
+          const step = steps.get(id)!;
+          const blocked = step.after.some((dep) => ["failed", "skipped"].includes(state.steps[dep]?.status ?? ""));
+          if (blocked) {
+            await this.#update(runId, (draft) => { draft.steps[id]!.status = "skipped"; draft.steps[id]!.error = "upstream step failed"; });
+            this.#event(runId, "step", { skill: id, state: "skipped" });
             continue;
           }
-          satisfied = false;
-          break;
+          let satisfied = true;
+          for (const dep of step.after) {
+            if (state.steps[dep]?.status === "done") continue;
+            const releases = (step.release ?? []).filter((release) => release.step === dep);
+            if (state.steps[dep]?.status === "running" && releases.length > 0 &&
+              (await this.#filesExist(runId, request, releases.map((release) => release.file)).catch(() => false))) {
+              continue;
+            }
+            satisfied = false;
+            break;
+          }
+          if (satisfied) ready.push(id);
         }
-        if (satisfied) ready.push(id);
-      }
-      for (const id of ready) {
-        if (inFlight.size >= limit) break;
-        await this.#update(runId, (draft) => {
-          draft.steps[id]!.status = "running";
-          draft.steps[id]!.phase = "work";
-          draft.steps[id]!.startedAt = new Date().toISOString();
+        // Steps waiting for the process-wide cap still take their place under the run's own limit.
+        const asking = new Set<string>();
+        for (const id of ready) {
+          if (inFlight.size + asking.size >= limit) break;
+          // The step stays pending (Glasswing's "not started") until its slot comes; the slot's grant wakes this loop.
+          if (!this.#slots.request(slot(id), () => this.#wakers.get(runId)?.())) {
+            asking.add(id);
+            if (!waiting.has(id)) {
+              waiting.set(id, Date.now());
+              log("step.waiting-for-slot", { runId, step: id, active: this.#slots.active, limit: this.#slots.limit });
+              this.#event(runId, "activity", {
+                type: "text", skill: id,
+                detail: `Queued: ${this.#slots.active} diligence steps are running across all runs (the limit is ${this.#slots.limit}). This step starts when one finishes.`,
+              });
+            }
+            continue;
+          }
+          const since = waiting.get(id);
+          waiting.delete(id);
+          if (since !== undefined) log("step.slot-granted", { runId, step: id, waitedMs: Date.now() - since });
+          try {
+            await this.#update(runId, (draft) => {
+              draft.steps[id]!.status = "running";
+              draft.steps[id]!.phase = "work";
+              draft.steps[id]!.startedAt = new Date().toISOString();
+            });
+          } catch (cause) {
+            this.#slots.release(slot(id));
+            throw cause;
+          }
+          this.#event(runId, "step", { skill: id, state: "running", model: steps.get(id)!.model });
+          launch(id);
+        }
+        // A waiting step that can no longer start (upstream failed, or the run's own limit filled) gives up its place.
+        for (const id of waiting.keys()) {
+          if (asking.has(id)) continue;
+          this.#slots.release(slot(id));
+          waiting.delete(id);
+        }
+        const after = await this.#state(runId);
+        const open = Object.values(after?.steps ?? {}).some((record) => record.status === "pending" || record.status === "running");
+        if (!open && inFlight.size === 0) {
+          const failed = Object.values(after!.steps).some((record) => record.status === "failed" || record.status === "skipped");
+          await this.#finish(request, failed ? "failed" : "succeeded");
+          return;
+        }
+        // A slot granted while this pass ran is taken at once.
+        if ([...waiting.keys()].some((id) => this.#slots.holds(slot(id)))) continue;
+        // Wake on a step change, a granted slot, or poll release files.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 5000);
+          this.#wakers.set(runId, () => { clearTimeout(timer); resolve(); });
+          Promise.race(inFlight.values()).then(() => { clearTimeout(timer); resolve(); }, () => { clearTimeout(timer); resolve(); });
         });
-        this.#event(runId, "step", { skill: id, state: "running", model: steps.get(id)!.model });
-        inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => inFlight.delete(id)));
       }
-      const after = await this.#state(runId);
-      const open = Object.values(after?.steps ?? {}).some((record) => record.status === "pending" || record.status === "running");
-      if (!open && inFlight.size === 0) {
-        const failed = Object.values(after!.steps).some((record) => record.status === "failed" || record.status === "skipped");
-        await this.#finish(request, failed ? "failed" : "succeeded");
-        return;
-      }
-      // Wake on a step change, or poll release files.
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 5000);
-        this.#wakers.set(runId, () => { clearTimeout(timer); resolve(); });
-        Promise.race(inFlight.values()).then(() => { clearTimeout(timer); resolve(); }, () => { clearTimeout(timer); resolve(); });
-      });
+    } finally {
+      // A loop that ends or fails never keeps a place in line (a failed loop restarts at the back).
+      stopWaiting();
     }
     const final = await this.#state(runId);
     if (final && final.status !== "running" && !final.delivered) {
