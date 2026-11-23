@@ -109,6 +109,7 @@ export function DeferredChatView(props: {
   panelState: SplitViewPanePanelState;
   onToggleDiff: () => void;
   onToggleRightDock?: () => void;
+  rightDockToggleOpen?: boolean;
   onOpenThreadFeed?: () => void;
   emptyLandingContent?: ReactNode;
   emptyLandingProjectName?: string;
@@ -171,6 +172,7 @@ export function DeferredChatView(props: {
       panelState={props.panelState}
       onToggleDiffPanel={props.onToggleDiff}
       {...(props.onToggleRightDock ? { onToggleRightDock: props.onToggleRightDock } : {})}
+      {...(props.rightDockToggleOpen !== undefined ? { rightDockToggleOpen: props.rightDockToggleOpen } : {})}
       {...(props.onOpenThreadFeed ? { onOpenThreadFeed: props.onOpenThreadFeed } : {})}
       {...(props.emptyLandingContent !== undefined
         ? { emptyLandingContent: props.emptyLandingContent }
