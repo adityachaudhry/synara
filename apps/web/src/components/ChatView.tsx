@@ -334,7 +334,8 @@ import {
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
   LoaderCircleIcon,
-  PanelRightCloseIcon,
+  PanelCollapseIcon,
+  PanelExpandIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
 } from "~/lib/icons";
@@ -1142,6 +1143,8 @@ interface ChatViewProps {
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
   onToggleRightDock?: () => void;
+  /** Whether the side panel the toggle shows or hides is open (the hosted feed's own dock). */
+  rightDockToggleOpen?: boolean;
   onOpenThreadFeed?: () => void;
   emptyLandingContent?: ReactNode;
   emptyLandingProjectName?: string;
@@ -1212,6 +1215,7 @@ export default function ChatView({
   panelState,
   onToggleDiffPanel,
   onToggleRightDock,
+  rightDockToggleOpen,
   onOpenThreadFeed,
   emptyLandingContent,
   emptyLandingProjectName,
@@ -12164,7 +12168,13 @@ export default function ChatView({
           onClick={onToggleRightDock}
           className="absolute right-3 top-3 z-20 !size-7 rounded-lg !bg-[var(--background)] text-[var(--brand)] shadow-sm hover:!bg-[var(--background)] [&_svg,&_[data-slot=central-icon]]:!opacity-100"
         >
-          <PanelRightCloseIcon className="size-4" />
+          {/* The side panel's own Expand / Restore icons: with the panel open, this widens
+              the chat (expand); with it closed, it brings the split back (restore). */}
+          {(rightDockToggleOpen ?? rightDockOpen) ? (
+            <PanelExpandIcon className="size-4" />
+          ) : (
+            <PanelCollapseIcon className="size-4" />
+          )}
         </Button>
       ) : null}
       {hostedThreadFeed ? null : (

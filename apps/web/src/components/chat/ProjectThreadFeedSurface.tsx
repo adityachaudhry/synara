@@ -544,6 +544,7 @@ export function ProjectThreadFeedSurface({
             panelState={FEED_CHAT_PANEL_STATE}
             onToggleDiff={noopChatSurfaceAction}
             onToggleRightDock={() => toggleDock(!dockState.open)}
+            rightDockToggleOpen={dockState.open}
             onToggleBrowser={noopChatSurfaceAction}
             onOpenBrowserUrl={noopChatSurfaceAction}
             onOpenTurnDiff={noopChatSurfaceAction}
