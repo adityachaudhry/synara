@@ -12158,7 +12158,9 @@ export default function ChatView({
           isDragOverComposer ? "opacity-100" : "opacity-0",
         )}
       />
-      {hostedThreadFeed && onToggleRightDock ? (
+      {/* Hidden while the host has the side panel expanded over the chat: the panel's own
+          Restore brings the chat back, and the button would float over the panel. */}
+      {hostedThreadFeed && onToggleRightDock && hostSidebar?.rightDockExpanded !== true ? (
         <Button
           type="button"
           variant="ghost"
