@@ -5,24 +5,29 @@
  *
  * - `durable-harness`: the Pi Durable Harness (VACUUM INTO in a low-priority child process, or an
  *   online backup through the controller's own connection when the Harness is open in exclusive
- *   locking mode; onto the container's own disk when it has room), 2 min after start, every 10 min
- *   when it changed (hourly when it did not), and at shutdown (scheduled by the engine);
+ *   locking mode; onto the container's own disk when it has room), 2 min after start, then every
+ *   10 min (hourly on weekdays 08:00–19:00 New York time) when it changed, hourly when it did not,
+ *   and at shutdown (`startHarnessBackups`, started by the engine);
  * - `state`: Synara's `state.sqlite` (SQLite online backup through its own connection, into the
  *   container's own disk when it has room), hourly;
  * - `attachments`: the chat attachments directory (tar.gz), hourly when it changed;
  * - `drafts`: the controller copies of thread Outbox files and checkout drafts (tar.gz), hourly
  *   when they changed.
  *
+ * Only one of these runs at a time (`inBackupSlot`): a state backup overlapping a Harness backup
+ * stalled the event loop up to 18 s in production (2026-11-22).
+ *
  * A missing or corrupt Harness is restored on open from the newest environment-prefixed snapshot,
  * falling back to the pre-environment key `controller-backups/durable-harness/`.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, renameSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, rm, stat, statfs } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, stat, statfs } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { pipeline } from "node:stream/promises";
 import { backup as sqliteBackup, DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
@@ -52,6 +57,39 @@ export const describe = (cause: unknown): string => {
 };
 
 const log = (event: string, detail: Record<string, unknown>) => console.info(JSON.stringify({ event, ...detail }));
+
+// One backup at a time, of any kind. Each copies a database or a directory off the same NFS share
+// the controller serves from; two at once (the hourly state backup inside a 134 s Harness backup)
+// stalled the event loop up to 18 s in production on 2026-11-22.
+let backupQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Runs one backup once the previous one has finished, and logs how long it waited and ran and the
+ * longest event-loop delay meanwhile (a 20 ms-resolution histogram, enabled only for the backup).
+ */
+async function inBackupSlot<T>(kind: string, run: () => Promise<T>): Promise<T> {
+  const queuedAt = Date.now();
+  const previous = backupQueue;
+  let release!: () => void;
+  backupQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  const started = Date.now();
+  const loop = monitorEventLoopDelay({ resolution: 20 });
+  loop.enable();
+  let outcome = "failed";
+  try {
+    const result = await run();
+    outcome = "done";
+    return result;
+  } finally {
+    loop.disable();
+    release();
+    log("controller.backup.timing", {
+      kind, outcome, waitedMs: started - queuedAt, durationMs: Date.now() - started,
+      maxEventLoopDelayMs: Math.round(loop.max / 1_000_000),
+    });
+  }
+}
 
 async function sha256File(file: string) {
   const hash = createHash("sha256");
@@ -161,10 +199,16 @@ async function vacuumInto(source: string, target: string): Promise<void> {
 // meanwhile on the same connection are carried into the copy. state.sqlite is backed up the same
 // way (backupOpenDatabase). The copy is then switched to rollback-journal mode, so the uploaded
 // file has the same shape as a VACUUM INTO copy for restore.
-const HARNESS_BACKUP_PAGES_PER_STEP = 256;
+//
+// A step holds the connection, so a statement on the event loop waits for the step in progress:
+// 64 pages (256 KiB at 4 KiB pages) keeps that wait short on NFS, where 256 did not (stall profiles
+// showed the main thread in pi-durable's SQLite `exec`, 2026-11-22). Node already runs the event
+// loop between steps (each step is a thread-pool job; setImmediate callbacks run between them), so
+// no explicit yield is needed.
+const ONLINE_BACKUP_PAGES_PER_STEP = 64;
 
 async function onlineBackup(database: DatabaseSync, target: string): Promise<void> {
-  await sqliteBackup(database, target, { rate: HARNESS_BACKUP_PAGES_PER_STEP });
+  await sqliteBackup(database, target, { rate: ONLINE_BACKUP_PAGES_PER_STEP });
   const copy = new DatabaseSync(target);
   try {
     copy.exec("PRAGMA journal_mode = DELETE");
@@ -232,23 +276,76 @@ export async function backupHarness(
   }
   harnessBackupRunning = true;
   try {
-    return await backupHarnessOnce(storagePath, options);
+    // Taken before the copy (and before waiting for another backup): a write meanwhile changes the
+    // files, so the next pass copies again.
+    const fingerprint = await harnessFingerprint(storagePath);
+    if (
+      !options.force &&
+      fingerprint === lastHarnessFingerprint &&
+      Date.now() - lastHarnessBackupAt < UNCHANGED_HARNESS_BACKUP_INTERVAL_MS
+    ) {
+      return undefined;
+    }
+    return await inBackupSlot(DURABLE_BACKUP_NAME, () => backupHarnessOnce(storagePath, fingerprint));
   } finally {
     harnessBackupRunning = false;
   }
 }
 
-async function backupHarnessOnce(storagePath: string, options: { readonly force?: boolean }): Promise<string | undefined> {
+const minutesFromEnv = (name: string, fallback: number) => {
+  const value = Number(process.env[name]?.trim());
+  return (Number.isFinite(value) && value > 0 ? value : fallback) * 60_000;
+};
+
+const NEW_YORK_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", weekday: "short", hour: "numeric", hourCycle: "h23",
+});
+
+/** Weekdays 08:00–19:00 in New York, when the team chats and runs diligence. */
+function businessHours(now: Date) {
+  const parts = Object.fromEntries(NEW_YORK_CLOCK.formatToParts(now).map((part) => [part.type, part.value]));
+  const hour = Number(parts.hour);
+  return parts.weekday !== "Sat" && parts.weekday !== "Sun" && hour >= 8 && hour < 19;
+}
+
+/**
+ * Schedules Harness backups: the first 2 min after start, then every
+ * `SYNARA_HARNESS_BACKUP_INTERVAL_MINUTES` (default 10), but at most every
+ * `SYNARA_HARNESS_BACKUP_BUSINESS_INTERVAL_MINUTES` (default 60) on weekdays 08:00–19:00 New York
+ * time: a multi-GB copy competes with chat and diligence for the share and the Harness connection.
+ * Returns a stop function; the engine takes the shutdown backup itself.
+ */
+export function startHarnessBackups(storagePath: string): () => void {
+  const quietInterval = minutesFromEnv("SYNARA_HARNESS_BACKUP_INTERVAL_MINUTES", 10);
+  const busyInterval = minutesFromEnv("SYNARA_HARNESS_BACKUP_BUSINESS_INTERVAL_MINUTES", 60);
+  let lastPassAt = 0;
+  let running = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  // Checked every minute, so the cadence follows the clock across 08:00 and 19:00.
+  const tick = () => {
+    const now = new Date();
+    if (running || now.getTime() - lastPassAt < (businessHours(now) ? busyInterval : quietInterval)) return;
+    lastPassAt = now.getTime();
+    running = true;
+    void backupHarness(storagePath)
+      .catch((cause) => console.warn(JSON.stringify({ event: "durable.backup.failed", message: describe(cause) })))
+      .finally(() => { running = false; });
+  };
+  const first = setTimeout(() => {
+    tick();
+    timer = setInterval(tick, 60_000);
+    timer.unref();
+  }, 2 * 60_000);
+  first.unref();
+  log("durable.backup.schedule", { intervalMinutes: quietInterval / 60_000, businessHoursIntervalMinutes: busyInterval / 60_000 });
+  return () => {
+    clearTimeout(first);
+    clearInterval(timer);
+  };
+}
+
+async function backupHarnessOnce(storagePath: string, fingerprint: string): Promise<string | undefined> {
   const started = Date.now();
-  // Taken before the copy: a write during it changes the files, so the next pass copies again.
-  const fingerprint = await harnessFingerprint(storagePath);
-  if (
-    !options.force &&
-    fingerprint === lastHarnessFingerprint &&
-    Date.now() - lastHarnessBackupAt < UNCHANGED_HARNESS_BACKUP_INTERVAL_MS
-  ) {
-    return undefined;
-  }
   const snapshot = await harnessSnapshotPath(storagePath);
   try {
     const copyStarted = Date.now();
@@ -342,16 +439,29 @@ export interface ControllerBackupPaths {
 const STATE_FIRST_DELAY_MS = 5 * 60_000;
 const STATE_INTERVAL_MS = 60 * 60_000;
 
-/** Paths, sizes and modification times: unchanged means the last archive is still current. */
+/**
+ * Paths, sizes and modification times: unchanged means the last archive is still current.
+ *
+ * Walks one directory at a time with names-only `readdir` and an awaited `lstat` per entry. On NFS
+ * the entries carry no type, and `readdir({ recursive: true, withFileTypes: true })` filled it in
+ * with a synchronous lstat per entry on the event loop (stall profiles, 2026-11-22).
+ */
 async function directoryFingerprint(dir: string): Promise<string | undefined> {
   if (!existsSync(dir)) return undefined;
-  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
   const files: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const file = path.join(entry.parentPath, entry.name);
-    const info = await stat(file).catch(() => undefined);
-    if (info) files.push(`${path.relative(dir, file)}\u0000${info.size}\u0000${info.mtimeMs}`);
+  const pending = [dir];
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    // A directory removed during the walk is skipped, as a removed file is.
+    const names = await readdir(current).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code === "ENOENT" && current !== dir) return [];
+      throw cause;
+    });
+    for (const name of names) {
+      const file = path.join(current, name);
+      const info = await lstat(file).catch(() => undefined);
+      if (info?.isDirectory()) pending.push(file);
+      else if (info?.isFile()) files.push(`${path.relative(dir, file)}\u0000${info.size}\u0000${info.mtimeMs}`);
+    }
   }
   if (files.length === 0) return undefined;
   return createHash("sha256").update(files.toSorted().join("\n")).digest("hex");
@@ -412,7 +522,7 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
       // The same module the persistence layer loads under Node, so it sees the open connection.
       const { backupOpenDatabase } = await import("../persistence/NodeSqliteClient.ts");
       const started = Date.now();
-      await backupOpenDatabase(paths.stateDbPath, snapshot);
+      await backupOpenDatabase(paths.stateDbPath, snapshot, ONLINE_BACKUP_PAGES_PER_STEP);
       log("controller.backup.snapshot", {
         kind: "state", bytes: size, durationMs: Date.now() - started, disk: dir === paths.workDir ? "volume" : "local",
       });
@@ -453,7 +563,8 @@ export function startControllerBackups(paths: ControllerBackupPaths, options: { 
         ["drafts", () => backupDirectory("drafts", paths.draftsDir)],
       ] as const) {
         if (stopped) break;
-        await run().catch((cause: unknown) => console.warn(JSON.stringify({ event: "controller.backup.failed", kind, message: describe(cause) })));
+        await inBackupSlot(kind, run)
+          .catch((cause: unknown) => console.warn(JSON.stringify({ event: "controller.backup.failed", kind, message: describe(cause) })));
       }
     } finally {
       running = false;
