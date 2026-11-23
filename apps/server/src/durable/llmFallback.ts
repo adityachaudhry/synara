@@ -119,6 +119,59 @@ export function classifyAnthropicFailure(detail: string | undefined): ProviderFa
   return undefined;
 }
 
+export interface TransientFailure extends ProviderFailure {
+  /** How long the provider asked to wait, when its error says. */
+  readonly retryAfterMs?: number;
+}
+
+// OpenAI errors as Pi records them: "OpenAI API error (429): 429 Rate limit reached ...", a stream
+// error "Error Code server_error: ...", or a failed response "rate_limit_exceeded: ...". Pi prefixes
+// "Server requested 90s retry delay (max: 60s). " when a retry-after was longer than it waits.
+const API_ERROR_STATUS = /^\s*[\w .-]*API error \((\d{3})\):\s*/u;
+const SERVER_RETRY_DELAY = /^\s*Server requested (\d+)s retry delay[^.]*\.\s*/u;
+const OPENAI_TRANSIENT_CODES: Readonly<Record<string, FallbackReason>> = {
+  rate_limit_exceeded: "rate_limit",
+  server_error: "server_error",
+  server_is_overloaded: "overloaded",
+  service_unavailable: "server_error",
+};
+
+/** "Please try again in 6.5s" / "in 820ms" / "in 1m30s" (OpenAI), or a `retry-after` value in seconds. */
+function retryAfterMsOf(detail: string): number | undefined {
+  const again = detail.match(/try again in ([\d.hms]+)/iu)?.[1]?.replace(/\.$/u, "");
+  if (again) {
+    if (/^\d+(?:\.\d+)?ms$/u.test(again)) return Number.parseFloat(again);
+    const parts = again.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/u);
+    if (parts?.[0]) return ((Number(parts[1] ?? 0) * 60 + Number(parts[2] ?? 0)) * 60 + Number(parts[3] ?? 0)) * 1000;
+  }
+  const seconds = detail.match(/retry[-_ ]after["':\s]+(\d+(?:\.\d+)?)/iu)?.[1];
+  return seconds ? Number(seconds) * 1000 : undefined;
+}
+
+/**
+ * Whether a failed turn may succeed if tried again later, from Anthropic or OpenAI: a rate limit,
+ * an overload, another 5xx, a timeout or a connection error. Auth, billing and every other 4xx are
+ * not transient.
+ */
+export function classifyTransientFailure(detail: string | undefined): TransientFailure | undefined {
+  if (!detail) return undefined;
+  let text = detail;
+  let retryAfterMs = retryAfterMsOf(detail);
+  const requested = text.match(SERVER_RETRY_DELAY);
+  if (requested) {
+    retryAfterMs = Number(requested[1]) * 1000;
+    text = text.slice(requested[0].length);
+  }
+  // "OpenAI API error (429): ..." reads as Anthropic's "429 ...".
+  const apiError = text.match(API_ERROR_STATUS);
+  if (apiError) text = `${apiError[1]} ${text.slice(apiError[0].length)}`;
+  const code = text.match(/^\s*(?:Error Code\s+)?([a-z_]+):/u)?.[1];
+  const reason = code ? OPENAI_TRANSIENT_CODES[code] : undefined;
+  const failure = classifyAnthropicFailure(text) ?? (reason ? { reason, status: null } : undefined);
+  if (!failure || failure.reason === "auth" || failure.reason === "billing") return undefined;
+  return retryAfterMs === undefined ? failure : { ...failure, retryAfterMs };
+}
+
 /** After an auth or billing failure, new turns go straight to OpenAI for 15 minutes. */
 class Circuit {
   #open: (ProviderFailure & { readonly until: number }) | undefined;
@@ -184,8 +237,10 @@ export function logFallback(
   });
 }
 
-/** What the product shows next to a switch ("model.rerouted", the run's live log). */
-export function describeFailure(failure: ProviderFailure) {
+const PROVIDER_NAMES: Readonly<Record<string, string>> = { anthropic: "Anthropic", openai: "OpenAI" };
+
+/** What the product shows next to a switch or a retry ("model.rerouted", the run's live log). */
+export function describeFailure(failure: ProviderFailure, provider = "anthropic") {
   const what: Record<FallbackReason, string> = {
     auth: "rejected the API key",
     billing: "refused for billing or spend limits",
@@ -195,7 +250,7 @@ export function describeFailure(failure: ProviderFailure) {
     timeout: "timed out",
     connection: "could not be reached",
   };
-  return `Anthropic ${what[failure.reason]}${failure.status ? ` (${failure.status})` : ""}`;
+  return `${PROVIDER_NAMES[provider] ?? provider} ${what[failure.reason]}${failure.status ? ` (${failure.status})` : ""}`;
 }
 
 export const CONTINUE_PROMPT =

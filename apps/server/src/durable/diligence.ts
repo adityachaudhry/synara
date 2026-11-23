@@ -33,6 +33,7 @@ import { sandboxEvents } from "../controllerMetrics.ts";
 import {
   anthropicCircuit,
   classifyAnthropicFailure,
+  classifyTransientFailure,
   CONTINUE_PROMPT,
   describeFailure,
   fallbackModelFor,
@@ -104,6 +105,8 @@ type StepRecord = {
   model?: string;
   /** The step's agent was announced in the run thread. */
   shown?: boolean;
+  /** When each retry turn (by request ID) may start, so a step resumed after a restart does not wait again. */
+  retryAt?: Record<string, string>;
 };
 type RunState = {
   status: "running" | "succeeded" | "failed" | "canceled";
@@ -262,12 +265,17 @@ class StepSlots {
   }
 }
 
-/** A step turn that settled without an answer; `detail` carries the provider's error text. */
+/** A step turn that settled without an answer; `detail` carries the provider's error text, `reason` Pi's (`model_error`, `aborted`, ...). */
 class StepUnanswered extends Error {
-  constructor(message: string, readonly detail: string) {
+  constructor(message: string, readonly detail: string, readonly reason: string) {
     super(message);
   }
 }
+
+// A transient provider failure that outlasted Pi's own retries (3, from 2 s) gets the step's turn
+// tried again up to three more times, after these waits or the provider's retry-after.
+const STEP_RETRY_WAITS_MS = [30_000, 60_000, 120_000];
+const MAX_RETRY_AFTER_MS = 10 * 60_000;
 
 // Pi reports a refusal with Anthropic's explanation ("...reduce refusals...") and rejects a fallback
 // that arrives after output started ("unsupported mid-output model fallback").
@@ -352,6 +360,10 @@ export class DiligenceRunner {
   readonly #pendingEvents = new Map<string, Array<{ kind: string; data: Record<string, unknown> }>>();
   #flushTimer: ReturnType<typeof setInterval> | undefined;
   readonly #slots = new StepSlots(positiveInteger(process.env.SYNARA_DILIGENCE_MAX_ACTIVE_STEPS, 18));
+  /** Ends each step's wait before a retry turn, by run; a stop ends them at once. */
+  readonly #retryWaits = new Map<string, Set<() => void>>();
+  /** Runs stopped in this process, marked before any await so no retry wait starts after the stop. */
+  readonly #stopping = new Set<string>();
 
   constructor(engine: DurablePiEngine, sandboxes: DiligenceSandboxes) {
     this.#engine = engine;
@@ -647,6 +659,8 @@ export class DiligenceRunner {
   }
 
   async cancel(runId: string) {
+    this.#stopping.add(runId);
+    for (const wake of [...(this.#retryWaits.get(runId) ?? [])]) wake();
     const first = (await this.#state(runId))?.cancelRequested !== true;
     await this.#update(runId, (state) => { state.cancelRequested = true; });
     if (first) {
@@ -897,6 +911,7 @@ export class DiligenceRunner {
         const tried = new Set([model.modelId]);
         let input = content;
         let id = requestId;
+        let retries = 0;
         for (;;) {
           try {
             return await this.#submit(conversation, input, id, step.id, runId, key);
@@ -905,25 +920,51 @@ export class DiligenceRunner {
             const failure = model.provider === "anthropic" ? classifyAnthropicFailure(cause.detail) : undefined;
             if (failure) {
               anthropicCircuit.trip(failure, feature);
-              if (!(await toOpenAi(failure))) throw cause;
-              input = CONTINUE_PROMPT;
-              id = `${requestId}:fallback:openai`;
-              continue;
+              if (await toOpenAi(failure)) {
+                input = CONTINUE_PROMPT;
+                id = `${requestId}:fallback:openai`;
+                continue;
+              }
+            } else {
+              const next = REFUSAL_FALLBACK_MODELS.find((candidate) => !tried.has(candidate));
+              if (REFUSAL_DETAIL.test(cause.detail) && model.provider === "anthropic" && next !== undefined) {
+                tried.add(next);
+                log("step.refusal-fallback", { runId, step: step.id, from: model.modelId, to: next, detail: cause.detail.slice(0, 300) });
+                this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
+                const from = model;
+                await useModel(modelRef(next));
+                await this.#showModel(runId, step, from, model, `${from.modelId} declined the request`, key, working);
+                // While Anthropic is unusable, the refusal chain's next model is too.
+                const stillOpen = anthropicCircuit.current();
+                if (stillOpen) await toOpenAi(stillOpen);
+                input = CONTINUE_PROMPT;
+                id = `${requestId}:fallback:${next}`;
+                continue;
+              }
             }
-            const next = REFUSAL_FALLBACK_MODELS.find((candidate) => !tried.has(candidate));
-            const refused = REFUSAL_DETAIL.test(cause.detail);
-            if (!refused || model.provider !== "anthropic" || next === undefined) throw cause;
-            tried.add(next);
-            log("step.refusal-fallback", { runId, step: step.id, from: model.modelId, to: next, detail: cause.detail.slice(0, 300) });
-            this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
-            const from = model;
-            await useModel(modelRef(next));
-            await this.#showModel(runId, step, from, model, `${from.modelId} declined the request`, key, working);
-            // While Anthropic is unusable, the refusal chain's next model is too.
-            const stillOpen = anthropicCircuit.current();
-            if (stillOpen) await toOpenAi(stillOpen);
+            // A transient failure no fallback took (an OpenAI step, a fallback turn, or Anthropic without an
+            // OpenAI model): the turn is tried again after a wait, under a new request ID so the failed
+            // request is not replayed. Auth, billing and other 4xx failures end the step as before.
+            const transient = cause.reason === "model_error" ? classifyTransientFailure(cause.detail) : undefined;
+            if (!transient || retries >= STEP_RETRY_WAITS_MS.length) throw cause;
+            retries += 1;
+            id = `${requestId}:retry:${retries}`;
+            const wait = Math.min(Math.max(transient.retryAfterMs ?? STEP_RETRY_WAITS_MS[retries - 1]!, 1000), MAX_RETRY_AFTER_MS);
+            const { until, resumed } = await this.#retryDeadline(runId, step.id, id, wait);
+            log("step.retry", {
+              runId, step: step.id, attempt: retries, of: STEP_RETRY_WAITS_MS.length, reason: transient.reason, status: transient.status,
+              waitMs: Math.max(0, until - Date.now()), retryAfter: transient.retryAfterMs !== undefined, resumed, model: refText(model), request: id,
+              detail: cause.detail.slice(0, 300),
+            });
+            if (!resumed) {
+              this.#event(runId, "log", {
+                line: `${step.id}: ${describeFailure(transient, model.provider)}; trying again in ${Math.round(wait / 1000)} s (retry ${retries} of ${STEP_RETRY_WAITS_MS.length})`,
+              });
+            }
+            await this.#sleepUntil(runId, until);
+            // A stop during the wait ends the step instead.
+            if (this.#stopping.has(runId) || (await this.#state(runId))?.cancelRequested) throw cause;
             input = CONTINUE_PROMPT;
-            id = `${requestId}:fallback:${next}`;
           }
         }
       };
@@ -990,6 +1031,36 @@ export class DiligenceRunner {
     }
   }
 
+  /**
+   * When a retry turn may start. It is kept in the step's state under the retry's request ID, so a
+   * step resumed after a restart replays its earlier retries without waiting for them again.
+   */
+  async #retryDeadline(runId: string, stepId: string, retryId: string, waitMs: number) {
+    const recorded = (await this.#state(runId))?.steps[stepId]?.retryAt?.[retryId];
+    if (recorded) return { until: Date.parse(recorded), resumed: true };
+    const until = Date.now() + waitMs;
+    await this.#update(runId, (draft) => { (draft.steps[stepId]!.retryAt ??= {})[retryId] = new Date(until).toISOString(); });
+    return { until, resumed: false };
+  }
+
+  /** Sleeps until `until`; a stop on the run ends the sleep at once. */
+  async #sleepUntil(runId: string, until: number) {
+    const remaining = until - Date.now();
+    if (!(remaining > 0) || this.#stopping.has(runId)) return;
+    const waits = this.#retryWaits.get(runId) ?? new Set<() => void>();
+    this.#retryWaits.set(runId, waits);
+    await new Promise<void>((resolve) => {
+      const end = () => {
+        clearTimeout(timer);
+        waits.delete(end);
+        if (waits.size === 0) this.#retryWaits.delete(runId);
+        resolve();
+      };
+      const timer = setTimeout(end, remaining);
+      waits.add(end);
+    });
+  }
+
   async #conversationFor(request: DiligenceRequest, step: DiligenceStep) {
     const runId = request.runId;
     const state = await this.#state(runId);
@@ -1026,7 +1097,7 @@ export class DiligenceRunner {
       const settled = await submission.wait(ctx);
       if (settled.status !== "done") {
         const detail = typeof settled.detail === "string" ? settled.detail : settled.detail === undefined ? "" : JSON.stringify(settled.detail);
-        throw new StepUnanswered(`Step ${stepId} ended without an answer (${settled.reason}).`, detail);
+        throw new StepUnanswered(`Step ${stepId} ended without an answer (${settled.reason}).`, detail, settled.reason);
       }
     } finally {
       await stream.stop();
@@ -1230,6 +1301,7 @@ export class DiligenceRunner {
       draft.completedAt = new Date().toISOString();
     });
     log("run.finished", { runId: request.runId, status });
+    this.#stopping.delete(request.runId);
     const state = await this.#state(request.runId);
     // The thread's closing note follows Glasswing's verdict, so "done" there means the
     // report is published (and the workspace banners clear at the same time).
