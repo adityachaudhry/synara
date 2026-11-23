@@ -263,10 +263,21 @@ export function RightDock(props: RightDockProps) {
       if (child !== wrapper) (child as HTMLElement).inert = inert;
     }
   };
-  const applyDockExpanded = (next: boolean) => {
+  // What the dock shows now, for a retry scheduled before the next render.
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const applyDockExpanded = (next: boolean, attempt = 0) => {
     if (next) {
       const elements = dockElements();
-      if (!elements) return;
+      if (!elements) {
+        // The panel's elements can mount a frame or two after it is asked to expand.
+        if (attempt < 10) {
+          window.requestAnimationFrame(() => {
+            if (expandedRef.current) applyDockExpanded(true, attempt + 1);
+          });
+        }
+        return;
+      }
       const { container, wrapper, shell } = elements;
       expandedElementsRef.current = elements;
       window.clearTimeout(restoreTimerRef.current);
@@ -315,19 +326,22 @@ export function RightDock(props: RightDockProps) {
   };
   // Follow the host. The first expansion of an opening dock is applied before paint, so a
   // workspace that opens on its panel never shows the split first; later ones slide.
-  const appliedHostExpandedRef = useRef(false);
+  // Compared with what the dock shows, not with what it last applied: a new motion key
+  // (the feed's project resolving on load, another thread) restores the split, and the
+  // dock must expand again while the host still holds it expanded. Comparing with the
+  // last applied value left the split showing while the host said expanded, and the
+  // panel's Expand then asked for what the host already had, so nothing happened.
   const shownSplitRef = useRef(false);
   useLayoutEffect(() => {
     if (!hostControlsExpanded) return;
     const next = hostExpanded === true && props.state.open;
-    if (next === appliedHostExpandedRef.current) {
+    if (next === expanded) {
       if (props.state.open && !next) shownSplitRef.current = true;
       return;
     }
-    appliedHostExpandedRef.current = next;
     setDockExpandedRef.current(next, next && !shownSplitRef.current);
     if (!next && props.state.open) shownSplitRef.current = true;
-  }, [hostControlsExpanded, hostExpanded, props.state.open]);
+  }, [hostControlsExpanded, hostExpanded, props.state.open, expanded]);
   // A closed dock, another thread or an unmount restores the split; a host holding the
   // state hears that a dock it had expanded closed.
   const wasOpenRef = useRef(props.state.open);
