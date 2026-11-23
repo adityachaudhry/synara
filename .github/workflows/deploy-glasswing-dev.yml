@@ -39,7 +39,10 @@ env:
   # Where this environment's controller runs: railway (default) or azure.
   DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET_DEV || 'railway' }}
   AZURE_RESOURCE_GROUP: rg-glasswing-dev
-  AZURE_CONTAINER_APP: synara-controller
+  # Dev's container app joins production's Container Apps environment, where names must be unique,
+  # so it is dev-synara-controller (production keeps synara-controller). Every Azure step below, the
+  # revision swap, worker preparation and pool cleanup, takes the name from here.
+  AZURE_CONTAINER_APP: dev-synara-controller
   RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID_DEV || '2fb578c6-304e-4a97-abd4-38b3897d9030' }}
   RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 

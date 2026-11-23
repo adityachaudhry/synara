@@ -19,7 +19,7 @@ import {
 
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { useSynaraHostSidebar } from "../../hostSidebar";
+import { usePinnedPaneRequest, useSynaraHostSidebar } from "../../hostSidebar";
 import { useReportHostViewRendered } from "../../hostReadiness";
 import { readNativeApi } from "../../nativeApi";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
@@ -282,6 +282,11 @@ export function SingleChatSurface(props: {
     openPane(props.threadId, { kind: "explorer" });
     if (hasPinnedPane && pinnedPaneDefaultActive) openPane(props.threadId, { kind: "host", paneId: HOST_PINNED_PANE_ID });
   }, [hasPinnedPane, openFilesPaneOnMount, openPane, pinnedPaneDefaultActive, props.threadId, sharedDockKey]);
+  usePinnedPaneRequest(
+    useCallback(() => {
+      if (hasPinnedPane) openPane(props.threadId, { kind: "host", paneId: HOST_PINNED_PANE_ID });
+    }, [hasPinnedPane, openPane, props.threadId]),
+  );
   // The host's pinned pane leads the tab strip.
   const displayDockState = hasPinnedPane ? withPinnedHostPane(dockState, HOST_PINNED_PANE_ID) : dockState;
   const pinnedPaneId = hasPinnedPane ? displayDockState.panes[0]?.id : undefined;

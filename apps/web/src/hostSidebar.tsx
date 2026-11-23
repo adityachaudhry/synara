@@ -1,5 +1,5 @@
 import type { OrchestrationMessageAuthor } from "@synara/contracts";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 
 export type SynaraHostPersistenceRequest =
   | {
@@ -110,6 +110,10 @@ export interface SynaraHostSidebar {
     readonly defaultActive?: boolean;
     readonly render: () => ReactNode;
   };
+  /** A chat link was clicked: return true when the host showed it in place (no new tab). */
+  readonly openLink?: (href: string) => boolean;
+  /** Bump to bring the pinned pane forward: the panel opens on it. */
+  readonly pinnedPaneRequest?: number;
   readonly threadFeedHeader?: ReactNode;
   /** Shown above the composer on the project feed (not in threads), e.g. what needs the team. */
   readonly threadFeedComposerAccessory?: ReactNode;
@@ -138,6 +142,17 @@ export function SynaraHostSidebarProvider({
 
 export function useSynaraHostSidebar(): SynaraHostSidebar | null {
   return useContext(HostSidebarContext);
+}
+
+/** Calls `show` each time the host bumps `pinnedPaneRequest` after this surface mounted. */
+export function usePinnedPaneRequest(show: () => void) {
+  const request = useSynaraHostSidebar()?.pinnedPaneRequest;
+  const seen = useRef(request);
+  useEffect(() => {
+    if (request === seen.current) return;
+    seen.current = request;
+    if (request !== undefined) show();
+  }, [request, show]);
 }
 
 export function resolveHostMessageAuthorLabel(
