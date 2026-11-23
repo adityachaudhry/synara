@@ -33,6 +33,7 @@ import { sandboxEvents } from "../controllerMetrics.ts";
 import {
   anthropicCircuit,
   classifyAnthropicFailure,
+  classifyTransientFailure,
   CONTINUE_PROMPT,
   describeFailure,
   fallbackModelFor,
@@ -104,6 +105,8 @@ type StepRecord = {
   model?: string;
   /** The step's agent was announced in the run thread. */
   shown?: boolean;
+  /** When each retry turn (by request ID) may start, so a step resumed after a restart does not wait again. */
+  retryAt?: Record<string, string>;
 };
 type RunState = {
   status: "running" | "succeeded" | "failed" | "canceled";
@@ -206,12 +209,73 @@ const modelRef = (model: string) => {
 
 const log = (event: string, detail: Record<string, unknown>) => console.info(`[diligence] ${JSON.stringify({ event, ...detail })}`);
 
-/** A step turn that settled without an answer; `detail` carries the provider's error text. */
+const positiveInteger = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value?.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+/**
+ * A cap on step conversations running at once across all runs, on top of each plan's
+ * `maxConcurrency`: every step shares the controller's one event loop with chat, which this never
+ * limits. Steps that wait get their slot in the order they asked. A step keeps its slot through its
+ * gate, repair, recovery and retry turns, until it settles.
+ */
+class StepSlots {
+  readonly #held = new Set<string>();
+  /** Waiting keys in arrival order, each with what to call when its slot comes. */
+  readonly #queue = new Map<string, () => void>();
+
+  constructor(readonly limit: number) {}
+
+  get active() {
+    return this.#held.size;
+  }
+
+  holds(key: string) {
+    return this.#held.has(key);
+  }
+
+  /** A step that was already running when the controller restarted: it counts even above the cap. */
+  hold(key: string) {
+    this.#queue.delete(key);
+    this.#held.add(key);
+  }
+
+  /** True when `key` holds a slot; otherwise it keeps its place in line and `granted` runs when its turn comes. */
+  request(key: string, granted: () => void) {
+    if (!this.#held.has(key) && !this.#queue.has(key)) this.#queue.set(key, granted);
+    this.#grant();
+    return this.#held.has(key);
+  }
+
+  /** Frees the slot, or the place in line. */
+  release(key: string) {
+    this.#queue.delete(key);
+    this.#held.delete(key);
+    this.#grant();
+  }
+
+  #grant() {
+    for (const [key, granted] of this.#queue) {
+      if (this.#held.size >= this.limit) return;
+      this.#queue.delete(key);
+      this.#held.add(key);
+      granted();
+    }
+  }
+}
+
+/** A step turn that settled without an answer; `detail` carries the provider's error text, `reason` Pi's (`model_error`, `aborted`, ...). */
 class StepUnanswered extends Error {
-  constructor(message: string, readonly detail: string) {
+  constructor(message: string, readonly detail: string, readonly reason: string) {
     super(message);
   }
 }
+
+// A transient provider failure that outlasted Pi's own retries (3, from 2 s) gets the step's turn
+// tried again up to three more times, after these waits or the provider's retry-after.
+const STEP_RETRY_WAITS_MS = [30_000, 60_000, 120_000];
+const MAX_RETRY_AFTER_MS = 10 * 60_000;
 
 // Pi reports a refusal with Anthropic's explanation ("...reduce refusals...") and rejects a fallback
 // that arrives after output started ("unsupported mid-output model fallback").
@@ -295,6 +359,11 @@ export class DiligenceRunner {
   readonly #captured = new Map<string, Map<string, string>>();
   readonly #pendingEvents = new Map<string, Array<{ kind: string; data: Record<string, unknown> }>>();
   #flushTimer: ReturnType<typeof setInterval> | undefined;
+  readonly #slots = new StepSlots(positiveInteger(process.env.SYNARA_DILIGENCE_MAX_ACTIVE_STEPS, 18));
+  /** Ends each step's wait before a retry turn, by run; a stop ends them at once. */
+  readonly #retryWaits = new Map<string, Set<() => void>>();
+  /** Runs stopped in this process, marked before any await so no retry wait starts after the stop. */
+  readonly #stopping = new Set<string>();
 
   constructor(engine: DurablePiEngine, sandboxes: DiligenceSandboxes) {
     this.#engine = engine;
@@ -302,6 +371,7 @@ export class DiligenceRunner {
     this.#extensions = [engine.toolsExtension, engine.researchExtension];
     this.#flushTimer = setInterval(() => void this.#flushEvents(), 2000);
     this.#flushTimer.unref();
+    log("runner.config", { maxActiveSteps: this.#slots.limit });
   }
 
   get #harness() {
@@ -589,6 +659,8 @@ export class DiligenceRunner {
   }
 
   async cancel(runId: string) {
+    this.#stopping.add(runId);
+    for (const wake of [...(this.#retryWaits.get(runId) ?? [])]) wake();
     const first = (await this.#state(runId))?.cancelRequested !== true;
     await this.#update(runId, (state) => { state.cancelRequested = true; });
     if (first) {
@@ -656,76 +728,126 @@ export class DiligenceRunner {
     const steps = new Map(request.plan.steps.map((step) => [step.id, step]));
     const limit = Math.max(1, request.plan.maxConcurrency ?? 6);
     const inFlight = new Map<string, Promise<void>>();
+    const slot = (id: string) => `${runId}:${id}`;
+    // This run's ready steps waiting for the process-wide cap, with when each began to wait.
+    const waiting = new Map<string, number>();
+    const stopWaiting = () => {
+      for (const id of waiting.keys()) this.#slots.release(slot(id));
+      waiting.clear();
+    };
+    const launch = (id: string) => inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => {
+      inFlight.delete(id);
+      this.#slots.release(slot(id));
+    }));
     let lastCapture = Date.now();
-    for (;;) {
-      try {
-        if (Date.now() - lastCapture > CAPTURE_INTERVAL_MS && inFlight.size > 0) {
-          lastCapture = Date.now();
-          await this.#captureOutbox(request);
+    try {
+      for (;;) {
+        try {
+          if (Date.now() - lastCapture > CAPTURE_INTERVAL_MS && inFlight.size > 0) {
+            lastCapture = Date.now();
+            await this.#captureOutbox(request);
+          }
+        } catch (cause) {
+          log("run.capture-failed", { runId, message: String(cause).slice(0, 300) });
         }
-      } catch (cause) {
-        log("run.capture-failed", { runId, message: String(cause).slice(0, 300) });
-      }
-      const state = await this.#state(runId);
-      if (!state) return;
-      if (state.status !== "running") break;
-      // Running steps (including after a restart) are re-attached by their request IDs.
-      for (const [id, record] of Object.entries(state.steps)) {
-        if (record.status === "running" && !inFlight.has(id) && !state.cancelRequested) {
-          inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => inFlight.delete(id)));
+        const state = await this.#state(runId);
+        if (!state) return;
+        if (state.status !== "running") break;
+        // Running steps (including after a restart) are re-attached by their request IDs, and count
+        // toward the process-wide cap even when that puts it over.
+        for (const [id, record] of Object.entries(state.steps)) {
+          if (record.status === "running" && !inFlight.has(id) && !state.cancelRequested) {
+            this.#slots.hold(slot(id));
+            launch(id);
+          }
         }
-      }
-      if (state.cancelRequested) {
-        await Promise.allSettled(inFlight.values());
-        await this.#finish(request, "canceled");
-        return;
-      }
-      const ready: string[] = [];
-      for (const [id, record] of Object.entries(state.steps)) {
-        if (record.status !== "pending") continue;
-        const step = steps.get(id)!;
-        const blocked = step.after.some((dep) => ["failed", "skipped"].includes(state.steps[dep]?.status ?? ""));
-        if (blocked) {
-          await this.#update(runId, (draft) => { draft.steps[id]!.status = "skipped"; draft.steps[id]!.error = "upstream step failed"; });
-          this.#event(runId, "step", { skill: id, state: "skipped" });
-          continue;
+        if (state.cancelRequested) {
+          stopWaiting();
+          await Promise.allSettled(inFlight.values());
+          await this.#finish(request, "canceled");
+          return;
         }
-        let satisfied = true;
-        for (const dep of step.after) {
-          if (state.steps[dep]?.status === "done") continue;
-          const releases = (step.release ?? []).filter((release) => release.step === dep);
-          if (state.steps[dep]?.status === "running" && releases.length > 0 &&
-            (await this.#filesExist(runId, request, releases.map((release) => release.file)).catch(() => false))) {
+        const ready: string[] = [];
+        for (const [id, record] of Object.entries(state.steps)) {
+          if (record.status !== "pending") continue;
+          const step = steps.get(id)!;
+          const blocked = step.after.some((dep) => ["failed", "skipped"].includes(state.steps[dep]?.status ?? ""));
+          if (blocked) {
+            await this.#update(runId, (draft) => { draft.steps[id]!.status = "skipped"; draft.steps[id]!.error = "upstream step failed"; });
+            this.#event(runId, "step", { skill: id, state: "skipped" });
             continue;
           }
-          satisfied = false;
-          break;
+          let satisfied = true;
+          for (const dep of step.after) {
+            if (state.steps[dep]?.status === "done") continue;
+            const releases = (step.release ?? []).filter((release) => release.step === dep);
+            if (state.steps[dep]?.status === "running" && releases.length > 0 &&
+              (await this.#filesExist(runId, request, releases.map((release) => release.file)).catch(() => false))) {
+              continue;
+            }
+            satisfied = false;
+            break;
+          }
+          if (satisfied) ready.push(id);
         }
-        if (satisfied) ready.push(id);
-      }
-      for (const id of ready) {
-        if (inFlight.size >= limit) break;
-        await this.#update(runId, (draft) => {
-          draft.steps[id]!.status = "running";
-          draft.steps[id]!.phase = "work";
-          draft.steps[id]!.startedAt = new Date().toISOString();
+        // Steps waiting for the process-wide cap still take their place under the run's own limit.
+        const asking = new Set<string>();
+        for (const id of ready) {
+          if (inFlight.size + asking.size >= limit) break;
+          // The step stays pending (Glasswing's "not started") until its slot comes; the slot's grant wakes this loop.
+          if (!this.#slots.request(slot(id), () => this.#wakers.get(runId)?.())) {
+            asking.add(id);
+            if (!waiting.has(id)) {
+              waiting.set(id, Date.now());
+              log("step.waiting-for-slot", { runId, step: id, active: this.#slots.active, limit: this.#slots.limit });
+              this.#event(runId, "activity", {
+                type: "text", skill: id,
+                detail: `Queued: ${this.#slots.active} diligence steps are running across all runs (the limit is ${this.#slots.limit}). This step starts when one finishes.`,
+              });
+            }
+            continue;
+          }
+          const since = waiting.get(id);
+          waiting.delete(id);
+          if (since !== undefined) log("step.slot-granted", { runId, step: id, waitedMs: Date.now() - since });
+          try {
+            await this.#update(runId, (draft) => {
+              draft.steps[id]!.status = "running";
+              draft.steps[id]!.phase = "work";
+              draft.steps[id]!.startedAt = new Date().toISOString();
+            });
+          } catch (cause) {
+            this.#slots.release(slot(id));
+            throw cause;
+          }
+          this.#event(runId, "step", { skill: id, state: "running", model: steps.get(id)!.model });
+          launch(id);
+        }
+        // A waiting step that can no longer start (upstream failed, or the run's own limit filled) gives up its place.
+        for (const id of waiting.keys()) {
+          if (asking.has(id)) continue;
+          this.#slots.release(slot(id));
+          waiting.delete(id);
+        }
+        const after = await this.#state(runId);
+        const open = Object.values(after?.steps ?? {}).some((record) => record.status === "pending" || record.status === "running");
+        if (!open && inFlight.size === 0) {
+          const failed = Object.values(after!.steps).some((record) => record.status === "failed" || record.status === "skipped");
+          await this.#finish(request, failed ? "failed" : "succeeded");
+          return;
+        }
+        // A slot granted while this pass ran is taken at once.
+        if ([...waiting.keys()].some((id) => this.#slots.holds(slot(id)))) continue;
+        // Wake on a step change, a granted slot, or poll release files.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 5000);
+          this.#wakers.set(runId, () => { clearTimeout(timer); resolve(); });
+          Promise.race(inFlight.values()).then(() => { clearTimeout(timer); resolve(); }, () => { clearTimeout(timer); resolve(); });
         });
-        this.#event(runId, "step", { skill: id, state: "running", model: steps.get(id)!.model });
-        inFlight.set(id, this.#runStep(request, steps.get(id)!).finally(() => inFlight.delete(id)));
       }
-      const after = await this.#state(runId);
-      const open = Object.values(after?.steps ?? {}).some((record) => record.status === "pending" || record.status === "running");
-      if (!open && inFlight.size === 0) {
-        const failed = Object.values(after!.steps).some((record) => record.status === "failed" || record.status === "skipped");
-        await this.#finish(request, failed ? "failed" : "succeeded");
-        return;
-      }
-      // Wake on a step change, or poll release files.
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 5000);
-        this.#wakers.set(runId, () => { clearTimeout(timer); resolve(); });
-        Promise.race(inFlight.values()).then(() => { clearTimeout(timer); resolve(); }, () => { clearTimeout(timer); resolve(); });
-      });
+    } finally {
+      // A loop that ends or fails never keeps a place in line (a failed loop restarts at the back).
+      stopWaiting();
     }
     const final = await this.#state(runId);
     if (final && final.status !== "running" && !final.delivered) {
@@ -789,6 +911,7 @@ export class DiligenceRunner {
         const tried = new Set([model.modelId]);
         let input = content;
         let id = requestId;
+        let retries = 0;
         for (;;) {
           try {
             return await this.#submit(conversation, input, id, step.id, runId, key);
@@ -797,25 +920,51 @@ export class DiligenceRunner {
             const failure = model.provider === "anthropic" ? classifyAnthropicFailure(cause.detail) : undefined;
             if (failure) {
               anthropicCircuit.trip(failure, feature);
-              if (!(await toOpenAi(failure))) throw cause;
-              input = CONTINUE_PROMPT;
-              id = `${requestId}:fallback:openai`;
-              continue;
+              if (await toOpenAi(failure)) {
+                input = CONTINUE_PROMPT;
+                id = `${requestId}:fallback:openai`;
+                continue;
+              }
+            } else {
+              const next = REFUSAL_FALLBACK_MODELS.find((candidate) => !tried.has(candidate));
+              if (REFUSAL_DETAIL.test(cause.detail) && model.provider === "anthropic" && next !== undefined) {
+                tried.add(next);
+                log("step.refusal-fallback", { runId, step: step.id, from: model.modelId, to: next, detail: cause.detail.slice(0, 300) });
+                this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
+                const from = model;
+                await useModel(modelRef(next));
+                await this.#showModel(runId, step, from, model, `${from.modelId} declined the request`, key, working);
+                // While Anthropic is unusable, the refusal chain's next model is too.
+                const stillOpen = anthropicCircuit.current();
+                if (stillOpen) await toOpenAi(stillOpen);
+                input = CONTINUE_PROMPT;
+                id = `${requestId}:fallback:${next}`;
+                continue;
+              }
             }
-            const next = REFUSAL_FALLBACK_MODELS.find((candidate) => !tried.has(candidate));
-            const refused = REFUSAL_DETAIL.test(cause.detail);
-            if (!refused || model.provider !== "anthropic" || next === undefined) throw cause;
-            tried.add(next);
-            log("step.refusal-fallback", { runId, step: step.id, from: model.modelId, to: next, detail: cause.detail.slice(0, 300) });
-            this.#event(runId, "log", { line: `${step.id}: ${model.modelId} declined; continuing on ${next}` });
-            const from = model;
-            await useModel(modelRef(next));
-            await this.#showModel(runId, step, from, model, `${from.modelId} declined the request`, key, working);
-            // While Anthropic is unusable, the refusal chain's next model is too.
-            const stillOpen = anthropicCircuit.current();
-            if (stillOpen) await toOpenAi(stillOpen);
+            // A transient failure no fallback took (an OpenAI step, a fallback turn, or Anthropic without an
+            // OpenAI model): the turn is tried again after a wait, under a new request ID so the failed
+            // request is not replayed. Auth, billing and other 4xx failures end the step as before.
+            const transient = cause.reason === "model_error" ? classifyTransientFailure(cause.detail) : undefined;
+            if (!transient || retries >= STEP_RETRY_WAITS_MS.length) throw cause;
+            retries += 1;
+            id = `${requestId}:retry:${retries}`;
+            const wait = Math.min(Math.max(transient.retryAfterMs ?? STEP_RETRY_WAITS_MS[retries - 1]!, 1000), MAX_RETRY_AFTER_MS);
+            const { until, resumed } = await this.#retryDeadline(runId, step.id, id, wait);
+            log("step.retry", {
+              runId, step: step.id, attempt: retries, of: STEP_RETRY_WAITS_MS.length, reason: transient.reason, status: transient.status,
+              waitMs: Math.max(0, until - Date.now()), retryAfter: transient.retryAfterMs !== undefined, resumed, model: refText(model), request: id,
+              detail: cause.detail.slice(0, 300),
+            });
+            if (!resumed) {
+              this.#event(runId, "log", {
+                line: `${step.id}: ${describeFailure(transient, model.provider)}; trying again in ${Math.round(wait / 1000)} s (retry ${retries} of ${STEP_RETRY_WAITS_MS.length})`,
+              });
+            }
+            await this.#sleepUntil(runId, until);
+            // A stop during the wait ends the step instead.
+            if (this.#stopping.has(runId) || (await this.#state(runId))?.cancelRequested) throw cause;
             input = CONTINUE_PROMPT;
-            id = `${requestId}:fallback:${next}`;
           }
         }
       };
@@ -882,6 +1031,36 @@ export class DiligenceRunner {
     }
   }
 
+  /**
+   * When a retry turn may start. It is kept in the step's state under the retry's request ID, so a
+   * step resumed after a restart replays its earlier retries without waiting for them again.
+   */
+  async #retryDeadline(runId: string, stepId: string, retryId: string, waitMs: number) {
+    const recorded = (await this.#state(runId))?.steps[stepId]?.retryAt?.[retryId];
+    if (recorded) return { until: Date.parse(recorded), resumed: true };
+    const until = Date.now() + waitMs;
+    await this.#update(runId, (draft) => { (draft.steps[stepId]!.retryAt ??= {})[retryId] = new Date(until).toISOString(); });
+    return { until, resumed: false };
+  }
+
+  /** Sleeps until `until`; a stop on the run ends the sleep at once. */
+  async #sleepUntil(runId: string, until: number) {
+    const remaining = until - Date.now();
+    if (!(remaining > 0) || this.#stopping.has(runId)) return;
+    const waits = this.#retryWaits.get(runId) ?? new Set<() => void>();
+    this.#retryWaits.set(runId, waits);
+    await new Promise<void>((resolve) => {
+      const end = () => {
+        clearTimeout(timer);
+        waits.delete(end);
+        if (waits.size === 0) this.#retryWaits.delete(runId);
+        resolve();
+      };
+      const timer = setTimeout(end, remaining);
+      waits.add(end);
+    });
+  }
+
   async #conversationFor(request: DiligenceRequest, step: DiligenceStep) {
     const runId = request.runId;
     const state = await this.#state(runId);
@@ -918,7 +1097,7 @@ export class DiligenceRunner {
       const settled = await submission.wait(ctx);
       if (settled.status !== "done") {
         const detail = typeof settled.detail === "string" ? settled.detail : settled.detail === undefined ? "" : JSON.stringify(settled.detail);
-        throw new StepUnanswered(`Step ${stepId} ended without an answer (${settled.reason}).`, detail);
+        throw new StepUnanswered(`Step ${stepId} ended without an answer (${settled.reason}).`, detail, settled.reason);
       }
     } finally {
       await stream.stop();
@@ -1122,6 +1301,7 @@ export class DiligenceRunner {
       draft.completedAt = new Date().toISOString();
     });
     log("run.finished", { runId: request.runId, status });
+    this.#stopping.delete(request.runId);
     const state = await this.#state(request.runId);
     // The thread's closing note follows Glasswing's verdict, so "done" there means the
     // report is published (and the workspace banners clear at the same time).

@@ -69,7 +69,7 @@ import { textFromToolResult, toolItemType, toolLifecycleData, toolResultForDispl
 import { configurePiWebAccess, createCrunchbaseTools, createWebAccessTools } from "./extensionTools.ts";
 import { createPerplexityTools } from "./perplexityTools.ts";
 import { SandboxExecutionEnv, type SandboxRunner } from "./sandboxEnv.ts";
-import { backupHarness, describe, restoreHarnessIfNeeded } from "./backup.ts";
+import { backupHarness, describe, restoreHarnessIfNeeded, startHarnessBackups } from "./backup.ts";
 import { openHarnessStorage } from "./harnessStorage.ts";
 import { ContextPackCache, requesterEmailOf } from "./contextPack.ts";
 import { resumingDurableThreads } from "../providerWorker/headlessSessions.ts";
@@ -327,7 +327,7 @@ export class DurablePiEngine {
   readonly #gatewayTools = new Map<string, ToolRegistration>();
   #gatewayExtensionInstalled = false;
   readonly #registry = createRegistry();
-  #backupTimer: ReturnType<typeof setInterval> | undefined;
+  #stopBackups: (() => void) | undefined;
   readonly #models = createModels();
   readonly #contextPacks = new ContextPackCache();
   readonly #companies = new Map<string, { readonly at: number; readonly companyId: Promise<string | undefined> }>();
@@ -437,13 +437,7 @@ export class DurablePiEngine {
       }
     }
     this.#harness.resume();
-    const backup = () => {
-      backupHarness(this.#options.storagePath).catch((cause) =>
-        console.warn(JSON.stringify({ event: "durable.backup.failed", message: describe(cause) })));
-    };
-    setTimeout(backup, 2 * 60_000).unref();
-    this.#backupTimer = setInterval(backup, 10 * 60_000);
-    this.#backupTimer.unref();
+    this.#stopBackups = startHarnessBackups(this.#options.storagePath);
     setDurableEngineGauges({
       openWatches: () => this.openWatchCount(),
       activeConversations: () => [...this.#threads.values()].filter((thread) => thread.activeTurnId).length,
@@ -939,7 +933,7 @@ export class DurablePiEngine {
   }
 
   async close() {
-    if (this.#backupTimer) clearInterval(this.#backupTimer);
+    this.#stopBackups?.();
     await this.#harness.close(ctx);
     await backupHarness(this.#options.storagePath).catch((cause) =>
       console.warn(JSON.stringify({ event: "durable.backup.failed", message: describe(cause) })));
