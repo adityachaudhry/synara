@@ -35,12 +35,13 @@ const openFileDatabases = new Map<string, DatabaseSync>();
  * Copies an open database file with SQLite's online backup API, through the connection that owns
  * it (the runtime holds `locking_mode=EXCLUSIVE`, so no second connection can read it). The copy
  * proceeds in steps while the connection keeps serving statements; its own writes are carried into
- * the copy. Resolves with the number of pages copied.
+ * the copy. Each step holds the connection, so fewer pages per step means shorter waits for
+ * statements on the event loop. Resolves with the number of pages copied.
  */
-export function backupOpenDatabase(filename: string, destination: string): Promise<number> {
+export function backupOpenDatabase(filename: string, destination: string, pagesPerStep = 256): Promise<number> {
   const database = openFileDatabases.get(path.resolve(filename));
   if (!database) return Promise.reject(new Error("The database is not open in this process."));
-  return sqliteBackup(database, destination, { rate: 256 });
+  return sqliteBackup(database, destination, { rate: pagesPerStep });
 }
 
 function measureSqlOperation<A>(sql: string, operation: string, run: () => A): A {
