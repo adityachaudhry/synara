@@ -12158,9 +12158,9 @@ export default function ChatView({
           isDragOverComposer ? "opacity-100" : "opacity-0",
         )}
       />
-      {/* Hidden while the host has the side panel expanded over the chat: the panel's own
-          Restore brings the chat back, and the button would float over the panel. */}
-      {hostedThreadFeed && onToggleRightDock && hostSidebar?.rightDockExpanded !== true ? (
+      {hostedThreadFeed && onToggleRightDock ? (
+        // Hidden while the side panel covers the chat (RightDock marks the shell
+        // data-right-dock-expanded, also while it slides back); the panel's Restore returns it.
         <Button
           type="button"
           variant="ghost"
@@ -12168,7 +12168,7 @@ export default function ChatView({
           aria-label="Toggle Explorer"
           title="Toggle Explorer"
           onClick={onToggleRightDock}
-          className="absolute right-3 top-3 z-20 !size-7 rounded-lg !bg-[var(--background)] text-[var(--brand)] shadow-sm hover:!bg-[var(--background)] [&_svg,&_[data-slot=central-icon]]:!opacity-100"
+          className="absolute right-3 top-3 z-20 !size-7 rounded-lg !bg-[var(--background)] text-[var(--brand)] shadow-sm hover:!bg-[var(--background)] [&_svg,&_[data-slot=central-icon]]:!opacity-100 in-data-[right-dock-expanded]:hidden"
         >
           {/* The side panel's own Expand / Restore icons: with the panel open, this widens
               the chat (expand); with it closed, it brings the split back (restore). */}
