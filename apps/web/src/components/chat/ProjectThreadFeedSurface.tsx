@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 
-import { resolveHostMessageAuthorLabel, useSynaraHostSidebar } from "../../hostSidebar";
+import { resolveHostMessageAuthorLabel, usePinnedPaneRequest, useSynaraHostSidebar } from "../../hostSidebar";
 import { useReportHostViewRendered } from "../../hostReadiness";
 import { useAppSettings, type TimestampFormat } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -295,6 +295,15 @@ export function ProjectThreadFeedSurface({
       else setLocalDockState(transform);
     },
     [sharedDockKey, updateStoredDockState],
+  );
+  usePinnedPaneRequest(
+    useCallback(() => {
+      if (!pinnedPane) return;
+      setDockState((state) => {
+        const pinned = withPinnedHostPane(state, FEED_PINNED_PANE_ID);
+        return setActivePaneInState(pinned, pinned.panes[0]?.id ?? FEED_PINNED_PANE_ID);
+      });
+    }, [pinnedPane, setDockState]),
   );
   // The host's pinned pane leads the tab strip.
   const displayDockState = pinnedPane ? withPinnedHostPane(dockState, FEED_PINNED_PANE_ID) : dockState;
