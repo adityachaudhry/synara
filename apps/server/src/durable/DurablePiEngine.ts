@@ -1109,9 +1109,21 @@ export class DurablePiEngine {
   #onEvent(state: ThreadState, event: AgentEvent) {
     if (!state.activeTurnId) return;
     switch (event.type) {
-      case "message_start":
-        if ((event.message as { role?: string }).role === "assistant") state.partial.clear();
+      case "message_start": {
+        if ((event.message as { role?: string }).role !== "assistant") return;
+        state.partial.clear();
+        // One Harness commit can create the message and write its first text, and then
+        // message_start carries that text while the next message_update holds only what
+        // follows. Start from the message as it stands, so the deltas extend it rather than
+        // standing in for it (a later full-message change would otherwise slice the final
+        // text at the deltas' length and splice it).
+        const message = event.message as AssistantMessage;
+        if (Array.isArray(message.content) && message.content.length > 0) {
+          this.#applyChange(state, { type: "message", message } as MessageChange);
+          this.#flushPartial(state);
+        }
         return;
+      }
       case "message_update":
         for (const change of event.changes) this.#applyChange(state, change);
         this.#flushPartial(state);
@@ -1186,7 +1198,22 @@ export class DurablePiEngine {
       if (!kind) return;
       const text = (kind === "text" ? block.text : block.thinking) ?? "";
       const current = state.partial.get(index);
-      state.partial.set(index, { kind, text, emitted: current?.kind === kind ? Math.min(current.emitted, text.length) : 0 });
+      // What this block has already streamed must be the start of its text; the flush
+      // sends only the rest. If it is not, the message on screen no longer matches what
+      // the model wrote: say so, since a delta cannot take streamed text back.
+      const sent = current?.kind === kind ? current.text.slice(0, current.emitted) : "";
+      if (sent.length > 0 && !text.startsWith(sent)) {
+        logEvent("warn", "durable.text.diverged", {
+          threadId: state.threadId,
+          turnId: state.activeTurnId,
+          contentIndex: index,
+          kind,
+          sentChars: sent.length,
+          textChars: text.length,
+          model: state.turnModel ?? state.model,
+        });
+      }
+      state.partial.set(index, { kind, text, emitted: Math.min(sent.length, text.length) });
     };
     switch (change.type) {
       case "text_start":
