@@ -21,6 +21,7 @@ import { createHostThemeStyle } from "./lib/hostThemeStyle";
 import { getRouter } from "./router";
 import { useStore } from "./store";
 import { configureSynaraRuntime, type SynaraRuntimeConfig } from "./synaraRuntimeConfig";
+import { piLinkShellSnapshot } from "./pi-link/firstPaint";
 
 export interface SynaraHostTheme {
   readonly fontFamilySans?: string;
@@ -147,12 +148,18 @@ export function SynaraApp({
   hostTheme,
   embeddedBaseFontSizePx,
   initialShellSnapshot,
+  piLink,
 }: SynaraAppProps) {
   configureSynaraRuntime({
     ...(httpBaseUrl ? { httpBaseUrl } : {}),
     ...(resolveWebSocketUrl ? { resolveWebSocketUrl } : {}),
     ...(project ? { project } : {}),
+    ...(piLink ? { piLink } : {}),
   });
+  const firstPaintShell = useMemo(
+    () => initialShellSnapshot ?? (piLink ? piLinkShellSnapshot(piLink) : undefined),
+    [initialShellSnapshot, piLink],
+  );
   const router = useMemo(() => getRouter(history), [history]);
   const [routeRendered, setRouteRendered] = useState(false);
   const reportRouteRendered = useCallback(() => setRouteRendered(true), []);
@@ -177,7 +184,7 @@ export function SynaraApp({
         data-synara-host-themed={hostTheme ? "" : undefined}
         style={style}
       >
-        <HostShellSnapshot snapshot={initialShellSnapshot} />
+        <HostShellSnapshot snapshot={firstPaintShell} />
         <HostReadinessSignal rootRef={rootRef} routeRendered={routeRendered} />
         <SynaraHostSidebarProvider value={hostSidebar ?? null}>
           <AppHistoryProvider history={history}>

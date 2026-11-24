@@ -1,5 +1,7 @@
 import type { ModelSelection, ProviderKind } from "@synara/contracts";
 
+import type { TabConfig } from "./pi-link/messages";
+
 export type SynaraWebSocketUrlResolver = () => string | Promise<string>;
 
 export interface SynaraProject {
@@ -9,10 +11,17 @@ export interface SynaraProject {
   readonly customModelsByProvider?: Partial<Record<ProviderKind, readonly string[]>>;
 }
 
+/** Pi Link: the workspace talks to Glasswing's agent service through a shared worker. */
+export type SynaraPiLinkConfig = TabConfig & {
+  /** The company's thread list (agent service shape) the host fetched with the page, for first paint. */
+  readonly initialCompanyThreads?: unknown;
+};
+
 export interface SynaraRuntimeConfig {
   readonly httpBaseUrl?: string;
   readonly resolveWebSocketUrl?: SynaraWebSocketUrlResolver;
   readonly project?: SynaraProject;
+  readonly piLink?: SynaraPiLinkConfig;
 }
 
 let runtimeConfig: SynaraRuntimeConfig = {};
@@ -24,6 +33,7 @@ export function configureSynaraRuntime(config: SynaraRuntimeConfig): void {
       ? { resolveWebSocketUrl: config.resolveWebSocketUrl }
       : {}),
     ...(config.project ? { project: config.project } : {}),
+    ...(config.piLink ? { piLink: config.piLink } : {}),
   };
 }
 
