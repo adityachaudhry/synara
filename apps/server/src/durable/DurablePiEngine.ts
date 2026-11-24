@@ -695,8 +695,8 @@ export class DurablePiEngine {
   }
 
   /**
-   * A new turn starts on the thread's own model: one a fallback replaced comes back. While Anthropic
-   * auth or billing failures hold the circuit open, an Anthropic model goes straight to OpenAI.
+   * A new turn starts on the thread's own model: one a fallback replaced comes back once the probe
+   * has closed the circuit. While it is open, an Anthropic model goes straight to OpenAI.
    */
   async #routeTurn(state: ThreadState, conversation: Conversation, selected: boolean) {
     state.turnModel = undefined;
@@ -737,7 +737,7 @@ export class DurablePiEngine {
     const conversation = await this.#conversation(state);
     const from = (await conversation.agent(ctx)).model;
     if (from?.provider !== "anthropic") return undefined;
-    anthropicCircuit.trip(failure, this.#feature(state));
+    anthropicCircuit.trip(failure, this.#feature(state), from);
     if (!(await this.#fallBack(state, conversation, from, failure))) return undefined;
     return (await conversation.submit({ type: "input", content: CONTINUE_PROMPT, requestId: `${turnId}:fallback` }, ctx)).id;
   }

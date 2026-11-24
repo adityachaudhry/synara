@@ -191,7 +191,7 @@ export const llmFallbacks = new Counter(
 );
 export const llmCircuitOpen = new Gauge(
   "synara_llm_circuit_open",
-  "1 while an Anthropic auth or billing failure sends new turns straight to OpenAI.",
+  "1 from an Anthropic fallback until a probe finds Anthropic answering; new turns go straight to OpenAI meanwhile.",
 );
 llmCircuitOpen.set({}, 0);
 

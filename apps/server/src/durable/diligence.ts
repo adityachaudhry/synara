@@ -871,7 +871,8 @@ export class DiligenceRunner {
       // Starts from the plan's model even after a restart, so a resumed step replays the same
       // decisions and finds its earlier requests by their IDs.
       let model = modelRef(step.model);
-      // The Anthropic model a provider fallback replaced: the step's next turn tries it again.
+      // The Anthropic model a provider fallback replaced: the step's next turn after the circuit
+      // closes (a probe found Anthropic answering) goes back to it.
       let replaced: ModelRef | undefined;
       // The work turns name the step's model; the repair turn runs on the plan's repair model.
       let working = true;
@@ -901,7 +902,7 @@ export class DiligenceRunner {
       // SYNARA_ANTHROPIC_FALLBACKS and continues there. Request IDs stay deterministic for resume.
       const submit = async (content: string, requestId: string) => {
         const open = anthropicCircuit.current();
-        // An open circuit keeps the step where it is; otherwise the next turn tries Anthropic again.
+        // An open circuit keeps the step on OpenAI; once a probe closed it, the turn goes back to Anthropic.
         if (replaced && !open) {
           const back = replaced;
           replaced = undefined;
@@ -919,7 +920,7 @@ export class DiligenceRunner {
             if (!(cause instanceof StepUnanswered)) throw cause;
             const failure = model.provider === "anthropic" ? classifyAnthropicFailure(cause.detail) : undefined;
             if (failure) {
-              anthropicCircuit.trip(failure, feature);
+              anthropicCircuit.trip(failure, feature, model);
               if (await toOpenAi(failure)) {
                 input = CONTINUE_PROMPT;
                 id = `${requestId}:fallback:openai`;
