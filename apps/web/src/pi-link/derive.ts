@@ -176,6 +176,8 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
     switch (entry.kind) {
       case "glasswing.input": {
         const requestId = str(data?.requestId) ?? `entry-${entry.id}`;
+        // Imported from the controller: the message keeps its id and its turn.
+        const turnId = str(data?.turnId) ?? requestId;
         const author = record(data?.author) as Author | undefined;
         messages.push({
           id: requestId as never,
@@ -183,13 +185,13 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
           text: str(data?.text) ?? "",
           ...(author ? { author } : {}),
           ...(Array.isArray(data?.attachments) && data.attachments.length ? { attachments: data.attachments as never } : {}),
-          turnId: requestId as never,
+          turnId: turnId as never,
           streaming: false,
           source: "native",
           createdAt: at,
           updatedAt: at,
         } as OrchestrationMessage);
-        startTurn(requestId, at);
+        startTurn(turnId, at);
         break;
       }
       case "pi.user": {
@@ -235,6 +237,15 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
         break;
       }
       case "pi.assistant": {
+        const importedId = str(data?.messageId);
+        if (importedId) {
+          // An answer imported from the controller: its own message, under its original id.
+          messages.push({
+            id: importedId as never, role: "assistant", text: messageText(first?.content),
+            turnId: (str(data?.turnId) ?? current?.turnId ?? null) as never, streaming: false, source: "native", createdAt: at, updatedAt: at,
+          } as OrchestrationMessage);
+          break;
+        }
         if (!current) startTurn(`entry-${entry.id}`, at);
         const turn = current!;
         const content = Array.isArray(first?.content) ? first!.content : [];
