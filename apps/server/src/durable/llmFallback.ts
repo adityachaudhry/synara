@@ -11,8 +11,7 @@
  * - Every failure that falls back opens the process's circuit, whatever its reason. While it is open,
  *   every new chat turn and diligence step turn starts on OpenAI and no real turn calls Anthropic.
  *   No timer closes it: a background probe (one 1-token request, never on a turn's path) asks
- *   Anthropic 60 s after a transient failure or 300 s after an auth or billing failure, and again at
- *   the interval for the latest failure's reason, until Anthropic answers. A 2xx closes the circuit,
+ *   Anthropic every 30 minutes, whatever the reason, until Anthropic answers. A 2xx closes the circuit,
  *   and so does any answer that is not a fallback reason (a 400 or 404 means the account works).
  *   The circuit lives in memory: a restarted controller starts closed and the first failing turn
  *   reopens it.
@@ -181,9 +180,8 @@ export function classifyTransientFailure(detail: string | undefined): TransientF
   return retryAfterMs === undefined ? failure : { ...failure, retryAfterMs };
 }
 
-/** Seconds from a failure to the next probe: a dead key or a spent account takes longer to come back. */
-const probeEverySeconds = (reason: FallbackReason) =>
-  reason === "auth" || reason === "billing" ? 300 : 60;
+/** Seconds between probes while the circuit is open, whatever opened it. */
+const PROBE_EVERY_SECONDS = 30 * 60;
 const PROBE_TIMEOUT_MS = 30_000;
 
 /** What one probe found: `failure` is a fallback reason (the circuit stays open), else Anthropic answered. */
@@ -279,9 +277,9 @@ class Circuit {
       model: model.modelId,
       reason: failure.reason,
       status: failure.status,
-      probe_every_s: probeEverySeconds(failure.reason),
+      probe_every_s: PROBE_EVERY_SECONDS,
     });
-    this.#schedule(probeEverySeconds(failure.reason));
+    this.#schedule(PROBE_EVERY_SECONDS);
   }
 
   #schedule(seconds: number) {
@@ -311,9 +309,9 @@ class Circuit {
     });
     if (this.#open !== open) return;
     if (result.failure) {
-      // Still unusable: the circuit takes the latest reason, and the next probe its interval.
+      // Still unusable: the circuit takes the latest reason and probes again later.
       this.#open = { ...open, reason: result.failure.reason, status: result.failure.status };
-      this.#schedule(probeEverySeconds(result.failure.reason));
+      this.#schedule(PROBE_EVERY_SECONDS);
       return;
     }
     // A 2xx, or an answer no other provider would fix (a 400 or 404): the account works again.
