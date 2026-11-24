@@ -8,14 +8,20 @@
  *   5xx, a timeout or a connection error. Every other 4xx fails as before.
  * - Opus (and any other Anthropic model) → `LLM_FALLBACK_OPUS_MODEL` (default `openai/gpt-6.2-sol`);
  *   Sonnet and Haiku → `LLM_FALLBACK_SONNET_MODEL` (default `openai/gpt-6.1-terra`).
- * - An auth or billing failure opens a 15-minute circuit: new turns start on OpenAI without asking
- *   Anthropic, then Anthropic is tried again. Transient failures fall back for that turn only.
+ * - Every failure that falls back opens the process's circuit, whatever its reason. While it is open,
+ *   every new chat turn and diligence step turn starts on OpenAI and no real turn calls Anthropic.
+ *   No timer closes it: a background probe (one 1-token request, never on a turn's path) asks
+ *   Anthropic every 30 minutes, whatever the reason, until Anthropic answers. A 2xx closes the circuit,
+ *   and so does any answer that is not a fallback reason (a 400 or 404 means the account works).
+ *   The circuit lives in memory: a restarted controller starts closed and the first failing turn
+ *   reopens it.
  * - Every fallback logs one `llm.fallback` line at warning level, without content; the circuit logs
- *   `llm.circuit_open` (warn) and `llm.circuit_closed` (info). Each line carries `event`, `level` and
- *   `message` (the event name): Railway files a JSON line by `level` and keeps `event` as an
- *   attribute, which the ops watch searches (`@event:llm.fallback`).
+ *   `llm.circuit_open` (warn, once per opening), `llm.probe` (info, every probe) and
+ *   `llm.circuit_closed` (info). Each line carries `event`, `level` and `message` (the event name):
+ *   Railway files a JSON line by `level` and keeps `event` as an attribute, which the ops watch
+ *   searches (`@event:llm.fallback`).
  * - `LLM_FORCE_ANTHROPIC_FAILURE=1` (dev only) answers every Anthropic request with a simulated 401
- *   before any call is made.
+ *   before any call is made; the probe fails the same way, so the circuit stays open.
  */
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
@@ -43,7 +49,6 @@ export interface ModelRef {
 }
 
 const SYSTEM = "synara-controller";
-const CIRCUIT_MS = 15 * 60_000;
 
 const parseRef = (value: string): ModelRef => {
   const [provider, ...rest] = value.trim().split("/");
@@ -142,7 +147,10 @@ function retryAfterMsOf(detail: string): number | undefined {
   if (again) {
     if (/^\d+(?:\.\d+)?ms$/u.test(again)) return Number.parseFloat(again);
     const parts = again.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/u);
-    if (parts?.[0]) return ((Number(parts[1] ?? 0) * 60 + Number(parts[2] ?? 0)) * 60 + Number(parts[3] ?? 0)) * 1000;
+    if (parts?.[0])
+      return (
+        ((Number(parts[1] ?? 0) * 60 + Number(parts[2] ?? 0)) * 60 + Number(parts[3] ?? 0)) * 1000
+      );
   }
   const seconds = detail.match(/retry[-_ ]after["':\s]+(\d+(?:\.\d+)?)/iu)?.[1];
   return seconds ? Number(seconds) * 1000 : undefined;
@@ -172,44 +180,153 @@ export function classifyTransientFailure(detail: string | undefined): TransientF
   return retryAfterMs === undefined ? failure : { ...failure, retryAfterMs };
 }
 
-/** After an auth or billing failure, new turns go straight to OpenAI for 15 minutes. */
+/** Seconds between probes while the circuit is open, whatever opened it. */
+const PROBE_EVERY_SECONDS = 30 * 60;
+const PROBE_TIMEOUT_MS = 30_000;
+
+/** What one probe found: `failure` is a fallback reason (the circuit stays open), else Anthropic answered. */
+interface ProbeResult {
+  readonly ok: boolean;
+  readonly status: number | null;
+  readonly failure: ProviderFailure | undefined;
+}
+
+/**
+ * One 1-token request to the model whose failure opened the circuit, with the key Pi uses
+ * (`ANTHROPIC_API_KEY`), and no retries. A thrown fetch (no answer) is a timeout or a connection
+ * failure.
+ */
+async function probeAnthropic(model: string): Promise<ProbeResult> {
+  if (anthropicFailureForced()) {
+    return { ok: false, status: 401, failure: classifyAnthropicFailure(SIMULATED_AUTH_FAILURE) };
+  }
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) return { ok: false, status: null, failure: { reason: "auth", status: null } };
+  const base = (process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com").replace(
+    /\/+$/u,
+    "",
+  );
+  try {
+    const response = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    if (response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return { ok: true, status: response.status, failure: undefined };
+    }
+    const body = await response.text().catch(() => "");
+    return {
+      ok: false,
+      status: response.status,
+      failure: classifyAnthropicFailure(`${response.status} ${body}`),
+    };
+  } catch (cause) {
+    const name = cause instanceof Error ? cause.name : "";
+    const reason: FallbackReason =
+      name === "TimeoutError" || name === "AbortError" ? "timeout" : "connection";
+    return { ok: false, status: null, failure: { reason, status: null } };
+  }
+}
+
+interface OpenCircuit extends ProviderFailure {
+  /** The reason and status that opened the circuit; `reason`/`status` follow the latest failure. */
+  readonly opened: ProviderFailure;
+  readonly since: number;
+  /** The Anthropic model ID whose failure opened the circuit; the probe asks it. */
+  readonly model: string;
+}
+
+/**
+ * Once a turn falls back, every new turn goes straight to OpenAI until a background probe finds
+ * Anthropic answering again. One circuit per process, in memory.
+ */
 class Circuit {
-  #open: (ProviderFailure & { readonly until: number }) | undefined;
+  #open: OpenCircuit | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
 
   current(): ProviderFailure | undefined {
-    return this.#open && Date.now() < this.#open.until ? this.#open : undefined;
+    return this.#open;
   }
 
-  /** Opens on auth and billing failures; a transient failure leaves it as it is. */
-  trip(failure: ProviderFailure, feature: string) {
-    if (failure.reason !== "auth" && failure.reason !== "billing") return;
-    if (this.current()) return;
-    this.#open = { ...failure, until: Date.now() + CIRCUIT_MS };
+  /**
+   * Opens on any failure that falls back (auth, billing or transient), from the Anthropic `model`
+   * that failed. An open circuit stays as it is and logs nothing more.
+   */
+  trip(failure: ProviderFailure, feature: string, model: ModelRef) {
+    if (this.#open) return;
+    this.#open = {
+      reason: failure.reason,
+      status: failure.status,
+      opened: { reason: failure.reason, status: failure.status },
+      since: Date.now(),
+      model: model.modelId,
+    };
     llmCircuitOpen.set({}, 1);
     logEvent("warn", "llm.circuit_open", {
       message: "llm.circuit_open",
       system: SYSTEM,
       provider: "anthropic",
       feature,
+      model: model.modelId,
       reason: failure.reason,
       status: failure.status,
-      until: new Date(this.#open.until).toISOString().replace(/\.\d{3}Z$/u, "Z"),
+      probe_every_s: PROBE_EVERY_SECONDS,
     });
+    this.#schedule(PROBE_EVERY_SECONDS);
+  }
+
+  #schedule(seconds: number) {
     clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => {
-      const closed = this.#open;
-      this.#open = undefined;
-      llmCircuitOpen.set({}, 0);
-      logEvent("info", "llm.circuit_closed", {
-        message: "llm.circuit_closed",
-        system: SYSTEM,
-        provider: "anthropic",
-        reason: closed?.reason ?? null,
-        status: closed?.status ?? null,
-      });
-    }, CIRCUIT_MS);
+    this.#timer = setTimeout(() => void this.#probe(), seconds * 1000);
     this.#timer.unref();
+  }
+
+  async #probe() {
+    const open = this.#open;
+    if (!open) return;
+    const result = await probeAnthropic(open.model).catch(
+      (): ProbeResult => ({
+        ok: false,
+        status: null,
+        failure: { reason: "connection", status: null },
+      }),
+    );
+    logEvent("info", "llm.probe", {
+      message: "llm.probe",
+      system: SYSTEM,
+      provider: "anthropic",
+      model: open.model,
+      ok: result.ok,
+      reason: result.failure?.reason ?? null,
+      status: result.status,
+    });
+    if (this.#open !== open) return;
+    if (result.failure) {
+      // Still unusable: the circuit takes the latest reason and probes again later.
+      this.#open = { ...open, reason: result.failure.reason, status: result.failure.status };
+      this.#schedule(PROBE_EVERY_SECONDS);
+      return;
+    }
+    // A 2xx, or an answer no other provider would fix (a 400 or 404): the account works again.
+    this.#open = undefined;
+    this.#timer = undefined;
+    llmCircuitOpen.set({}, 0);
+    logEvent("info", "llm.circuit_closed", {
+      message: "llm.circuit_closed",
+      system: SYSTEM,
+      provider: "anthropic",
+      by: "probe",
+      reason: open.opened.reason,
+      status: open.opened.status,
+      open_seconds: Math.round((Date.now() - open.since) / 1000),
+    });
   }
 }
 
@@ -237,7 +354,10 @@ export function logFallback(
   });
 }
 
-const PROVIDER_NAMES: Readonly<Record<string, string>> = { anthropic: "Anthropic", openai: "OpenAI" };
+const PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+};
 
 /** What the product shows next to a switch or a retry ("model.rerouted", the run's live log). */
 export function describeFailure(failure: ProviderFailure, provider = "anthropic") {
