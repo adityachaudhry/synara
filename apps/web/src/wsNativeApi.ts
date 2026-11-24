@@ -55,6 +55,7 @@ import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
+import { PiLinkTransport } from "./pi-link/transport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 import { readSynaraRuntimeConfig } from "./synaraRuntimeConfig";
@@ -435,7 +436,10 @@ export function createWsNativeApi(): NativeApi {
     clearWsNativeApiListeners();
   }
 
-  const transport = new WsTransport(runtimeConfig.resolveWebSocketUrl);
+  // Pi Link stands in for the socket transport when the host runs Glasswing's agent service.
+  const transport = runtimeConfig.piLink
+    ? (new PiLinkTransport(runtimeConfig.piLink) as unknown as WsTransport)
+    : new WsTransport(runtimeConfig.resolveWebSocketUrl);
   let unsubscribeDomainEventTransport: (() => void) | null = null;
   transport.onStateChange((state) => emitWsTransportState(state));
   transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
