@@ -433,6 +433,17 @@ function threadSnapshotItem(replica: ThreadReplica): Item {
   return { channel: "orchestration.threadEvent", data: { kind: "snapshot", snapshot: { snapshotSequence: replica.seq, thread: replica.derived } } };
 }
 
+const restateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const RESTATE_DELAY_MS = 1_500;
+
+function restateShellSoon(company: CompanyReplica, threadId: string) {
+  clearTimeout(restateTimers.get(threadId));
+  restateTimers.set(threadId, setTimeout(() => {
+    restateTimers.delete(threadId);
+    restateShell(company, threadId);
+  }, RESTATE_DELAY_MS));
+}
+
 function restateShell(company: CompanyReplica, threadId: string) {
   const thread = company.shell.get(threadId);
   if (!thread) return;
@@ -494,9 +505,10 @@ function rederive(replica: ThreadReplica, opts: { forceSnapshot?: boolean } = {}
       }
     }
     // Synara's reducer adds a reply each time it sees a message settle, on top of the server's row
-    // count; restating the row afterwards keeps the server's count.
+    // count, and it may apply that event late (its terminal fence holds some). Restating the row a
+    // moment after the last settle keeps the server's count whatever the order.
     const settled = result.some((draft) => draft.type === "thread.message-sent" && (draft.payload as { streaming?: boolean }).streaming === false);
-    if (settled && located) restateShell(located.company, replica.threadId);
+    if (settled && located) restateShellSoon(located.company, replica.threadId);
     for (const tab of replica.tabs) {
       if (tab.primed.has(replica.threadId)) continue;
       tab.primed.add(replica.threadId);
@@ -744,9 +756,16 @@ async function dispatch(tab: Tab, command: Record<string, unknown>): Promise<{ s
       else await connection.command("stop", { threadId });
       return sequence();
     }
-    case "thread.marker.add":
-      await connection.command("mark.add", { threadId, mark: command.marker });
+    case "thread.marker.add": {
+      // Synara's command carries the mark's fields flat; the agent stores them as one mark.
+      const mark = Object.fromEntries(
+        ["messageId", "startOffset", "endOffset", "selectedText", "style", "color", "segmentIndex", "textFormat", "textPrefix", "textSuffix"]
+          .filter((key) => command[key] !== undefined)
+          .map((key) => [key, command[key]]),
+      );
+      await connection.command("mark.add", { threadId, mark: { id: command.markerId, ...mark } });
       return sequence();
+    }
     case "thread.marker.remove":
       await connection.command("mark.remove", { threadId, markId: command.markerId });
       return sequence();
