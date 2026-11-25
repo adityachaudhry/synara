@@ -744,9 +744,16 @@ async function dispatch(tab: Tab, command: Record<string, unknown>): Promise<{ s
       else await connection.command("stop", { threadId });
       return sequence();
     }
-    case "thread.marker.add":
-      await connection.command("mark.add", { threadId, mark: command.marker });
+    case "thread.marker.add": {
+      // Synara's command carries the mark's fields flat; the agent stores them as one mark.
+      const mark = Object.fromEntries(
+        ["messageId", "startOffset", "endOffset", "selectedText", "style", "color", "segmentIndex", "textFormat", "textPrefix", "textSuffix"]
+          .filter((key) => command[key] !== undefined)
+          .map((key) => [key, command[key]]),
+      );
+      await connection.command("mark.add", { threadId, mark: { id: command.markerId, ...mark } });
       return sequence();
+    }
     case "thread.marker.remove":
       await connection.command("mark.remove", { threadId, markId: command.markerId });
       return sequence();

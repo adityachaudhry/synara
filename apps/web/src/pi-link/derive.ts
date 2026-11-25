@@ -373,7 +373,7 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
     ...threadBase(info, row),
     latestTurn,
     latestUserMessageAt: row?.latestUserMessageAt ?? null,
-    threadMarkers: info.marks.map((mark) => ({ style: "highlight", color: "yellow", selectedText: "…", label: null, done: false, ...mark })) as never,
+    threadMarkers: info.marks.map((mark) => ({ style: "highlight", color: "yellow", selectedText: "…", label: null, done: false, updatedAt: mark.createdAt, ...mark })) as never,
     messages,
     proposedPlans: [],
     activities,
