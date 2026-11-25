@@ -443,13 +443,23 @@ function runActivities(run: RunInfo, runThreadId: string): OrchestrationThreadAc
     const at = step.startedAt ?? run.startedAt;
     const settled = ["done", "failed", "stopped", "skipped"].includes(step.status);
     const itemStatus = step.status === "done" ? "completed" : settled ? "failed" : "inProgress";
-    const item = { receiverThreadId: `step:${step.stepId}`, agentNickname: step.title, ...(step.model ? { model: step.model } : {}), ...(settled ? { status: step.status === "done" ? "completed" : step.status } : {}) };
+    const item = { receiverThreadId: `step:${step.stepId}`, agentNickname: step.title, ...(step.model ? { model: step.model } : {}) };
+    // Started and completed are separate activities, as the controller's item events were: the
+    // store keeps the richer of two activities with one id, which would keep a stale "started".
     out.push({
-      id: `run:${run.runId}:step:${step.stepId}:item` as never, tone: "tool", kind: (settled ? "tool.completed" : "tool.started") as never,
-      summary: step.title as never,
-      payload: { itemType: "collab_agent_tool_call", status: itemStatus, title: step.title, data: { item } } as never,
+      id: `run:${run.runId}:step:${step.stepId}:item` as never, tone: "tool", kind: "tool.started" as never,
+      summary: `${step.title} started` as never,
+      payload: { itemType: "collab_agent_tool_call", status: "inProgress", title: step.title, data: { item } } as never,
       turnId: turnId as never, sequence: base + n++, createdAt: at,
     });
+    if (settled) {
+      out.push({
+        id: `run:${run.runId}:step:${step.stepId}:item:done` as never, tone: "tool", kind: "tool.completed" as never,
+        summary: step.title as never,
+        payload: { itemType: "collab_agent_tool_call", status: itemStatus, title: step.title, data: { item: { ...item, status: step.status === "done" ? "completed" : step.status } } } as never,
+        turnId: turnId as never, sequence: base + n++, createdAt: step.endedAt ?? at,
+      });
+    }
     out.push({
       id: `run:${run.runId}:step:${step.stepId}:task` as never, tone: "info", kind: "task.started" as never, summary: "Task started" as never,
       payload: { taskId: `${workflowTaskId}:${step.stepId}`, workflowTaskId, toolUseId: `step:${step.stepId}`, detail: step.title } as never,
