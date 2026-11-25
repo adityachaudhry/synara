@@ -36,7 +36,8 @@ permissions:
   id-token: write # Azure sign-in through OIDC
 
 env:
-  # Where this environment's controller runs: railway (default) or azure.
+  # Where this environment's controller runs: railway (default) or azure; none once Glasswing's
+  # agent service serves the environment (the retired controller must not start again).
   DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET_DEV || 'railway' }}
   AZURE_RESOURCE_GROUP: rg-glasswing-dev
   # Dev's container app joins production's Container Apps environment, where names must be unique,
@@ -56,7 +57,8 @@ jobs:
         run: |
           case "$DEPLOY_TARGET" in
             railway | azure) echo "Deploy target: $DEPLOY_TARGET" ;;
-            *) echo "::error::DEPLOY_TARGET_DEV must be railway or azure, not '$DEPLOY_TARGET'"; exit 1 ;;
+            none) echo "::notice::Dev's controller is retired (Glasswing's agent service serves dev); nothing to deploy." ;;
+            *) echo "::error::DEPLOY_TARGET_DEV must be railway, azure or none, not '$DEPLOY_TARGET'"; exit 1 ;;
           esac
 
       # Railway

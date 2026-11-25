@@ -433,6 +433,16 @@ function threadSnapshotItem(replica: ThreadReplica): Item {
   return { channel: "orchestration.threadEvent", data: { kind: "snapshot", snapshot: { snapshotSequence: replica.seq, thread: replica.derived } } };
 }
 
+function restateShell(company: CompanyReplica, threadId: string) {
+  const thread = company.shell.get(threadId);
+  if (!thread) return;
+  for (const tab of tabs.values()) {
+    if (!tab.shell || tab.config?.project.companyId !== company.companyId) continue;
+    company.seq += 1;
+    enqueue(tab, { channel: "orchestration.shellEvent", data: { kind: "thread-upserted", thread, sequence: company.seq } });
+  }
+}
+
 function rowOf(threadId: string): { row: ThreadRow; company: CompanyReplica } | undefined {
   for (const company of companies.values()) {
     const row = company.value?.threads[threadId];
@@ -483,6 +493,10 @@ function rederive(replica: ThreadReplica, opts: { forceSnapshot?: boolean } = {}
         enqueue(tab, { channel: "orchestration.threadEvent", data: { kind: "event", event } }, firstChunk);
       }
     }
+    // Synara's reducer adds a reply each time it sees a message settle, on top of the server's row
+    // count; restating the row afterwards keeps the server's count.
+    const settled = result.some((draft) => draft.type === "thread.message-sent" && (draft.payload as { streaming?: boolean }).streaming === false);
+    if (settled && located) restateShell(located.company, replica.threadId);
     for (const tab of replica.tabs) {
       if (tab.primed.has(replica.threadId)) continue;
       tab.primed.add(replica.threadId);
