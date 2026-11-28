@@ -178,6 +178,18 @@ function responseParts(content: unknown, provider: string | undefined): Response
   return parts;
 }
 
+/** The arguments a title is built from (never file content or the command), once there is one. */
+function titleArgs(args: unknown): Record<string, unknown> | undefined {
+  const item = record(args);
+  if (!item) return undefined;
+  const kept = Object.fromEntries(
+    ["description", "path", "query", "queries", "question", "url", "urls", "name", "mode"]
+      .filter((key) => item[key] !== undefined)
+      .map((key) => [key, Array.isArray(item[key]) ? (item[key] as unknown[]).slice(0, 3) : item[key]]),
+  );
+  return Object.keys(kept).length ? kept : undefined;
+}
+
 /** A reasoning row: Synara's item-scoped "Reasoning trace", its summary as the detail. */
 function reasoningActivity(key: string, text: string, streaming: boolean, at: string, sequence: number, turnId: string | null): OrchestrationThreadActivity {
   const callId = `reasoning:${key}`;
@@ -396,8 +408,12 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
         // Reads as prose while it is the newest block; once anything follows, it folds to one line.
         // Keyed like the saved reply's row (request start and block), so saving it replaces this one.
         activities.push(reasoningActivity(`${partial?.timestamp ?? `live:${live!.run!.taskId}`}:${part.index}`, part.text, index === parts.length - 1, at, sequence, turn.turnId));
+      } else if (!live?.tools?.some((tool) => tool.callId === part.id)) {
+        // A tool call still being written (a section draft can take minutes) shows as running once
+        // it has a title; only small arguments travel, so a growing document is not resent each time.
+        const args = titleArgs(part.args);
+        if (args) activities.push(toolActivity("tool.updated", part.id, part.name, args, at, sequence, turn.turnId, { status: "inProgress" }));
       }
-      // A tool call still being written shows once it runs (live.tools, below).
     });
     for (const tool of live?.tools ?? []) {
       if (tool.status === "done" && tool.entry !== undefined) continue;
