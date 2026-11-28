@@ -92,7 +92,7 @@ export function diffThread(prev: OrchestrationThread, next: OrchestrationThread)
   for (const id of prevActivities.keys()) if (id.startsWith("reasoning:") && !nextActivityIds.has(id)) return "snapshot";
   for (const activity of next.activities) {
     const before = prevActivities.get(activity.id);
-    if (before && before.kind === activity.kind && before.summary === activity.summary && same(before.payload, activity.payload)) continue;
+    if (before && before.kind === activity.kind && before.summary === activity.summary && before.turnId === activity.turnId && before.sequence === activity.sequence && same(before.payload, activity.payload)) continue;
     events.push({ type: "thread.activity-appended", occurredAt: activity.createdAt, payload: { threadId, activity: activity as OrchestrationThreadActivity } });
   }
 

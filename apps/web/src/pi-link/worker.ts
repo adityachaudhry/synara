@@ -36,6 +36,9 @@ const TAB_BATCH_BYTES = 64 * 1024;
 const WARM_THREADS = 40;
 const UNLEASED_KEEP_MS = 30_000;
 const HISTORY_TARGET = 200;
+/** How far history loads to reach the newest turn's start. */
+const HISTORY_CEILING = 3000;
+const TURN_STARTS = new Set(["glasswing.input", "pi.user"]);
 const NO_CONTEXT = { abortSignal: undefined, telemetry: undefined, value: () => undefined, toString: () => "pi-link" } as unknown as Context;
 
 type Item = { channel: string; data: unknown };
@@ -292,6 +295,8 @@ class ThreadReplica {
   readonly waiters: Array<() => void> = [];
   missing = false;
   loadingHistory = false;
+  /** Older entries exist that are not loaded (the window starts after the conversation does). */
+  hasEarlier = false;
   unleasedTimer: ReturnType<typeof setTimeout> | undefined;
   lastUsed = Date.now();
   constructor(threadId: string) {
@@ -477,6 +482,7 @@ function rederive(replica: ThreadReplica, opts: { forceSnapshot?: boolean } = {}
   const next = deriveThread({
     info,
     entries: replica.entries,
+    hasEarlier: replica.hasEarlier,
     live: docs["pi.live"] as LiveState | undefined,
     run: (docs["glasswing.run"] as RunInfo | undefined)?.runId ? (docs["glasswing.run"] as RunInfo) : undefined,
     row: located?.row,
@@ -526,8 +532,9 @@ function onThreadValue(replica: ThreadReplica, value: unknown) {
   replica.missing = false;
   const merged = replica.transcript.merge(view as never);
   replica.entries = merged.items.flatMap((item) => (item.kind === "entry" ? [item.entry as unknown as PiEntry] : []));
+  replica.hasEarlier = merged.items.some((item) => item.kind === "earlier");
   rederive(replica);
-  void loadHistory(replica, merged.items.some((item) => item.kind === "earlier"));
+  void loadHistory(replica, replica.hasEarlier);
 }
 
 /** Older entries in pages, up to what Synara's store keeps, then one snapshot with them above. */
@@ -536,10 +543,17 @@ async function loadHistory(replica: ThreadReplica, hasEarlier: boolean) {
   replica.loadingHistory = true;
   try {
     let merged = await replica.transcript.loadEarlier(NO_CONTEXT);
-    while (merged.items.some((item) => item.kind === "earlier") && merged.items.length < HISTORY_TARGET) {
+    // Up to what the store keeps, and always back to the newest turn's start (a long diligence step
+    // can run past it), which the transcript leaves out until it is loaded.
+    const startsTurn = (item: (typeof merged.items)[number]) => item.kind === "entry" && TURN_STARTS.has(String((item.entry as { kind?: unknown }).kind));
+    while (
+      merged.items.some((item) => item.kind === "earlier") &&
+      (merged.items.length < HISTORY_TARGET || (!merged.items.some(startsTurn) && merged.items.length < HISTORY_CEILING))
+    ) {
       merged = await replica.transcript.loadEarlier(NO_CONTEXT);
     }
     replica.entries = merged.items.flatMap((item) => (item.kind === "entry" ? [item.entry as unknown as PiEntry] : []));
+    replica.hasEarlier = merged.items.some((item) => item.kind === "earlier");
     rederive(replica, { forceSnapshot: true });
   } catch {
     // History is a nicety; the window is already on screen.
