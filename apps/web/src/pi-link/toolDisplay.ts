@@ -191,6 +191,11 @@ export function toolDescription(toolName: string, args: unknown): string | undef
       const description = firstStringValue(toolRecord(args), ["description"]);
       return description ? clip(description, 120) : undefined;
     }
+    case "read": {
+      const filePath = toolPath(args);
+      const name = filePath?.split("/").filter(Boolean).at(-1);
+      return name ? `Read ${clip(name, 80)}` : undefined;
+    }
     case "web_search":
     case "perplexity_search": {
       const { first, more } = firstOf(args, ["query", "queries"]);

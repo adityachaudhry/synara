@@ -16,7 +16,9 @@ export type ThreadEventDraft = { type: OrchestrationEvent["type"]; payload: Reco
 
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
-function messageEvent(threadId: string, message: OrchestrationMessage, text: string, streaming: boolean): ThreadEventDraft {
+type TextSegment = NonNullable<OrchestrationMessage["textSegments"]>[number];
+
+function messageEvent(threadId: string, message: OrchestrationMessage, text: string, streaming: boolean, segment?: TextSegment): ThreadEventDraft {
   return {
     type: "thread.message-sent",
     occurredAt: message.updatedAt,
@@ -25,6 +27,8 @@ function messageEvent(threadId: string, message: OrchestrationMessage, text: str
       messageId: message.id,
       role: message.role,
       text,
+      // A delta that opens a new segment (a note between tool rows) says so, as the server's do.
+      ...(segment ? { segmentStartedAt: segment.startedAt, segmentSequence: segment.sequence } : {}),
       ...(message.author ? { author: message.author } : {}),
       ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       turnId: message.turnId,
@@ -46,21 +50,46 @@ export function diffThread(prev: OrchestrationThread, next: OrchestrationThread)
   for (const id of prevMessages.keys()) if (!nextIds.has(id)) return "snapshot";
   for (const message of next.messages) {
     const before = prevMessages.get(message.id);
+    const segments = message.textSegments ?? [];
     if (!before) {
-      events.push(messageEvent(threadId, message, message.text, message.streaming));
+      if (message.streaming && segments.length) {
+        // A streaming answer arrives segment by segment, so the store keeps its notes apart.
+        segments.forEach((segment, index) => events.push(messageEvent(threadId, message, index === 0 ? segment.text : `\n\n${segment.text}`, true, segment)));
+      } else {
+        events.push(messageEvent(threadId, message, message.text, message.streaming));
+      }
       continue;
     }
     if (message.streaming) {
       if (message.text === before.text) continue;
       // Text only grows while it streams; anything else is replaced at the end of the turn.
       if (!message.text.startsWith(before.text)) return "snapshot";
-      events.push(messageEvent(threadId, message, message.text.slice(before.text.length), true));
+      const earlier = before.textSegments ?? [];
+      if (!segments.length && !earlier.length) {
+        events.push(messageEvent(threadId, message, message.text.slice(before.text.length), true));
+        continue;
+      }
+      // Earlier segments are settled; only the newest may grow, and new ones follow it.
+      if (segments.length < earlier.length || earlier.slice(0, -1).some((segment, index) => segment.text !== segments[index]!.text)) return "snapshot";
+      const last = earlier.at(-1);
+      if (last) {
+        const grown = segments[earlier.length - 1]!.text;
+        if (!grown.startsWith(last.text)) return "snapshot";
+        if (grown.length > last.text.length) events.push(messageEvent(threadId, message, grown.slice(last.text.length), true));
+      }
+      for (let index = earlier.length; index < segments.length; index += 1) {
+        const segment = segments[index]!;
+        events.push(messageEvent(threadId, message, index === 0 ? segment.text : `\n\n${segment.text}`, true, segment));
+      }
     } else if (before.streaming || before.text !== message.text || !same(before.author, message.author)) {
       events.push(messageEvent(threadId, message, message.text, false));
     }
   }
 
   const prevActivities = new Map(prev.activities.map((activity) => [activity.id, activity] as const));
+  // Events cannot remove an activity: a reasoning row that became a note (Claude) needs a snapshot.
+  const nextActivityIds = new Set(next.activities.map((activity) => activity.id));
+  for (const id of prevActivities.keys()) if (id.startsWith("reasoning:") && !nextActivityIds.has(id)) return "snapshot";
   for (const activity of next.activities) {
     const before = prevActivities.get(activity.id);
     if (before && before.kind === activity.kind && before.summary === activity.summary && same(before.payload, activity.payload)) continue;

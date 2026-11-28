@@ -744,6 +744,36 @@ function deriveThreadFeedSummary(
   };
 }
 
+// Glasswing (Pi Link): a streamed delta that starts a new text segment (a note between tool rows)
+// carries segmentStartedAt/segmentSequence, as the server projection reads them, and later deltas
+// grow the newest segment. A live turn then interleaves its text and tool rows before the turn's
+// final snapshot replaces the message.
+function withStreamedSegment(
+  message: ChatMessage,
+  payload: ThreadMessageSentEvent["payload"],
+): ChatMessage {
+  if (!payload.streaming || message.role !== "assistant") return message;
+  const segments = message.textSegments ?? [];
+  if (payload.segmentStartedAt !== undefined) {
+    const segment = {
+      sequence: payload.segmentSequence ?? segments.length,
+      startedAt: payload.segmentStartedAt,
+      endedAt: payload.updatedAt,
+      text: payload.text.replace(/^\n+/u, ""),
+    };
+    return { ...message, textSegments: [...segments, segment] };
+  }
+  const last = segments.at(-1);
+  if (!last || payload.text.length === 0) return message;
+  return {
+    ...message,
+    textSegments: [
+      ...segments.slice(0, -1),
+      { ...last, endedAt: payload.updatedAt, text: `${last.text}${payload.text}` },
+    ],
+  };
+}
+
 function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
   const payload = event.payload;
   // Single backward scan: streaming deltas target the newest message, so walking from the tail
@@ -782,10 +812,12 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage);
     if (mergedMessage !== null) {
       // Only the affected slot is replaced; every other message stays reference-identical.
-      messages = thread.messages.with(existingIndex, mergedMessage);
+      messages = thread.messages.with(existingIndex, withStreamedSegment(mergedMessage, payload));
     }
   } else {
-    messages = [...thread.messages, incomingMessage].slice(-MAX_THREAD_MESSAGES);
+    messages = [...thread.messages, withStreamedSegment(incomingMessage, payload)].slice(
+      -MAX_THREAD_MESSAGES,
+    );
   }
 
   const turnDiffSummaries =
