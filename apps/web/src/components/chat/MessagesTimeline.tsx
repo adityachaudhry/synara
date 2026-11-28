@@ -2015,11 +2015,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
-          // Glasswing: a settled turn with notes between its steps opens with the notes in view
-          // (its runs of actions and reasoning stay folded); a turn of tool calls alone stays closed.
+          // Once the answer is in, the turn's notes, reasoning and actions fold behind "Worked for".
           const isCollapsedWorkExpanded = hasCollapsedWork
-            ? (expandedCollapsedWork[row.message.id] ??
-              collapsedTurnItems!.some((item) => item.kind === "narration"))
+            ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
           const settledCollapseTransition = isCollapsedWorkExpanded
             ? undefined
