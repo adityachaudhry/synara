@@ -332,7 +332,7 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
             turn.segments.push({ sequence, startedAt: at, endedAt, text: part.text });
             turn.firstAssistantAt ??= at;
           } else if (part.kind === "reasoning") {
-            activities.push(reasoningActivity(`${entry.id}:${part.index}`, part.text, false, at, sequence, turn.turnId));
+            activities.push(reasoningActivity(`${first?.timestamp ?? entry.id}:${part.index}`, part.text, false, at, sequence, turn.turnId));
           } else {
             toolArgs.set(part.id, { name: part.name, args: part.args, at, entryId: entry.id, sequence, turnId: turn.turnId });
             activities.push(toolActivity("tool.started", part.id, part.name, part.args, at, sequence, turn.turnId));
@@ -383,7 +383,8 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
         turn.firstAssistantAt ??= at;
       } else if (part.kind === "reasoning") {
         // Reads as prose while it is the newest block; once anything follows, it folds to one line.
-        activities.push(reasoningActivity(`live:${live!.run!.taskId}:${live!.generation!.attempt}:${part.index}`, part.text, index === parts.length - 1, at, sequence, turn.turnId));
+        // Keyed like the saved reply's row (request start and block), so saving it replaces this one.
+        activities.push(reasoningActivity(`${partial?.timestamp ?? `live:${live!.run!.taskId}`}:${part.index}`, part.text, index === parts.length - 1, at, sequence, turn.turnId));
       }
       // A tool call still being written shows once it runs (live.tools, below).
     });
@@ -492,6 +493,8 @@ function toolActivity(
       status,
       title,
       ...(described ? { titleIsDescription: true } : {}),
+      // A file read counts as one in folded groups ("Read 4 files"), not as a generic tool.
+      ...(name === "read" ? { requestKind: "file-read" } : {}),
       ...(detail ? { detail: detail.slice(0, 4000) } : {}),
       data: toolLifecycleData({
         toolCallId: callId, toolName: name, args,
