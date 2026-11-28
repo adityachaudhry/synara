@@ -51,6 +51,7 @@ export function ToolCallGroupSummaryRow(props: {
       <button
         type="button"
         aria-expanded={open}
+        data-work-expand="actions"
         className={cn(
           "inline-flex items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-foreground",
           MUTED_LABEL_TEXT_CLASS_NAME,

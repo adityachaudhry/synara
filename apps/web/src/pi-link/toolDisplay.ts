@@ -152,9 +152,91 @@ export function toolItemType(toolName: string): "command_execution" | "file_chan
   }
 }
 
+const clip = (value: string, max = 80) => {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+};
+
+function firstOf(args: unknown, keys: readonly string[]): { first?: string; more: number } {
+  const record = toolRecord(args);
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim()) return { first: value, more: 0 };
+    if (Array.isArray(value)) {
+      const items = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+      if (items.length) return { first: items[0]!, more: items.length - 1 };
+    }
+  }
+  return { more: 0 };
+}
+
+const withMore = (text: string, more: number) => (more > 0 ? `${text} (+${more} more)` : text);
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./u, "");
+  } catch {
+    return clip(url, 60);
+  }
+};
+
+/**
+ * A plain-language title for a tool call, when we can write one: the model's own description of
+ * a shell command, or a sentence built from a research tool's arguments. Undefined leaves the
+ * title to `toolTitle` and the timeline's own labels.
+ */
+export function toolDescription(toolName: string, args: unknown): string | undefined {
+  switch (toolName) {
+    case "bash": {
+      const description = firstStringValue(toolRecord(args), ["description"]);
+      return description ? clip(description, 120) : undefined;
+    }
+    case "read": {
+      const filePath = toolPath(args);
+      const name = filePath?.split("/").filter(Boolean).at(-1);
+      return name ? `Read ${clip(name, 80)}` : undefined;
+    }
+    case "web_search":
+    case "perplexity_search": {
+      const { first, more } = firstOf(args, ["query", "queries"]);
+      return first ? withMore(`Searched the web: ${clip(first)}`, more) : undefined;
+    }
+    case "perplexity_ask": {
+      const { first } = firstOf(args, ["question"]);
+      return first ? `Asked Perplexity: ${clip(first)}` : undefined;
+    }
+    case "fetch_content": {
+      const { first, more } = firstOf(args, ["url", "urls"]);
+      return first ? withMore(`Opened ${hostOf(first)}`, more) : undefined;
+    }
+    case "get_search_content":
+      return "Read saved search results";
+    case "crunchbase_search": {
+      const { first } = firstOf(args, ["query", "name", "q"]);
+      return first ? `Searched Crunchbase: ${clip(first)}` : "Searched Crunchbase";
+    }
+    case "crunchbase_company_profile":
+    case "crunchbase_founder_profile": {
+      const { first } = firstOf(args, ["name", "query", "permalink", "identifier", "company", "person", "uuid"]);
+      return first ? `Looked up ${clip(first, 60)} on Crunchbase` : "Looked up a profile on Crunchbase";
+    }
+    case "glasswing_run_diligence": {
+      const mode = firstStringValue(toolRecord(args), ["mode"]) ?? "full";
+      return `Started ${mode} diligence`;
+    }
+    case "glasswing_remember":
+      return "Saved a point to company memory";
+    default:
+      return undefined;
+  }
+}
+
 export function toolTitle(toolName: string, args: unknown): string {
-  const command = toolName === "bash" ? toolCommand(args) : undefined;
-  if (command) return command;
+  const described = toolDescription(toolName, args);
+  if (described) return described;
+  // A command without a description gets a generic title, so the timeline labels it from the
+  // command ("Listed files", "Read market_pain.md") instead of showing the command itself.
+  if (toolName === "bash") return "command execution";
   const filePath = toolPath(args);
   if (
     filePath &&

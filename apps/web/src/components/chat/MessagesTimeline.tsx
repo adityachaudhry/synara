@@ -1536,7 +1536,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           }
           return (
             <div data-assistant-message-id={row.message.id} className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
-              <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
+              <div>
                 <ChatMarkdown
                   text={segmentText}
                   markers={threadMarkersByMessageId.get(row.message.id)}
@@ -2015,6 +2015,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
+          // Once the answer is in, the turn's notes, reasoning and actions fold behind "Worked for".
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
@@ -2191,7 +2192,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
                 data-assistant-message-id={item.message.id}
-                className={MUTED_LABEL_TEXT_CLASS_NAME}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -2266,6 +2266,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     }}
                   >
                     <CollapsibleTrigger
+                      data-work-expand="work"
                       // ChatView's click anchor preserves this trigger's screen position
                       // while the disclosure height animates, so opening it should not tail-scroll.
                       // -ml-0.5 optically aligns the leading "W" with the reply

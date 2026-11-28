@@ -13,7 +13,7 @@ import type {
   OrchestrationThreadShell,
 } from "@synara/contracts";
 
-import { textFromToolResult, toolItemType, toolLifecycleData, toolResultForDisplay, toolTitle } from "./toolDisplay";
+import { textFromToolResult, toolDescription, toolItemType, toolLifecycleData, toolResultForDisplay, toolTitle } from "./toolDisplay";
 
 // ------------------------------------------------------------ Pi shapes (the parts we read)
 
@@ -23,7 +23,7 @@ export type AttachmentRef = { id: string; type: "image" | "file"; name: string; 
 export type PiEntry = {
   readonly id: number;
   readonly kind: string;
-  readonly model?: ReadonlyArray<{ role?: string; content?: unknown; timestamp?: number; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string; errorMessage?: string }>;
+  readonly model?: ReadonlyArray<{ role?: string; content?: unknown; timestamp?: number; durationMs?: number; provider?: string; model?: string; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string; errorMessage?: string }>;
   readonly data?: unknown;
   readonly byTaskId?: string;
 };
@@ -32,7 +32,7 @@ export type ToolSlot = { callId: string; name: string; status: string; output?: 
 
 export type LiveState = {
   run?: { taskId: string; inputs: string[]; turns: number; first?: number };
-  generation?: { attempt: number; message?: { content?: unknown[]; timestamp?: number }; retry?: { at: number; error: string } };
+  generation?: { attempt: number; message?: { content?: unknown[]; timestamp?: number; provider?: string }; retry?: { at: number; error: string } };
   tools?: ToolSlot[];
   compactions?: Array<{ taskId: string }>;
   runFailure?: { reason: string; detail?: string; first?: number };
@@ -127,8 +127,83 @@ function stripAuthorContext(text: string): string {
   return text.replace(/^<glasswing_message_author[\s\S]*?<\/glasswing_message_author>\s*/u, "");
 }
 
-/** Activity sequences follow transcript order: 16 slots per entry. */
-const seqOf = (entryId: number, slot = 0) => entryId * 16 + slot;
+/** Activity sequences follow transcript order: 32 slots per entry (reasoning, notes and tool calls of one response). */
+const SLOTS = 32;
+const seqOf = (entryId: number, slot = 0) => entryId * SLOTS + Math.min(slot, SLOTS - 1);
+
+const finite = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
+
+/** When a response ended: its start plus the duration pi-ai measured; responses without one end at their start. */
+function endOf(message: { timestamp?: number; durationMs?: number } | undefined, fallback: string): string {
+  const start = finite(message?.timestamp);
+  const duration = finite(message?.durationMs);
+  return start !== undefined && duration !== undefined ? new Date(start + duration).toISOString() : fallback;
+}
+
+type ResponsePart =
+  | { kind: "text"; text: string }
+  | { kind: "reasoning"; text: string; index: number }
+  | { kind: "tool"; id: string; name: string; args: unknown };
+
+/**
+ * A response's blocks in order, as the timeline shows them: text (a note, or the answer),
+ * reasoning (a thinking block's readable summary) and tool calls.
+ */
+function responseParts(content: unknown, provider: string | undefined): ResponsePart[] {
+  const parts: ResponsePart[] = [];
+  (Array.isArray(content) ? content : []).forEach((block, index) => {
+    const item = record(block);
+    if (item?.type === "text" && typeof item.text === "string") {
+      if (!item.text.trim()) return;
+      const previous = parts.at(-1);
+      if (previous?.kind === "text") previous.text += item.text;
+      else parts.push({ kind: "text", text: item.text });
+    } else if (item?.type === "thinking" && typeof item.thinking === "string" && item.redacted !== true) {
+      const text = item.thinking.trim();
+      if (text) parts.push({ kind: "reasoning", text, index });
+    } else if (item?.type === "toolCall" && typeof item.id === "string") {
+      parts.push({ kind: "tool", id: item.id, name: str(item.name) ?? "tool", args: item.arguments });
+    }
+  });
+  // Claude (Opus 5.5) writes a longer note between steps as a thinking block of its own, right before
+  // the tool call it introduces; the "summarized" display returns those mixed with reasoning summaries.
+  // A short last thinking block before a call, or the second of two, reads as a note. (Check on Claude.)
+  if (provider === "anthropic") {
+    parts.forEach((part, index) => {
+      if (part.kind !== "reasoning" || parts[index + 1]?.kind !== "tool") return;
+      const secondOfTwo = parts[index - 1]?.kind === "reasoning";
+      if (secondOfTwo || (part.text.length <= 320 && !/^\s*(\*\*|#)/u.test(part.text))) parts[index] = { kind: "text", text: part.text };
+    });
+  }
+  return parts;
+}
+
+/** The arguments a title is built from (never file content or the command), once there is one. */
+function titleArgs(args: unknown): Record<string, unknown> | undefined {
+  const item = record(args);
+  if (!item) return undefined;
+  const kept = Object.fromEntries(
+    ["description", "path", "query", "queries", "question", "url", "urls", "name", "mode"]
+      .filter((key) => item[key] !== undefined)
+      .map((key) => [key, Array.isArray(item[key]) ? (item[key] as unknown[]).slice(0, 3) : item[key]]),
+  );
+  return Object.keys(kept).length ? kept : undefined;
+}
+
+/** A reasoning row: Synara's item-scoped "Reasoning trace", its summary as the detail. */
+function reasoningActivity(key: string, text: string, streaming: boolean, at: string, sequence: number, turnId: string | null): OrchestrationThreadActivity {
+  const callId = `reasoning:${key}`;
+  return {
+    id: callId as never,
+    tone: "tool",
+    kind: "task.progress" as never,
+    summary: "Reasoning trace" as never,
+    payload: { status: streaming ? "inProgress" : "completed", title: "Reasoning trace", detail: text.slice(0, 8000), data: { toolCallId: callId } } as never,
+    turnId: turnId as never,
+    sequence,
+    createdAt: at,
+  };
+}
 
 // ------------------------------------------------------------------------ the thread
 
@@ -139,6 +214,8 @@ export interface DeriveInput {
   readonly live: LiveState | undefined;
   readonly run?: RunInfo | undefined;
   readonly row?: ThreadRow | undefined;
+  /** Older entries exist that the client has not loaded yet. */
+  readonly hasEarlier?: boolean;
 }
 
 type Turn = {
@@ -150,6 +227,8 @@ type Turn = {
   segments: Array<{ sequence: number; startedAt: string; endedAt: string; text: string }>;
   streaming: boolean;
   firstAssistantAt?: string;
+  /** When the turn's last response ended. */
+  endedAt?: string;
 };
 
 export function deriveThread(input: DeriveInput): OrchestrationThread {
@@ -157,8 +236,14 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
   const messages: OrchestrationMessage[] = [];
   const activities: OrchestrationThreadActivity[] = [];
   const turns: Turn[] = [];
-  const toolArgs = new Map<string, { name: string; args: unknown; at: string; entryId: number; turnId: string | null }>();
+  const toolArgs = new Map<string, { name: string; args: unknown; at: string; entryId: number; sequence: number; turnId: string | null }>();
   let current: Turn | undefined;
+  /** The model switch shown last: the notice shows once, not on every turn on the fallback. */
+  let shownSwitch: { key: string; from?: string } | undefined;
+  // A window that starts inside a turn (older entries not loaded yet) leaves that turn out until its
+  // start arrives: named after its first loaded entry, the turn's answer would change id when history
+  // loads, and Synara's store keeps a streaming or latest answer under its old id beside the new one.
+  let midTurn = input.hasEarlier === true;
   let lastAt = info.createdAt;
   let lastEntryId = 0;
 
@@ -173,6 +258,11 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
     const data = record(entry.data);
     const at = str(data?.at) ?? iso(first?.timestamp, lastAt);
     lastAt = at;
+    if (midTurn) {
+      const standalone = entry.kind === "glasswing.input" || entry.kind === "pi.user" || entry.kind === "glasswing.message" || entry.kind === "glasswing.note" || (entry.kind === "pi.assistant" && str(data?.messageId) !== undefined);
+      if (!standalone) continue;
+      midTurn = false;
+    }
     switch (entry.kind) {
       case "glasswing.input": {
         const requestId = str(data?.requestId) ?? `entry-${entry.id}`;
@@ -224,6 +314,12 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
       case "glasswing.event": {
         const kind = str(data?.kind) ?? "runtime.info";
         const tone = str(data?.tone);
+        if (kind === "model.rerouted") {
+          const detail = record(data?.data);
+          const key = `${str(detail?.fromModel) ?? ""}>${str(detail?.toModel) ?? ""}`;
+          if (shownSwitch?.key === key) break;
+          shownSwitch = { key, ...(str(detail?.fromModel) ? { from: str(detail?.fromModel)! } : {}) };
+        }
         activities.push({
           id: `event:${entry.id}` as never,
           tone: (tone === "error" ? "error" : tone === "warning" ? "info" : "info") as never,
@@ -248,19 +344,22 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
         }
         if (!current) startTurn(`entry-${entry.id}`, at);
         const turn = current!;
-        const content = Array.isArray(first?.content) ? first!.content : [];
-        const text = messageText(content);
-        if (text) {
-          turn.segments.push({ sequence: seqOf(entry.id), startedAt: at, endedAt: at, text });
-          turn.firstAssistantAt ??= at;
-        }
-        let slot = 1;
-        for (const block of content) {
-          const call = record(block);
-          if (call?.type !== "toolCall" || typeof call.id !== "string") continue;
-          const name = str(call.name) ?? "tool";
-          toolArgs.set(call.id, { name, args: call.arguments, at, entryId: entry.id, turnId: turn.turnId });
-          activities.push(toolActivity("tool.started", call.id, name, call.arguments, at, seqOf(entry.id, slot++), turn.turnId));
+        const endedAt = endOf(first, at);
+        turn.endedAt = endedAt;
+        // A reply from the model we switched away from (Claude is back): a later switch shows again.
+        if (shownSwitch?.from && `${first?.provider}/${first?.model}` === shownSwitch.from) shownSwitch = undefined;
+        let slot = 0;
+        for (const part of responseParts(first?.content, first?.provider)) {
+          const sequence = seqOf(entry.id, slot++);
+          if (part.kind === "text") {
+            turn.segments.push({ sequence, startedAt: at, endedAt, text: part.text });
+            turn.firstAssistantAt ??= at;
+          } else if (part.kind === "reasoning") {
+            activities.push(reasoningActivity(`${first?.timestamp ?? entry.id}:${part.index}`, part.text, false, at, sequence, turn.turnId));
+          } else {
+            toolArgs.set(part.id, { name: part.name, args: part.args, at, entryId: entry.id, sequence, turnId: turn.turnId });
+            activities.push(toolActivity("tool.started", part.id, part.name, part.args, at, sequence, turn.turnId));
+          }
         }
         if (first?.stopReason === "error" && first.errorMessage) turn.completedAt = at;
         break;
@@ -292,23 +391,35 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
 
   // The answer in flight: its text streams into the turn's message, its tools show as running.
   const running = live?.run !== undefined;
-  if (running) {
+  if (running && !midTurn) {
     if (!current) startTurn(`run:${live!.run!.taskId}`, lastAt);
     const turn = current!;
     turn.streaming = true;
     const partial = live?.generation?.message;
-    const text = messageText(partial?.content);
-    if (text) {
-      const at = iso(partial?.timestamp, lastAt);
-      turn.segments.push({ sequence: seqOf(lastEntryId + 1), startedAt: at, endedAt: new Date().toISOString(), text });
-      turn.firstAssistantAt ??= at;
-    }
-    let slot = 2;
+    const at = iso(partial?.timestamp, lastAt);
+    const parts = responseParts(partial?.content, partial?.provider);
+    let slot = 0;
+    parts.forEach((part, index) => {
+      const sequence = seqOf(lastEntryId + 1, slot++);
+      if (part.kind === "text") {
+        turn.segments.push({ sequence, startedAt: at, endedAt: new Date().toISOString(), text: part.text });
+        turn.firstAssistantAt ??= at;
+      } else if (part.kind === "reasoning") {
+        // Reads as prose while it is the newest block; once anything follows, it folds to one line.
+        // Keyed like the saved reply's row (request start and block), so saving it replaces this one.
+        activities.push(reasoningActivity(`${partial?.timestamp ?? `live:${live!.run!.taskId}`}:${part.index}`, part.text, index === parts.length - 1, at, sequence, turn.turnId));
+      } else if (!live?.tools?.some((tool) => tool.callId === part.id)) {
+        // A tool call still being written (a section draft can take minutes) shows as running once
+        // it has a title; only small arguments travel, so a growing document is not resent each time.
+        const args = titleArgs(part.args);
+        if (args) activities.push(toolActivity("tool.updated", part.id, part.name, args, at, sequence, turn.turnId, { status: "inProgress" }));
+      }
+    });
     for (const tool of live?.tools ?? []) {
       if (tool.status === "done" && tool.entry !== undefined) continue;
       const started = toolArgs.get(tool.callId);
       activities.push(
-        toolActivity("tool.updated", tool.callId, started?.name ?? tool.name, started?.args, started?.at ?? lastAt, seqOf((started?.entryId ?? lastEntryId), slot++), turn.turnId, {
+        toolActivity("tool.updated", tool.callId, started?.name ?? tool.name, started?.args, started?.at ?? lastAt, started?.sequence ?? seqOf(lastEntryId, slot++), turn.turnId, {
           partialResult: tool.output !== undefined ? { content: [{ type: "text", text: tool.output }], details: tool.details } : undefined,
           status: tool.status,
         }),
@@ -351,7 +462,7 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
         state: running ? "running" : failure ? (failure.reason === "aborted" ? "interrupted" : "error") : "completed",
         requestedAt: lastTurn.requestedAt,
         startedAt: lastTurn.startedAt,
-        completedAt: running ? null : (lastTurn.segments.at(-1)?.endedAt ?? lastTurn.requestedAt),
+        completedAt: running ? null : (lastTurn.endedAt ?? lastTurn.segments.at(-1)?.endedAt ?? lastTurn.requestedAt),
         assistantMessageId: lastTurn.segments.length ? (lastTurn.assistantId as never) : null,
       } as OrchestrationLatestTurn)
     : row?.latestTurn
@@ -395,6 +506,8 @@ function toolActivity(
 ): OrchestrationThreadActivity {
   const itemType = toolItemType(name);
   const title = toolTitle(name, args);
+  // The model's own description (or one built from the arguments) replaces the command preview.
+  const described = toolDescription(name, args) !== undefined;
   const status = kind === "tool.completed" ? (extra.isError ? "failed" : "completed") : "inProgress";
   const detail = extra.result !== undefined ? textFromToolResult(extra.result) : undefined;
   return {
@@ -406,6 +519,9 @@ function toolActivity(
       itemType,
       status,
       title,
+      ...(described ? { titleIsDescription: true } : {}),
+      // A file read counts as one in folded groups ("Read 4 files"), not as a generic tool.
+      ...(name === "read" ? { requestKind: "file-read" } : {}),
       ...(detail ? { detail: detail.slice(0, 4000) } : {}),
       data: toolLifecycleData({
         toolCallId: callId, toolName: name, args,

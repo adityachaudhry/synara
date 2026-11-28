@@ -437,6 +437,72 @@ function ToolRowTooltip(props: { content: ReactNode; children: ReactElement }) {
   );
 }
 
+/** A reasoning summary's headline: its first bold or heading line, else its first sentence. */
+function reasoningHeadline(text: string): string {
+  const marked = /^(?:\*\*(.+?)\*\*|#{1,6}\s+(.+))/u.exec(text);
+  const line = (marked?.[1] ?? marked?.[2] ?? text.split("\n", 1)[0] ?? "").trim();
+  const sentence = /^(.+?[.!?])(?:\s|$)/u.exec(line)?.[1] ?? line;
+  return sentence.length > 110 ? `${sentence.slice(0, 109).trimEnd()}…` : sentence;
+}
+
+const ReasoningWorkEntryRow = memo(function ReasoningWorkEntryRow(props: {
+  text: string;
+  running: boolean;
+  fontSizePx: number;
+  compact: boolean;
+  markdownCwd: string | undefined;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
+}) {
+  const { text, running, fontSizePx, compact, markdownCwd, onImageExpand } = props;
+  const [open, setOpen] = useState(false);
+  const expanded = running || open;
+  return (
+    <div className={cn("group/tool-row", compact ? "py-0.5" : "py-1")} data-reasoning-row="true">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        data-work-expand="reasoning"
+        disabled={running}
+        className={cn(
+          "flex w-full min-w-0 items-center gap-1 text-left leading-5 disabled:cursor-default",
+          WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+        )}
+        style={{ fontSize: `${fontSizePx}px` }}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="shrink-0">{running ? "Thinking" : "Thought"}</span>
+        {expanded ? null : (
+          <>
+            <span aria-hidden="true" className="shrink-0">
+              ·
+            </span>
+            <span className="min-w-0 truncate">{reasoningHeadline(text)}</span>
+          </>
+        )}
+        {running ? null : (
+          <DisclosureChevron open={open} className="shrink-0 text-muted-foreground/70" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="pt-0.5">
+          <ChatMarkdown
+            text={text}
+            cwd={markdownCwd}
+            isStreaming={running}
+            className="leading-relaxed"
+            style={{
+              color: MUTED_LABEL_TEXT_COLOR,
+              fontSize: `${Math.max(11, fontSizePx - 1)}px`,
+              lineHeight: compact ? "18px" : "19px",
+            }}
+            onImageExpand={onImageExpand}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+});
+
 export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   chatMetaFontSizePx: number;
@@ -501,7 +567,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
             ? "mcp"
             : undefined;
   const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry);
+  // A plain-language description is the whole row; the command stays in the tooltip and details.
+  const rawPreview = workEntry.toolTitleIsDescription ? null : workEntryPreview(workEntry);
   const preview =
     isSynaraBrowserToolRow || isSynaraToolRow
       ? sanitizeSynaraMcpToolPreview({
@@ -566,6 +633,25 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
         />
       </div>
+    );
+  }
+
+  // Glasswing (Pi Link): item-scoped reasoning reads as prose while it is written, then folds
+  // to one quiet line that opens to the full summary.
+  const reasoningText =
+    isReasoningUpdateWorkEntry(workEntry) && workEntry.toolCallId
+      ? (workEntry.detail ?? workEntry.preview ?? "").trim()
+      : "";
+  if (reasoningText) {
+    return (
+      <ReasoningWorkEntryRow
+        text={reasoningText}
+        running={workEntry.toolStatus === "running"}
+        fontSizePx={textFontSizePx}
+        compact={compact}
+        markdownCwd={markdownCwd}
+        onImageExpand={onImageExpand}
+      />
     );
   }
 
