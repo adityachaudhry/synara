@@ -202,6 +202,8 @@ export interface DeriveInput {
   readonly live: LiveState | undefined;
   readonly run?: RunInfo | undefined;
   readonly row?: ThreadRow | undefined;
+  /** Older entries exist that the client has not loaded yet. */
+  readonly hasEarlier?: boolean;
 }
 
 type Turn = {
@@ -226,6 +228,10 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
   let current: Turn | undefined;
   /** The model switch shown last: the notice shows once, not on every turn on the fallback. */
   let shownSwitch: { key: string; from?: string } | undefined;
+  // A window that starts inside a turn (older entries not loaded yet) leaves that turn out until its
+  // start arrives: named after its first loaded entry, the turn's answer would change id when history
+  // loads, and Synara's store keeps a streaming or latest answer under its old id beside the new one.
+  let midTurn = input.hasEarlier === true;
   let lastAt = info.createdAt;
   let lastEntryId = 0;
 
@@ -240,6 +246,11 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
     const data = record(entry.data);
     const at = str(data?.at) ?? iso(first?.timestamp, lastAt);
     lastAt = at;
+    if (midTurn) {
+      const standalone = entry.kind === "glasswing.input" || entry.kind === "pi.user" || entry.kind === "glasswing.message" || entry.kind === "glasswing.note" || (entry.kind === "pi.assistant" && str(data?.messageId) !== undefined);
+      if (!standalone) continue;
+      midTurn = false;
+    }
     switch (entry.kind) {
       case "glasswing.input": {
         const requestId = str(data?.requestId) ?? `entry-${entry.id}`;
@@ -368,7 +379,7 @@ export function deriveThread(input: DeriveInput): OrchestrationThread {
 
   // The answer in flight: its text streams into the turn's message, its tools show as running.
   const running = live?.run !== undefined;
-  if (running) {
+  if (running && !midTurn) {
     if (!current) startTurn(`run:${live!.run!.taskId}`, lastAt);
     const turn = current!;
     turn.streaming = true;
