@@ -59,6 +59,8 @@ export interface WorkLogEntry {
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
+  /** Glasswing: the title is the model's plain description of the call, so no command preview follows it. */
+  toolTitleIsDescription?: boolean;
   toolName?: string;
   toolCallId?: string;
   toolStatus?: SynaraMcpToolStatus;
@@ -646,6 +648,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   // take precedence over that progress label in TimelineWorkEntryRow.
   if (readableTitle && activity.kind !== "turn.tasks.updated") {
     entry.toolTitle = readableTitle;
+  }
+  // Glasswing (Pi Link): a described call keeps its description as the title, and an item-scoped
+  // reasoning row says whether it is still being written.
+  if (payload?.titleIsDescription === true && title) {
+    entry.toolTitle = title;
+    entry.toolTitleIsDescription = true;
+  }
+  if (activity.kind === "task.progress" && toolCallId && isReasoningProgressTitle(title)) {
+    entry.toolStatus = payload?.status === "inProgress" ? "running" : "completed";
   }
   const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
   if (liveActivity) {
@@ -1828,6 +1839,10 @@ function extractToolCommand(
 
 function extractToolTitle(payload: Record<string, unknown> | null): string | null {
   return asTrimmedString(payload?.title);
+}
+
+function isReasoningProgressTitle(title: string | null): boolean {
+  return title?.toLowerCase() === "reasoning trace";
 }
 
 function extractPrimaryCommandAction(

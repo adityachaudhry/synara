@@ -1536,7 +1536,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           }
           return (
             <div data-assistant-message-id={row.message.id} className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
-              <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
+              <div>
                 <ChatMarkdown
                   text={segmentText}
                   markers={threadMarkersByMessageId.get(row.message.id)}
@@ -2015,8 +2015,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
+          // Glasswing: a settled turn with notes between its steps opens with the notes in view
+          // (its runs of actions and reasoning stay folded); a turn of tool calls alone stays closed.
           const isCollapsedWorkExpanded = hasCollapsedWork
-            ? (expandedCollapsedWork[row.message.id] ?? false)
+            ? (expandedCollapsedWork[row.message.id] ??
+              collapsedTurnItems!.some((item) => item.kind === "narration"))
             : false;
           const settledCollapseTransition = isCollapsedWorkExpanded
             ? undefined
@@ -2191,7 +2194,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
                 data-assistant-message-id={item.message.id}
-                className={MUTED_LABEL_TEXT_CLASS_NAME}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -2266,6 +2268,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     }}
                   >
                     <CollapsibleTrigger
+                      data-work-expand="work"
                       // ChatView's click anchor preserves this trigger's screen position
                       // while the disclosure height animates, so opening it should not tail-scroll.
                       // -ml-0.5 optically aligns the leading "W" with the reply
