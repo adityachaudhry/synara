@@ -1263,7 +1263,11 @@ export function withOrchestrationEventSequence(
   activity: OrchestrationThreadActivity,
   sequence: number,
 ): OrchestrationThreadActivity {
-  return { ...activity, sequence };
+  // Glasswing (Pi Link): an activity that carries its own transcript position keeps it. The event's
+  // sequence is the worker's arrival counter, a different number space from the positions its
+  // snapshots carry, so a streamed row would otherwise sort ahead of everything a snapshot placed.
+  // Server activities carry no sequence and still take the event's.
+  return activity.sequence !== undefined ? activity : { ...activity, sequence };
 }
 
 /**
